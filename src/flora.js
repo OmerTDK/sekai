@@ -420,10 +420,12 @@ function buildTreeGeometry() {
   paintFlatColor(canopyHighGeo, COLOR_CANOPY_LIGHT)
 
   const unitHeight = highY + highR
-  // CylinderGeometry is indexed, IcosahedronGeometry is not — mergeGeometries
-  // refuses mixed indexing and returns null (which silently shipped
-  // canopy-less stump trees). Un-index the trunk first.
-  const merged = mergeGeometries([trunkGeo.toNonIndexed(), canopyLowGeo, canopyHighGeo], false) || trunkGeo
+  // mergeGeometries refuses mixed indexing (and silently shipped canopy-less
+  // stump trees). Different three versions index these primitives
+  // differently, so force ALL parts non-indexed — toNonIndexed() is a no-op
+  // (plus a console warn) on geometry that already qualifies.
+  const parts = [trunkGeo, canopyLowGeo, canopyHighGeo].map((g) => (g.index ? g.toNonIndexed() : g))
+  const merged = mergeGeometries(parts, false) || trunkGeo
   return { geo: merged, unitHeight }
 }
 

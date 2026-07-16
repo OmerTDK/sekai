@@ -60,8 +60,11 @@ const AO_MIN_MUL = 0.97 // near-off: per-vertex AO reads as triangular blotches 
 // ---------------------------------------------------------------------------
 const COLOR_BEACH = 0xd5c188
 const COLOR_GRASS = 0x78a35b
+const COLOR_DRYGRASS = 0xb0a35c // savanna end of the moisture gradient
+const COLOR_DESERT = 0xd9bd7f
 const COLOR_FOREST = 0x46703f
 const COLOR_ROCK = 0x8a8274
+const COLOR_TUNDRA = 0x8f9682 // cold scrub ring below the ice caps
 const COLOR_SNOW = 0xedf2f6
 const COLOR_SHALLOW = 0xb8a97e
 const COLOR_DEEP = 0x22303a
@@ -181,11 +184,19 @@ export function createPlanet(seed) {
   // --- vertex coloring (build-time only; free to allocate here) -----------
   const cBeach = new THREE.Color(COLOR_BEACH)
   const cGrass = new THREE.Color(COLOR_GRASS)
+  const cDryGrass = new THREE.Color(COLOR_DRYGRASS)
+  const cDesert = new THREE.Color(COLOR_DESERT)
   const cForest = new THREE.Color(COLOR_FOREST)
   const cRock = new THREE.Color(COLOR_ROCK)
+  const cTundra = new THREE.Color(COLOR_TUNDRA)
   const cSnow = new THREE.Color(COLOR_SNOW)
   const cShallow = new THREE.Color(COLOR_SHALLOW)
   const cDeep = new THREE.Color(COLOR_DEEP)
+
+  // Texture-splat weights for the vertex being colored: grass / rock / sand /
+  // snow. terrainColorAt fills this alongside the color; the mesh build loop
+  // copies it into the biomeW vertex attribute for the detail shader.
+  const _w = { grass: 0, rock: 0, sand: 0, snow: 0 }
 
   // Writes the stylized terrain color for direction (x,y,z) at height h into
   // `out`. Height + latitude + a moisture band decide the biome; a high-freq
@@ -198,27 +209,35 @@ export function createPlanet(seed) {
     if (h < SEA_LEVEL) {
       const depthT = clamp((SEA_LEVEL - h) / WATER_COLOR_RANGE + jitter * 0.06, 0, 1)
       out.copy(cShallow).lerp(cDeep, smoothstep(0, 1, depthT))
+      _w.sand = 1 - depthT
+      _w.rock = depthT
+      _w.grass = 0
+      _w.snow = 0
     } else {
       const landT = clamp((h - SEA_LEVEL) / LAND_COLOR_RANGE, 0, 1)
-      // 2 octaves only: high-frequency moisture flips forest/grass per vertex,
-      // which reads as triangle mosaic. Low-freq -> large coherent forests.
+      // 2 octaves only: high-frequency moisture flips biomes per vertex,
+      // which reads as triangle mosaic. Low-freq -> continent-scale biomes.
       const moisture = fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 2, 2.0, 0.5) * 0.5 + 0.5
+
+      // Moisture axis: desert -> savanna -> grassland -> forest.
+      const lushT = smoothstep(0.32, 0.6, moisture)
+      const desertT = 1 - smoothstep(0.24, 0.34, moisture)
+      const forestW = smoothstep(0.52, 0.64, moisture)
 
       // Rock wins from elevation OR from being a steep face -- cliffs and
       // mountainsides read as rock regardless of altitude band, which is
-      // what actually sells a mountain range at a glance. Bands are kept
-      // narrow so biome edges stay sharp facet-to-facet.
+      // what actually sells a mountain range at a glance.
       const elevationRockT = smoothstep(0.3, 0.68, landT + jitter * 0.05)
       const slopeRockT = smoothstep(ROCK_SLOPE_LO, ROCK_SLOPE_HI, slope)
       const rockT = Math.max(elevationRockT, slopeRockT)
 
       // band must span >= 2 vertex steps or the shoreline aliases into sawteeth
       const beachW = 1 - smoothstep(0.0, 0.045, landT + jitter * 0.015)
-      const forestW = smoothstep(0.42, 0.58, moisture) * (1 - rockT)
 
-      out.copy(cGrass).lerp(cRock, rockT)
-      out.lerp(cForest, forestW * 0.9)
-      out.lerp(cBeach, beachW)
+      out.copy(cDryGrass).lerp(cGrass, lushT)
+      out.lerp(cForest, forestW * 0.9 * (1 - rockT))
+      out.lerp(cDesert, desertT * (1 - rockT * 0.6))
+      out.lerp(cRock, rockT)
 
       // Snow on high peaks OR polar caps, whichever wins. Cap boundary uses
       // |y| (unit-sphere proxy for latitude) offset by a low-freq noise so
@@ -229,9 +248,20 @@ export function createPlanet(seed) {
       const capThreshold = 0.86 + capNoiseVal * 0.07 // caps stay poleward of ~57-68 deg
       const lat = Math.abs(y)
       const polarT = smoothstep(capThreshold - 0.035, capThreshold + 0.035, lat)
+      // Cold scrub ring just equatorward of the cap: mutes greens before the ice.
+      const tundraT = smoothstep(capThreshold - 0.16, capThreshold - 0.05, lat) * (1 - polarT)
+      out.lerp(cTundra, tundraT * 0.85)
+      out.lerp(cBeach, beachW)
+
       const steepDamp = 1 - smoothstep(SNOW_STEEP_LO, SNOW_STEEP_HI, slope) * 0.6
       const snowW = clamp(Math.max(peakT, polarT) + jitter * 0.05, 0, 1) * steepDamp
       out.lerp(cSnow, snowW)
+
+      // Splat weights: snow > sand > rock claim their share, grass keeps the rest.
+      _w.snow = snowW
+      _w.sand = clamp(Math.max(beachW, desertT), 0, 1) * (1 - snowW)
+      _w.rock = clamp(Math.max(rockT, tundraT * 0.45), 0, 1) * (1 - snowW) * (1 - _w.sand * 0.7)
+      _w.grass = Math.max(0, 1 - _w.snow - _w.sand - _w.rock)
     }
 
     // Cheap AO: valley floors / concavities read slightly darker.
@@ -257,6 +287,7 @@ export function createPlanet(seed) {
   const posAttr = terrainGeo.attributes.position
   const vertexCount = posAttr.count
   const colorArray = new Float32Array(vertexCount * 3)
+  const biomeWArray = new Float32Array(vertexCount * 4)
 
   const dir = new THREE.Vector3() // scratch, reused across the build loop
   const vColor = new THREE.Color() // scratch, reused across the build loop
@@ -270,9 +301,14 @@ export function createPlanet(seed) {
     colorArray[i * 3] = vColor.r
     colorArray[i * 3 + 1] = vColor.g
     colorArray[i * 3 + 2] = vColor.b
+    biomeWArray[i * 4] = _w.grass
+    biomeWArray[i * 4 + 1] = _w.rock
+    biomeWArray[i * 4 + 2] = _w.sand
+    biomeWArray[i * 4 + 3] = _w.snow
   }
   posAttr.needsUpdate = true
   terrainGeo.setAttribute('color', new THREE.BufferAttribute(colorArray, 3))
+  terrainGeo.setAttribute('biomeW', new THREE.BufferAttribute(biomeWArray, 4))
   // Normals (and bounds) must be recomputed from the displaced positions,
   // not the original unit icosahedron -- both for correct lighting and so
   // culling/raycasting bounds cover the displaced mountains.
@@ -286,27 +322,72 @@ export function createPlanet(seed) {
     metalness: 0,
   })
 
-  // "HD" ground detail: per-PIXEL procedural grain (two octaves of GPU value
-  // noise in object space) modulating albedo. Per-pixel means it can never
-  // alias into triangle patterns like per-vertex variation did, and it fades
-  // with view distance so the planet stays pristine from space and doesn't
-  // shimmer when far away. Guarded: failed injection just means plain ground.
-  terrainMat.customProgramCacheKey = () => 'terrain-detail-v1'
+  // "HD" ground detail: real CC0 material textures (ambientCG), triplanar-
+  // mapped per pixel (no UVs, no seams on a sphere) and blended by the
+  // biomeW vertex weights — grass/rock/sand/snow each get their own surface
+  // pattern while the vertex color keeps the biome hue. Distance-faded so
+  // orbit views stay clean; uDetailOn stays 0 until all four maps are loaded.
+  const texLoader = new THREE.TextureLoader()
+  const detailUniforms = {
+    uDetailOn: { value: 0 },
+    uGrassTex: { value: null },
+    uRockTex: { value: null },
+    uSandTex: { value: null },
+    uSnowTex: { value: null },
+  }
+  {
+    const files = {
+      uGrassTex: '/textures/Grass004_1K-JPG_Color.jpg',
+      uRockTex: '/textures/Rock030_1K-JPG_Color.jpg',
+      uSandTex: '/textures/Ground080_1K-JPG_Color.jpg',
+      uSnowTex: '/textures/Snow_Color.jpg',
+    }
+    let loaded = 0
+    const total = Object.keys(files).length
+    for (const [key, url] of Object.entries(files)) {
+      texLoader.load(url, (tex) => {
+        tex.wrapS = THREE.RepeatWrapping
+        tex.wrapT = THREE.RepeatWrapping
+        tex.colorSpace = THREE.SRGBColorSpace
+        tex.anisotropy = 8 // keeps ground texture crisp at grazing angles
+        detailUniforms[key].value = tex
+        if (++loaded === total) detailUniforms.uDetailOn.value = 1
+      })
+    }
+  }
+
+  terrainMat.customProgramCacheKey = () => 'terrain-splat-v1'
   terrainMat.onBeforeCompile = (shader) => {
     try {
+      Object.assign(shader.uniforms, detailUniforms)
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vDetailPos;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvDetailPos = position;')
+        .replace(
+          '#include <common>',
+          '#include <common>\nattribute vec4 biomeW;\nvarying vec4 vBiomeW;\nvarying vec3 vDetailPos;\nvarying vec3 vObjNormal;'
+        )
+        .replace(
+          '#include <begin_vertex>',
+          '#include <begin_vertex>\nvDetailPos = position;\nvObjNormal = normal;\nvBiomeW = biomeW;'
+        )
       const frag = shader.fragmentShader
         .replace(
           '#include <common>',
           [
             '#include <common>',
+            'uniform float uDetailOn;',
+            'uniform sampler2D uGrassTex;',
+            'uniform sampler2D uRockTex;',
+            'uniform sampler2D uSandTex;',
+            'uniform sampler2D uSnowTex;',
+            'varying vec4 vBiomeW;',
             'varying vec3 vDetailPos;',
-            'float phash13(vec3 p){ p = fract(p*0.1031); p += dot(p, p.zyx+31.32); return fract((p.x+p.y)*p.z); }',
-            'float pvnoise(vec3 p){ vec3 i = floor(p); vec3 f = fract(p); f = f*f*(3.0-2.0*f);',
-            '  return mix(mix(mix(phash13(i), phash13(i+vec3(1,0,0)), f.x), mix(phash13(i+vec3(0,1,0)), phash13(i+vec3(1,1,0)), f.x), f.y),',
-            '             mix(mix(phash13(i+vec3(0,0,1)), phash13(i+vec3(1,0,1)), f.x), mix(phash13(i+vec3(0,1,1)), phash13(i+vec3(1,1,1)), f.x), f.y), f.z); }',
+            'varying vec3 vObjNormal;',
+            'vec3 triplanar(sampler2D tex, vec3 p, vec3 bw, float scale) {',
+            '  vec3 cx = texture2D(tex, p.yz * scale).rgb;',
+            '  vec3 cy = texture2D(tex, p.xz * scale).rgb;',
+            '  vec3 cz = texture2D(tex, p.xy * scale).rgb;',
+            '  return cx * bw.x + cy * bw.y + cz * bw.z;',
+            '}',
           ].join('\n')
         )
         .replace(
@@ -314,18 +395,31 @@ export function createPlanet(seed) {
           [
             '#include <color_fragment>',
             '{',
-            '  float dNear = 1.0 - smoothstep(0.12, 0.85, length(vViewPosition));',
-            '  if (dNear > 0.001) {',
-            '    float g = pvnoise(vDetailPos * 750.0) * 0.62 + pvnoise(vDetailPos * 2900.0) * 0.38;',
-            '    diffuseColor.rgb *= 1.0 + (g - 0.5) * 0.14 * dNear;',
+            '  float dNear = 1.0 - smoothstep(0.3, 1.7, length(vViewPosition));',
+            '  if (uDetailOn > 0.5 && dNear > 0.003) {',
+            '    vec3 n = normalize(vObjNormal);',
+            '    vec3 bw = abs(n);',
+            '    bw /= (bw.x + bw.y + bw.z);',
+            '    const float TILE = 80.0; // chunky stylized tiles: readable features, no sub-pixel mush',
+            '    vec3 det = triplanar(uGrassTex, vDetailPos, bw, TILE) * vBiomeW.x',
+            '             + triplanar(uRockTex,  vDetailPos, bw, TILE) * vBiomeW.y',
+            '             + triplanar(uSandTex,  vDetailPos, bw, TILE) * vBiomeW.z',
+            '             + triplanar(uSnowTex,  vDetailPos, bw, TILE) * vBiomeW.w;',
+            '    float wTot = vBiomeW.x + vBiomeW.y + vBiomeW.z + vBiomeW.w;',
+            '    det /= max(wTot, 0.001);',
+            '    // divide by per-blend mid-gray so the vertex color keeps owning the hue',
+            '    vec3 mult = det / vec3(0.45);',
+            '    diffuseColor.rgb *= mix(vec3(1.0), clamp(mult, 0.35, 1.9), dNear * 0.95);',
+            '    diffuseColor.rgb = clamp(diffuseColor.rgb, 0.0, 1.0);',
             '  }',
             '}',
           ].join('\n')
         )
-      if (frag === shader.fragmentShader) throw new Error('planet.js: detail injection point not found')
+      if (frag === shader.fragmentShader) throw new Error('planet.js: splat injection point not found')
       shader.fragmentShader = frag
+      terrainMat.userData.shader = shader // debug/inspection handle
     } catch (err) {
-      /* plain ground fallback */
+      terrainMat.userData.shaderError = String(err)
     }
   }
 

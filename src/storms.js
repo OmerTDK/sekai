@@ -137,8 +137,8 @@ function makeHurricaneTexture(rng, texSeed, spinSign) {
 // ---------------------------------------------------------------------------
 const PATCH_RADIUS = 1.062 // between the two cloud shells (1.055 / 1.07)
 const PATCH_SEGMENTS = 64
-const PATCH_PHI_LENGTH = 0.5
-const PATCH_THETA_LENGTH = 0.5
+const PATCH_PHI_LENGTH = 0.95 // planet-scale monster, like the ISS reference
+const PATCH_THETA_LENGTH = 0.95
 const SECONDARY_SCALE = 0.6 // angular footprint of the occasional second, smaller storm
 const RENDER_ORDER = 2 // above the cloud shells (sky.js leaves them at the default 0)
 
@@ -170,7 +170,7 @@ const SECONDARY_PATCH = buildPatch(SECONDARY_SCALE)
 // ---------------------------------------------------------------------------
 // Behavior tunables
 // ---------------------------------------------------------------------------
-const SPIN_RATE = 0.12 // rad/s, cyclonic (sign flips in the southern hemisphere)
+const SPIN_RATE = 0.16 // rad/s, cyclonic (sign flips in the southern hemisphere)
 const DRIFT_RATE = 0.0025 // rad/s along the track
 const DRIFT_WOBBLE_SCALE = 3.0 // spatial frequency the heading-wobble noise is sampled at
 const DRIFT_WOBBLE_GAIN = 14 // how sharply fbm bends the heading, per radian of travel
@@ -183,7 +183,7 @@ const CAM_FADE_NEAR = 1.35 // camera distance fade band (matches the cloud shell
 const CAM_FADE_FAR = 1.6
 const MIN_LAT = 0.1 // real hurricanes avoid the equator...
 const MAX_LAT = 0.65 // ...and the poles. (dir.y used as a cheap latitude proxy, as planet.js does)
-const SECOND_STORM_CHANCE = 0.25 // odds a primary-storm respawn also spins up a second, smaller storm
+const SECOND_STORM_CHANCE = 0 // user rule: exactly one hurricane at a time (machinery kept dormant)
 
 const UP = new THREE.Vector3(0, 1, 0)
 const RIGHT = new THREE.Vector3(1, 0, 0)
