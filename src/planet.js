@@ -43,8 +43,8 @@ const WATER_COLOR_RANGE = OCEAN_BASE_DEPTH + OCEAN_FLOOR_AMP
 // detail=100) and the resulting rock/snow response. Calibrated empirically:
 // land slope from this noise stack has p75~0.33, p90~0.58, p99~1.26.
 const SLOPE_EPS = 0.01
-const ROCK_SLOPE_LO = 0.35
-const ROCK_SLOPE_HI = 0.85
+const ROCK_SLOPE_LO = 0.4
+const ROCK_SLOPE_HI = 0.72
 const SNOW_STEEP_LO = 0.5
 const SNOW_STEEP_HI = 1.3
 
@@ -130,6 +130,26 @@ export function createPlanet(seed) {
     return sampleHeight(dir) > SEA_LEVEL + 0.0015
   }
 
+  // Compact biome sample for flora/effect placement. Uses the same noise
+  // fields as the vertex coloring below, so scattered props (grass, trees,
+  // rocks) land on ground that visually matches. Load-time use only — not
+  // tuned for per-frame calls.
+  function biomeAt(dir, out = {}) {
+    const x = dir.x
+    const y = dir.y
+    const z = dir.z
+    const h = sampleHeight(dir)
+    out.h = h
+    out.landT = clamp((h - SEA_LEVEL) / LAND_COLOR_RANGE, 0, 1)
+    out.moisture = fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 4, 2.0, 0.5) * 0.5 + 0.5
+    const { slope } = estimateSlopeAndConcavity(x, y, z, h)
+    out.slope = clamp(slope / ROCK_SLOPE_HI, 0, 1)
+    const capNoiseVal = fbm(nCap, x * CAP_SCALE, y * CAP_SCALE, z * CAP_SCALE, 3, 2.0, 0.5)
+    const capThreshold = 0.86 + capNoiseVal * 0.07
+    out.polar = smoothstep(capThreshold - 0.04, capThreshold + 0.04, Math.abs(y))
+    return out
+  }
+
   // --- slope / concavity (build-time only; used for coloring, not exported) -
   // Finite-difference sampleHeight at two tangent offsets around dir to get
   // a cheap local slope magnitude and a concavity value (positive where the
@@ -183,27 +203,28 @@ export function createPlanet(seed) {
 
       // Rock wins from elevation OR from being a steep face -- cliffs and
       // mountainsides read as rock regardless of altitude band, which is
-      // what actually sells a mountain range at a glance.
-      const elevationRockT = smoothstep(0.12, 0.85, landT + jitter * 0.05)
+      // what actually sells a mountain range at a glance. Bands are kept
+      // narrow so biome edges stay sharp facet-to-facet.
+      const elevationRockT = smoothstep(0.3, 0.68, landT + jitter * 0.05)
       const slopeRockT = smoothstep(ROCK_SLOPE_LO, ROCK_SLOPE_HI, slope)
       const rockT = Math.max(elevationRockT, slopeRockT)
 
-      const beachW = 1 - smoothstep(0.0, 0.05, landT + jitter * 0.02)
-      const forestW = clamp((moisture - 0.35) / 0.65, 0, 1) * (1 - rockT)
+      const beachW = 1 - smoothstep(0.0, 0.03, landT + jitter * 0.015)
+      const forestW = smoothstep(0.42, 0.58, moisture) * (1 - rockT)
 
       out.copy(cGrass).lerp(cRock, rockT)
-      out.lerp(cForest, forestW * 0.85)
+      out.lerp(cForest, forestW * 0.9)
       out.lerp(cBeach, beachW)
 
       // Snow on high peaks OR polar caps, whichever wins. Cap boundary uses
       // |y| (unit-sphere proxy for latitude) offset by a low-freq noise so
       // it isn't a perfect circle around each pole. Damped on very steep
       // faces -- snow doesn't cling to cliffs, it exposes rock instead.
-      const peakT = smoothstep(0.72, 0.93, landT)
+      const peakT = smoothstep(0.74, 0.86, landT)
       const capNoiseVal = fbm(nCap, x * CAP_SCALE, y * CAP_SCALE, z * CAP_SCALE, 3, 2.0, 0.5)
       const capThreshold = 0.86 + capNoiseVal * 0.07 // caps stay poleward of ~57-68 deg
       const lat = Math.abs(y)
-      const polarT = smoothstep(capThreshold - 0.04, capThreshold + 0.04, lat)
+      const polarT = smoothstep(capThreshold - 0.025, capThreshold + 0.025, lat)
       const steepDamp = 1 - smoothstep(SNOW_STEEP_LO, SNOW_STEEP_HI, slope) * 0.6
       const snowW = clamp(Math.max(peakT, polarT) + jitter * 0.05, 0, 1) * steepDamp
       out.lerp(cSnow, snowW)
@@ -221,31 +242,48 @@ export function createPlanet(seed) {
   }
 
   // --- terrain mesh ---------------------------------------------------------
-  // detail=100 -> ~204k tris; build (incl. slope/AO sampling) benchmarks at
-  // ~1s on Apple Silicon, well under the ~2s budget for the extra fidelity.
-  const terrainGeo = new THREE.IcosahedronGeometry(1, 100)
-  const posAttr = terrainGeo.attributes.position
-  const vertexCount = posAttr.count
-  const colorArray = new Float32Array(vertexCount * 3)
+  // detail=100 -> ~204k tris. Displace the indexed mesh first (cheap: one
+  // sampleHeight per unique vertex), then un-index it and paint ONE color per
+  // face from its centroid biome. Uniform facet colors + flat normals give
+  // the crisp low-poly look — no gradients smearing across triangles.
+  const indexedGeo = new THREE.IcosahedronGeometry(1, 100)
+  const indexedPos = indexedGeo.attributes.position
 
   const dir = new THREE.Vector3() // scratch, reused across the build loop
   const vColor = new THREE.Color() // scratch, reused across the build loop
 
-  for (let i = 0; i < vertexCount; i++) {
-    dir.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).normalize()
+  for (let i = 0; i < indexedPos.count; i++) {
+    dir.set(indexedPos.getX(i), indexedPos.getY(i), indexedPos.getZ(i)).normalize()
     const h = sampleHeight(dir)
-    posAttr.setXYZ(i, dir.x * h, dir.y * h, dir.z * h)
-
-    terrainColorAt(dir.x, dir.y, dir.z, h, vColor)
-    colorArray[i * 3] = vColor.r
-    colorArray[i * 3 + 1] = vColor.g
-    colorArray[i * 3 + 2] = vColor.b
+    indexedPos.setXYZ(i, dir.x * h, dir.y * h, dir.z * h)
   }
-  posAttr.needsUpdate = true
-  terrainGeo.setAttribute('color', new THREE.BufferAttribute(colorArray, 3))
+
+  const terrainGeo = indexedGeo.toNonIndexed()
+  indexedGeo.dispose()
+  const posAttr = terrainGeo.attributes.position
+  const faceColorArray = new Float32Array(posAttr.count * 3)
+
+  for (let i = 0; i < posAttr.count; i += 3) {
+    dir
+      .set(
+        posAttr.getX(i) + posAttr.getX(i + 1) + posAttr.getX(i + 2),
+        posAttr.getY(i) + posAttr.getY(i + 1) + posAttr.getY(i + 2),
+        posAttr.getZ(i) + posAttr.getZ(i + 1) + posAttr.getZ(i + 2)
+      )
+      .normalize()
+    const h = sampleHeight(dir)
+    terrainColorAt(dir.x, dir.y, dir.z, h, vColor)
+    for (let v = 0; v < 3; v++) {
+      faceColorArray[(i + v) * 3] = vColor.r
+      faceColorArray[(i + v) * 3 + 1] = vColor.g
+      faceColorArray[(i + v) * 3 + 2] = vColor.b
+    }
+  }
+  terrainGeo.setAttribute('color', new THREE.BufferAttribute(faceColorArray, 3))
   // Normals (and bounds) must be recomputed from the displaced positions,
   // not the original unit icosahedron -- both for correct lighting and so
-  // culling/raycasting bounds cover the displaced mountains.
+  // culling/raycasting bounds cover the displaced mountains. On non-indexed
+  // geometry computeVertexNormals yields true per-face normals.
   terrainGeo.computeVertexNormals()
   terrainGeo.computeBoundingSphere()
 
@@ -335,5 +373,5 @@ export function createPlanet(seed) {
     if (waterUniforms) waterUniforms.uTime.value = waterElapsed
   }
 
-  return { group, sampleHeight, isLand, update }
+  return { group, sampleHeight, isLand, biomeAt, update }
 }
