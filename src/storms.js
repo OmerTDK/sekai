@@ -382,6 +382,7 @@ export function createStorms(planet, camera, seed) {
     const grown = smoothstep(0, GROW_TIME, Math.min(storm.age, decayStart))
     const decayFade = storm.age < decayStart ? 1 : 1 - smoothstep(decayStart, decayEnd, storm.age)
     const lifecycleOpacity = grown * decayFade
+    storm.strength = lifecycleOpacity // exposed via getPrimary for cloud-deck clearing
 
     storm.spinAngle += SPIN_RATE * storm.spinSign * dt
 
@@ -414,5 +415,13 @@ export function createStorms(planet, camera, seed) {
     updateStorm(slotB, finishB, dt)
   }
 
-  return { group, update }
+  // Primary storm's direction + intensity (0..1), for the cloud shells'
+  // clearing moat. Returns 0 when no storm is active.
+  function getPrimary(out) {
+    if (!slotA.active || !slotA.strength) return 0
+    out.copy(slotA.dir)
+    return slotA.strength
+  }
+
+  return { group, update, getPrimary }
 }

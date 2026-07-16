@@ -57,7 +57,14 @@ export function createSky(seed) {
     return out.copy(lights.sun.position).normalize()
   }
 
-  return { group, update, getSunDir }
+  // Hurricane clears the ambient cloud deck around itself; main.js feeds the
+  // storm's position + intensity here each frame.
+  function setStormClearing(dir, strength) {
+    stormClearUniforms.uStormDir.value.copy(dir)
+    stormClearUniforms.uStormOn.value = strength
+  }
+
+  return { group, update, getSunDir, setStormClearing }
 }
 
 // ---------------------------------------------------------------- helpers --
@@ -481,6 +488,46 @@ function makeCloudTexture(noise3, cfg) {
   return tex
 }
 
+// Shared by both cloud shells: the hurricane clears a moat in the ambient
+// deck around itself (subsidence ring), driven every frame from main.js.
+const stormClearUniforms = {
+  uStormDir: { value: new THREE.Vector3(1, 0, 0) },
+  uStormOn: { value: 0 },
+}
+
+function applyStormClearing(mat) {
+  mat.customProgramCacheKey = () => 'cloud-storm-moat-v1'
+  mat.onBeforeCompile = (shader) => {
+    try {
+      Object.assign(shader.uniforms, stormClearUniforms)
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vCloudWorld;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCloudWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
+      const frag = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          '#include <common>\nuniform vec3 uStormDir;\nuniform float uStormOn;\nvarying vec3 vCloudWorld;'
+        )
+        .replace(
+          '#include <alphamap_fragment>',
+          [
+            '#include <alphamap_fragment>',
+            '{',
+            '  float cosAng = dot(normalize(vCloudWorld), uStormDir);',
+            '  // full clear inside ~0.3 rad of the eye, feathering out to ~0.55 rad',
+            '  float clearT = smoothstep(0.85, 0.955, cosAng);',
+            '  diffuseColor.a *= 1.0 - clearT * uStormOn;',
+            '}',
+          ].join('\n')
+        )
+      if (frag === shader.fragmentShader) throw new Error('sky.js: cloud moat injection point not found')
+      shader.fragmentShader = frag
+    } catch (err) {
+      /* clouds simply ignore the storm on failure */
+    }
+  }
+}
+
 function createClouds(seed) {
   const width = 2048
   const height = 1024
@@ -553,6 +600,9 @@ function createClouds(seed) {
       opacity: 0.5,
     })
   )
+
+  applyStormClearing(lowerMesh.material)
+  applyStormClearing(upperMesh.material)
 
   const rng = rngFromString(seed + ':clouds-axis')
   const tiltedAxis = () => new THREE.Vector3(rng() - 0.5, 1.6, rng() - 0.5).normalize()
