@@ -1,9 +1,17 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { createPlanet } from './planet.js'
 import { createSky } from './sky.js'
 import { createWorld } from './world.js'
 import { createBirds } from './birds.js'
+import { createFlora } from './flora.js'
+import { createWind } from './wind.js'
+import { createStorms } from './storms.js'
+import { createUI } from './ui.js'
 import { clamp, fantasyName } from './util.js'
 
 const SEED = new URLSearchParams(location.search).get('seed') ?? 'aetherion-1'
@@ -30,6 +38,21 @@ scene.add(world.group)
 const birds = createBirds(SEED)
 scene.add(birds.group)
 
+const flora = createFlora(planet, camera, SEED)
+scene.add(flora.group)
+
+const wind = createWind(planet, camera, SEED)
+scene.add(wind.group)
+
+const storms = createStorms(planet, camera, SEED)
+scene.add(storms.group)
+
+// Cinematic pass: subtle bloom lifts the sun, atmosphere rim and emissives.
+const composer = new EffectComposer(renderer)
+composer.addPass(new RenderPass(scene, camera))
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.3, 0.7, 1.0))
+composer.addPass(new OutputPass())
+
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = true
 controls.dampingFactor = 0.07
@@ -44,9 +67,17 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight
   camera.updateProjectionMatrix()
   renderer.setSize(innerWidth, innerHeight)
+  composer.setSize(innerWidth, innerHeight)
 })
 
+// Dev handle for poking the live scene from the console.
+const ui = createUI(world)
+
+window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, ui, renderer, composer, controls }
+
 const clock = new THREE.Clock()
+const sunDirScratch = new THREE.Vector3()
+const stormDirScratch = new THREE.Vector3()
 let hudTimer = 0
 
 renderer.setAnimationLoop(() => {
@@ -61,6 +92,11 @@ renderer.setAnimationLoop(() => {
   sky.update(dt, camera)
   world.update(dt)
   birds.update(dt)
+  flora.update(dt)
+  wind.update(dt)
+  storms.update(dt, sky.getSunDir(sunDirScratch))
+  sky.setStormClearing(stormDirScratch, storms.getPrimary(stormDirScratch))
+  ui.update(dt)
   controls.update()
 
   hudTimer -= dt
@@ -70,5 +106,5 @@ renderer.setAnimationLoop(() => {
     statsEl.textContent = `${s.settlements} settlements · ${s.structures} structures\n${s.agents} agent${s.agents === 1 ? '' : 's'} at work`
   }
 
-  renderer.render(scene, camera)
+  composer.render()
 })

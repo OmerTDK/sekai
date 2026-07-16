@@ -61,6 +61,10 @@ npm start  →  Vite dev server  →  browser tab
 No database. The transcript files are the persistence; positions are pure
 functions of (seed, project, session id). Client polls `/api/sessions` every 4s.
 
+Ground detail textures (`public/textures/`) are CC0 materials from
+[ambientCG](https://ambientcg.com) (Grass004, Rock030, Ground080, Snow006),
+triplanar-mapped and blended per-pixel by biome weights.
+
 Decisions, for the record: browser app over Electron/Tauri (a tab is enough; a
 Tauri shell is the upgrade if a dock icon is ever wanted). Vanilla three.js over
 react-three-fiber (no UI framework needed). Sessions detected by file mtime —
