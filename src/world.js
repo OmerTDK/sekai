@@ -638,6 +638,41 @@ export function createWorld(planet, camera, domElement) {
   const settlementsGroup = new THREE.Group()
   const structuresGroup = new THREE.Group()
   const agentsGroup = new THREE.Group()
+
+  // City lights: one warm additive speck per structure, so settlements
+  // twinkle on the night side (bloom gives them their halo). Rebuilt
+  // whenever the structure count changes.
+  const townLightsMat = new THREE.PointsMaterial({
+    color: 0xffc66e,
+    size: 2.4,
+    sizeAttenuation: false,
+    transparent: true,
+    opacity: 0.85,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  })
+  let townLights = null
+  let townLightCount = -1
+  function rebuildTownLights() {
+    townLightCount = structures.size
+    if (townLights) {
+      structuresGroup.remove(townLights)
+      townLights.geometry.dispose()
+    }
+    const positions = new Float32Array(structures.size * 3)
+    let i = 0
+    for (const st of structures.values()) {
+      positions[i * 3] = st.structureRoot.position.x + st.dir.x * 0.004
+      positions[i * 3 + 1] = st.structureRoot.position.y + st.dir.y * 0.004
+      positions[i * 3 + 2] = st.structureRoot.position.z + st.dir.z * 0.004
+      i++
+    }
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    townLights = new THREE.Points(geo, townLightsMat)
+    townLights.renderOrder = 1
+    structuresGroup.add(townLights)
+  }
   group.add(settlementsGroup, structuresGroup, agentsGroup)
 
   const stats = { settlements: 0, structures: 0, agents: 0 }
@@ -793,6 +828,7 @@ export function createWorld(planet, camera, domElement) {
     return {
       id,
       structure,
+      settlement,
       group: visualGroup,
       dir: structure.dir.clone(),
       forward: _tb1.clone(),
@@ -1042,7 +1078,36 @@ export function createWorld(planet, camera, domElement) {
     stats.settlements = settlements.size
     stats.structures = structures.size
     stats.agents = agents.size
+
+    if (structures.size !== townLightCount) rebuildTownLights()
   }
 
-  return { group, update, stats, _tween: tween }
+  // Read-only settlement summaries for UI (sidebar/legend).
+  function list() {
+    const counts = new Map()
+    for (const a of agents.values()) {
+      counts.set(a.settlement.project, (counts.get(a.settlement.project) || 0) + 1)
+    }
+    return Array.from(settlements.values()).map((s) => ({
+      project: s.project,
+      name: s.name,
+      basename: s.basenameRaw,
+      race: s.race,
+      structures: s.structureDirs.length,
+      agents: counts.get(s.project) || 0,
+    }))
+  }
+
+  // Fly the camera to a settlement — same tween as clicking it in the scene.
+  function visit(project) {
+    const s = settlements.get(project)
+    if (!s) return false
+    tween.from.copy(camera.position)
+    tween.to.copy(s.anchorDir).multiplyScalar(Math.max(1.3, 0.45 * camera.position.length()))
+    tween.t = 0
+    tween.active = true
+    return true
+  }
+
+  return { group, update, stats, list, visit, _tween: tween }
 }

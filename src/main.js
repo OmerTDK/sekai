@@ -76,6 +76,7 @@ const ui = createUI(world)
 window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, ui, renderer, composer, controls }
 
 const clock = new THREE.Clock()
+const sunDirScratch = new THREE.Vector3()
 let hudTimer = 0
 
 renderer.setAnimationLoop(() => {
@@ -92,7 +93,7 @@ renderer.setAnimationLoop(() => {
   birds.update(dt)
   flora.update(dt)
   wind.update(dt)
-  storms.update(dt)
+  storms.update(dt, sky.getSunDir(sunDirScratch))
   ui.update(dt)
   controls.update()
 

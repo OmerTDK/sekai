@@ -22,15 +22,15 @@ export function createSky(seed) {
   group.add(clouds.lowerMesh, clouds.upperMesh)
 
   const lights = createLights()
-  group.add(lights.sun, lights.target, lights.hemi)
+  group.add(lights.sun, lights.target, lights.hemi, lights.moonFill)
 
   const moons = createMoons(seed)
   for (const moon of moons) group.add(moon.pivot)
 
-  // Day/night cycle: the sun sweeps a full orbit every ~10 minutes so every
+  // Day/night cycle: the sun sweeps a full orbit every ~15 minutes so every
   // settlement gets its dawn (with a fixed sun, half the world would live in
   // eternal night).
-  const SUN_ORBIT_RATE = (Math.PI * 2) / 600
+  const SUN_ORBIT_RATE = (Math.PI * 2) / 900
 
   function update(dt /* sec */, camera /* THREE.PerspectiveCamera */) {
     clouds.lowerMesh.rotateOnWorldAxis(clouds.lowerAxis, clouds.lowerRate * dt)
@@ -40,6 +40,7 @@ export function createSky(seed) {
     const sunAngle = SUN_ORBIT_RATE * dt
     lights.sun.position.applyAxisAngle(Y_AXIS, sunAngle)
     sunSprite.position.applyAxisAngle(Y_AXIS, sunAngle)
+    lights.moonFill.position.copy(lights.sun.position).multiplyScalar(-1)
 
     // Fade the cloud deck away as the camera dives toward the surface, so
     // close-up views of settlements aren't fogged out. Full deck from 2.4R
@@ -50,7 +51,13 @@ export function createSky(seed) {
     clouds.upperMesh.material.opacity = 0.5 * Math.max(fade, 0.05)
   }
 
-  return { group, update }
+  // Current sun direction (unit vector), written into `out` — used by other
+  // modules (e.g. the sun-seeking hurricane).
+  function getSunDir(out) {
+    return out.copy(lights.sun.position).normalize()
+  }
+
+  return { group, update, getSunDir }
 }
 
 // ---------------------------------------------------------------- helpers --
@@ -574,7 +581,13 @@ function createLights() {
 
   const hemi = new THREE.HemisphereLight(new THREE.Color('#9db8ff'), new THREE.Color('#3a3128'), 0.62)
 
-  return { sun, hemi, target }
+  // Cool "moonlight" fill from the anti-solar direction so the night side
+  // reads silvery-blue instead of black. Kept in opposition in update().
+  const moonFill = new THREE.DirectionalLight(new THREE.Color('#8fa8d8'), 0.5)
+  moonFill.position.copy(SUN_DIR).multiplyScalar(-10)
+  moonFill.target = target
+
+  return { sun, hemi, moonFill, target }
 }
 
 // ------------------------------------------------------------------ moons --

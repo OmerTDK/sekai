@@ -172,6 +172,12 @@ const SECONDARY_PATCH = buildPatch(SECONDARY_SCALE)
 // ---------------------------------------------------------------------------
 const SPIN_RATE = 0.16 // rad/s, cyclonic (sign flips in the southern hemisphere)
 const DRIFT_RATE = 0.0025 // rad/s along the track
+const SUN_STEER_RATE = 0.035 // rad/s max pull toward the subsolar point (keeps the storm watchable)
+
+// Latest sun direction, fed in via update(dt, sunDir) from main.js.
+const _sunDir = new THREE.Vector3(1, 0.45, 0.9).normalize()
+let _hasSun = false
+const _steerAxis = new THREE.Vector3()
 const DRIFT_WOBBLE_SCALE = 3.0 // spatial frequency the heading-wobble noise is sampled at
 const DRIFT_WOBBLE_GAIN = 14 // how sharply fbm bends the heading, per radian of travel
 const GROW_TIME = 15 // seconds to grow opacity+scale in
@@ -215,11 +221,14 @@ function perpendicular(rng, dir, out = new THREE.Vector3()) {
 
 // Rejection-samples an ocean direction within the hurricane latitude band.
 function pickStormOrigin(rng, planet, out) {
-  for (let tries = 0; tries < 80; tries++) {
+  for (let tries = 0; tries < 160; tries++) {
     randomDirection(rng, out)
     const latProxy = Math.abs(out.y)
     if (latProxy < MIN_LAT || latProxy > MAX_LAT) continue
     if (planet.isLand(out)) continue
+    // spawn in daylight so the show is always watchable (relaxed after
+    // enough failed tries — ocean+lat+lit can be a tight combination)
+    if (_hasSun && tries < 120 && out.dot(_sunDir) < 0.35) continue
     return out
   }
   return out // fallback: last sample: rare in practice given ~30-40% land coverage
@@ -336,6 +345,25 @@ export function createStorms(planet, camera, seed) {
     storm.axis.applyAxisAngle(storm.dir, turn)
     storm.dir.applyAxisAngle(storm.axis, DRIFT_RATE * dt).normalize()
 
+    // Sun-seeking: the hurricane hugs the lit hemisphere so it's always
+    // watchable — steered toward the subsolar point as it nears dusk, and
+    // dissipating if night catches it anyway.
+    if (_hasSun) {
+      const litDot = storm.dir.dot(_sunDir)
+      if (litDot < 0.55) {
+        _steerAxis.crossVectors(storm.dir, _sunDir)
+        if (_steerAxis.lengthSq() > 1e-8) {
+          _steerAxis.normalize()
+          const steer = SUN_STEER_RATE * (0.55 - litDot) * dt
+          storm.dir.applyAxisAngle(_steerAxis, steer).normalize()
+          storm.axis.applyAxisAngle(_steerAxis, steer).normalize()
+        }
+      }
+      if (litDot < -0.08 && storm.decayStartAge === null) {
+        storm.decayStartAge = storm.age
+      }
+    }
+
     // Landfall pulls decay forward; otherwise decay starts once mature.
     if (storm.decayStartAge === null && planet.isLand(storm.dir)) {
       storm.decayStartAge = storm.age
@@ -370,7 +398,18 @@ export function createStorms(planet, camera, seed) {
     storm.material.opacity = lifecycleOpacity * camFade
   }
 
-  function update(dt) {
+  let sunPrimed = false
+  function update(dt, sunDir) {
+    if (sunDir) {
+      _sunDir.copy(sunDir)
+      _hasSun = true
+      // The launch-time storm spawns before the first sun handshake; if it
+      // came up on the night side, quietly redo it (still invisible at age<2).
+      if (!sunPrimed) {
+        sunPrimed = true
+        if (slotA.active && slotA.age < 2 && slotA.dir.dot(_sunDir) < 0.35) finishA()
+      }
+    }
     updateStorm(slotA, finishA, dt)
     updateStorm(slotB, finishB, dt)
   }
