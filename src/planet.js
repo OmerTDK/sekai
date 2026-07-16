@@ -52,7 +52,7 @@ const SNOW_STEEP_HI = 1.3
 // Concavity p90~0.002, tail out to ~0.02-0.03 at sharp valleys/ridges.
 const AO_CONCAVITY_LO = 0.0006
 const AO_CONCAVITY_HI = 0.004
-const AO_MIN_MUL = 0.85
+const AO_MIN_MUL = 0.93 // subtle: strong per-vertex AO reads as triangular blotches on smooth shading
 
 // ---------------------------------------------------------------------------
 // Palette
@@ -209,7 +209,8 @@ export function createPlanet(seed) {
       const slopeRockT = smoothstep(ROCK_SLOPE_LO, ROCK_SLOPE_HI, slope)
       const rockT = Math.max(elevationRockT, slopeRockT)
 
-      const beachW = 1 - smoothstep(0.0, 0.03, landT + jitter * 0.015)
+      // band must span >= 2 vertex steps or the shoreline aliases into sawteeth
+      const beachW = 1 - smoothstep(0.0, 0.045, landT + jitter * 0.015)
       const forestW = smoothstep(0.42, 0.58, moisture) * (1 - rockT)
 
       out.copy(cGrass).lerp(cRock, rockT)
@@ -224,7 +225,7 @@ export function createPlanet(seed) {
       const capNoiseVal = fbm(nCap, x * CAP_SCALE, y * CAP_SCALE, z * CAP_SCALE, 3, 2.0, 0.5)
       const capThreshold = 0.86 + capNoiseVal * 0.07 // caps stay poleward of ~57-68 deg
       const lat = Math.abs(y)
-      const polarT = smoothstep(capThreshold - 0.025, capThreshold + 0.025, lat)
+      const polarT = smoothstep(capThreshold - 0.035, capThreshold + 0.035, lat)
       const steepDamp = 1 - smoothstep(SNOW_STEEP_LO, SNOW_STEEP_HI, slope) * 0.6
       const snowW = clamp(Math.max(peakT, polarT) + jitter * 0.05, 0, 1) * steepDamp
       out.lerp(cSnow, snowW)
@@ -234,62 +235,47 @@ export function createPlanet(seed) {
     const aoT = smoothstep(AO_CONCAVITY_LO, AO_CONCAVITY_HI, concavity)
     const aoMul = 1 - aoT * (1 - AO_MIN_MUL)
 
-    // Hand-painted per-vertex value jitter, combined with AO.
-    const shade = (1 + jitter * 0.035) * aoMul
+    // Hand-painted per-vertex value jitter, combined with AO. Kept subtle:
+    // smooth shading shows speckle much more than flat facets did.
+    const shade = (1 + jitter * 0.012) * aoMul
     out.r = clamp(out.r * shade, 0, 1)
     out.g = clamp(out.g * shade, 0, 1)
     out.b = clamp(out.b * shade, 0, 1)
   }
 
   // --- terrain mesh ---------------------------------------------------------
-  // detail=100 -> ~204k tris. Displace the indexed mesh first (cheap: one
-  // sampleHeight per unique vertex), then un-index it and paint ONE color per
-  // face from its centroid biome. Uniform facet colors + flat normals give
-  // the crisp low-poly look — no gradients smearing across triangles.
-  const indexedGeo = new THREE.IcosahedronGeometry(1, 100)
-  const indexedPos = indexedGeo.attributes.position
+  // detail=128 -> ~327k tris, ~164k verts; smooth-shaded with per-vertex
+  // biome colors. Smooth normals + tight biome bands read as clean painted
+  // fields with crisp borders — no visible triangulation up close.
+  const terrainGeo = new THREE.IcosahedronGeometry(1, 128)
+  const posAttr = terrainGeo.attributes.position
+  const vertexCount = posAttr.count
+  const colorArray = new Float32Array(vertexCount * 3)
 
   const dir = new THREE.Vector3() // scratch, reused across the build loop
   const vColor = new THREE.Color() // scratch, reused across the build loop
 
-  for (let i = 0; i < indexedPos.count; i++) {
-    dir.set(indexedPos.getX(i), indexedPos.getY(i), indexedPos.getZ(i)).normalize()
+  for (let i = 0; i < vertexCount; i++) {
+    dir.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i)).normalize()
     const h = sampleHeight(dir)
-    indexedPos.setXYZ(i, dir.x * h, dir.y * h, dir.z * h)
-  }
+    posAttr.setXYZ(i, dir.x * h, dir.y * h, dir.z * h)
 
-  const terrainGeo = indexedGeo.toNonIndexed()
-  indexedGeo.dispose()
-  const posAttr = terrainGeo.attributes.position
-  const faceColorArray = new Float32Array(posAttr.count * 3)
-
-  for (let i = 0; i < posAttr.count; i += 3) {
-    dir
-      .set(
-        posAttr.getX(i) + posAttr.getX(i + 1) + posAttr.getX(i + 2),
-        posAttr.getY(i) + posAttr.getY(i + 1) + posAttr.getY(i + 2),
-        posAttr.getZ(i) + posAttr.getZ(i + 1) + posAttr.getZ(i + 2)
-      )
-      .normalize()
-    const h = sampleHeight(dir)
     terrainColorAt(dir.x, dir.y, dir.z, h, vColor)
-    for (let v = 0; v < 3; v++) {
-      faceColorArray[(i + v) * 3] = vColor.r
-      faceColorArray[(i + v) * 3 + 1] = vColor.g
-      faceColorArray[(i + v) * 3 + 2] = vColor.b
-    }
+    colorArray[i * 3] = vColor.r
+    colorArray[i * 3 + 1] = vColor.g
+    colorArray[i * 3 + 2] = vColor.b
   }
-  terrainGeo.setAttribute('color', new THREE.BufferAttribute(faceColorArray, 3))
+  posAttr.needsUpdate = true
+  terrainGeo.setAttribute('color', new THREE.BufferAttribute(colorArray, 3))
   // Normals (and bounds) must be recomputed from the displaced positions,
   // not the original unit icosahedron -- both for correct lighting and so
-  // culling/raycasting bounds cover the displaced mountains. On non-indexed
-  // geometry computeVertexNormals yields true per-face normals.
+  // culling/raycasting bounds cover the displaced mountains.
   terrainGeo.computeVertexNormals()
   terrainGeo.computeBoundingSphere()
 
   const terrainMat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    flatShading: true,
+    flatShading: false, // smooth fields, crisp band edges — no triangle mosaics
     roughness: 0.95,
     metalness: 0,
   })
