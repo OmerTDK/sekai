@@ -1,256 +1,298 @@
-# Claude Planet — Program Plan (v0.9 DRAFT, pending adversarial audit)
+# Claude Planet — Program Plan v1.0 (audited; awaiting Omer's sign-off)
 
-> **For agentic workers:** This is the PROGRAM plan (milestones, gates, budgets).
-> Execution happens milestone-by-milestone: at each milestone start, write a
-> just-in-time execution plan in the superpowers:writing-plans bite-sized task
-> format, then implement via superpowers:subagent-driven-development with
-> sonnet subagents. Do not build ahead of the active milestone.
+> **For agentic workers:** This is the PROGRAM plan. At each milestone start,
+> write a just-in-time execution plan (superpowers:writing-plans bite-sized
+> format), commit it into docs/superpowers/plans/ next to this file, then
+> build via sonnet subagents per §0. Do not build ahead of the active
+> milestone. ROADMAP.md is superseded by this file (kept for rationale).
+
+**Audit trail:** v0.9 was attacked by three independent auditors (technical,
+product/scope, execution/process) plus an architect self-audit on 2026-07-16.
+All BLOCKING and MAJOR findings are incorporated below; §7 lists what changed.
 
 **Goal:** Evolve Claude Planet from a beautiful toy into a high-fidelity,
 always-running desktop world that visualizes all Claude Code activity as a
-living civilization — without ever breaking the fast build loop.
+living medieval×steampunk civilization — with joy landing every session and
+no unshippable gaps.
 
-**Architecture:** Vite + three.js app, session data from `~/.claude/projects`
-transcripts (no database until M7), deterministic world derived from (seed,
-project, session-id) hashes. Migration path: minimal Electron shell early →
-TSL material port on the WebGL bridge → WebGPURenderer flip → compute-shader
-flagships (ocean/clouds/erosion) → shell plumbing → living-world features.
-
-**Tech stack:** three.js 0.185+ (WebGLRenderer → WebGPURenderer + TSL),
-Electron (shell), Vite (dev/build), Node ESM backend modules (scanner,
-resume), CC0 assets (ambientCG, Kenney/Quaternius), sonnet subagents for all
-construction, Fable session as architect/integrator/verifier.
+**Architecture:** Vite + three.js app; session data read directly from
+`~/.claude/projects` transcripts (no database — the transcripts are the
+persistence); deterministic world from (seed, project, session-id) hashes.
+Engine path: minimal Electron shell → beauty + dragons/airships → TSL
+material port on the WebGL bridge → WebGPURenderer flip → visual flagships.
+**Program-complete line: end of M5c.** Everything after is an opt-in epilogue.
 
 ---
 
 ## 0. Operating model (standing rules)
 
-- **Roles:** Fable session = architecture, contracts, integration, live
-  verification, PR management. Sonnet subagents = ALL construction, on
-  disjoint file sets with contracts pinned in their prompts.
-- **Workflow:** one branch + draft PR per milestone batch → `gh pr ready` →
-  self-merge. No review gate (solo project, user-approved).
-- **Verification protocol (every milestone, before merge):**
-  1. `node --check` on all touched files; `npm test` green.
-  2. Live drive in the running app; screenshots at 5 standard viewpoints:
-     full-orbit, mid-zoom coast, ground-level sunlit, night city, storm.
-  3. Perf probe: `renderer.info` draw calls + a 5s frame-time sample ≥ 55fps
-     on the dev machine at 1680×1050.
-  4. Determinism spot-check: reload twice, same seed → same world.
-- **Budget currency:** 1 unit = one sonnet builder run (observed today:
-  100k–290k tokens, median ~130k). Estimates below are in builder-runs; the
-  audit should challenge them.
-- **Change control:** after audit + user sign-off, this plan is v1.0. Scope
-  changes = PR editing this file with a one-line rationale in the commit.
+- **Roles:** architect session = contracts, integration, verification, PRs.
+  Sonnet subagents = all construction, disjoint file sets, contracts pinned
+  in prompts.
+- **Architect-only files** (never assigned to a builder): `package.json`,
+  `vite.config.js`, `electron/main.cjs`, `src/main.js`, `src/ui.css` (to be
+  extracted from index.html's inline styles at M2 entry).
+- **Workflow:** one branch + draft PR per milestone → `gh pr ready` →
+  self-merge. No AI attribution anywhere in commits or PRs (standing user
+  rule). Revert protocol: `git revert <sha>` then re-run that milestone's
+  JIT plan — commits stay fine-grained to keep this cheap.
+- **CI (M0 deliverable):** GitHub Action on PR: `node --check` all src/server
+  files + `npm test` + `npm run build`. Merge blocked on red.
+- **Verification is code, not labor (M0 deliverable, the "verify kit"):**
+  `__planet.gotoViewpoint(name)` for the 5 standard viewpoints (orbit,
+  mid-coast, ground-sunlit, night-city, storm), `__planet.seekTime(s)` to
+  fast-forward the sim clock, a script that captures the 5 shots +
+  `renderer.info` + a 5s fps sample, and a determinism hash (structure
+  positions hashed after two seeded reloads must match). Full 5-viewpoint
+  sweep at **milestone exit**; intra-milestone PRs verify only the 1–2
+  viewpoints they touch.
+- **Tests:** `npm test` gains geometry sanity asserts (non-zero vertex/index
+  counts, non-degenerate bounding boxes) for merge-built geometry — the
+  class of check that would have caught the canopy-less-trees bug.
+- **Silent-fallback rule (quality bar):** every graceful degradation path
+  (`|| fallback`, empty `catch`) must `console.warn` once; the verify sweep
+  reads the console. Existing silent sites get warnings during M0.
+- **Contracts:** no separate prose contracts doc (prose demonstrably rots
+  here within hours). Instead: `// @ts-check` + JSDoc types on the height-
+  contract consumer files (planet.js, world.js, flora.js, wind.js,
+  storms.js); invariants live in this file: `SEA_LEVEL = 1.0`;
+  `sampleHeight(dir)` is synchronous, allocation-free, deterministic;
+  three.js `alphaMap` samples the GREEN channel; icosphere geometry must be
+  vertex-welded before smooth shading; all randomness seeded (no
+  `Math.random`/`Date.now` in world-state code).
+- **Dependency pinning:** three.js pinned EXACT (0.185.1); version bumps are
+  deliberate, one per milestone gate at most.
+- **Budget honesty:** estimates below are sonnet builder-runs (observed
+  median ~130k tokens, hard runs 190–290k). Architect integration time
+  historically ≈ builder time — budgets are ranges, not promises; WIP cap =
+  one milestone.
 
-## 0.5 Art direction (user call, 2026-07-16): medieval × steampunk
+## 0.5 Art direction: medieval × steampunk
 
-- **Base world = deeply medieval:** stone keeps, timber halls, thatch, banners,
-  torchlight. The terrain/nature stack stays natural-stylized.
-- **Steampunk = the language of activity.** Progress and scale express as
-  machinery: active/large sessions sprout brass gearworks, steam vents, glass
-  observatory domes, pressure tanks; the busiest projects earn tesla-spire /
-  great-engine landmarks. Steam & smoke plumes join city lights as the "this
-  place is alive" signal.
-- **Race flavor:** dwarves = full industrial steampunk (pistons, chimneys,
-  riveted brass); humans = medieval with clockwork guild-craft (astrolabes,
-  brass trim); elves = organic medieval, steampunk only as elegant filigree;
-  orcs = scrap-punk (bolted iron, black smoke).
-- **Palette accents:** brass #b0793a / copper #c98d4a / aged-bronze patina
-  #5e7d6a over the existing muted-saturated base.
-- **Dragons are canon** (not a rare easter egg): at least one resident dragon
-  with a mountain lair from M8; appearances tied to milestones/events.
-- **Airships over ships:** the M8 traversal layer becomes dirigibles on
-  great-circle routes between related settlements, steam trails behind.
-- **M2 asset implication:** base buildings from CC0 medieval packs
-  (Kenney/Quaternius); steampunk detailing as procedural bolt-on kit parts
-  (gears/pipes/tanks/domes) since quality CC0 steampunk packs are scarce —
-  audit should pressure-test this assumption.
+- Base world deeply medieval (stone keeps, timber halls, banners, torchlight);
+  terrain/nature stays natural-stylized.
+- Steampunk is the language of ACTIVITY: busy/large sessions sprout brass
+  gearworks, steam vents, glass observatory domes, pressure tanks; the
+  busiest projects earn great-engine landmarks. Steam/smoke plumes join city
+  lights as the "alive" signal.
+- Race flavor: dwarves full industrial; humans medieval-clockwork; elves
+  organic with brass filigree only; orcs scrap-punk.
+- Palette accents: brass #b0793a, copper #c98d4a, aged-bronze patina #5e7d6a.
+- Dragons are canon (resident, lair, event appearances — M2.5).
+- Airships are the traversal layer (dirigibles, steam trails — M2.5).
+- Asset strategy (validated by spike S5 before M2 commits): CC0 medieval
+  packs (Kenney/Quaternius) + procedural steampunk bolt-on kit parts.
 
-## 1. Current state (baseline, 2026-07-16)
+## 1. Current state (baseline, 2026-07-16 end of day)
 
-Shipped and merged (PR #1): seeded terrain (welded icosphere, biome bands:
-desert/savanna/grass/forest/tundra/snow, CC0 texture splatting, per-pixel
-detail), ocean (swell + glint), sky (stars/milky way/nebulae, 2 moons,
-domain-warped cloud shells, sun orbit + moonlight, storm-clearing moat),
-hurricanes (single, sun-seeking, planet-scale, spiral texture), flora (trees,
-rocks; grass disabled by user verdict), wind streaks, birds, session scanner
-(topics, ai-title, cache, tests), civilization layer (29 settlements, 250+
-structures, 7 building types, 4 races, workers with states, construction,
-city lights), sidebar+legend UI, click/UI fly-to, Dock launcher app, vignette
-+ bloom. In flight on `planet-v1` (PR #2 draft): eclipses/aurora/meteors,
-worker speech bubbles + sparks + subagent minions, building inspector +
-resume endpoint + cmd-K + photo mode, minimal Electron shell.
-
-Known debt: onBeforeCompile string-injection shaders (5 sites) — scheduled
-for deletion in M3; primitive kit-bash buildings — replaced in M2; vite dev
-server doubles as app backend — replaced in M7.
+Merged (PR #1): full v1 world — terrain/biomes/textures, ocean, sky (moons,
+domain-warped clouds + storm moat, sun orbit, moonlight), sun-seeking
+planet-scale hurricane, flora (trees/rocks), wind streaks, birds, city
+lights, civilization layer (29 settlements, 250+ structures, races, workers),
+sidebar UI, scanner (+tests), Dock launcher.
+Built and parked on PR #2 branch (unmerged, pending M0): eclipses + aurora +
+meteors; worker speech bubbles + hammer sparks + subagent minions +
+structure-click API; building inspector + resume-session endpoint + cmd-K +
+photo mode; minimal Electron shell (electron 43.1.1).
+Known debt: 5 `onBeforeCompile` sites + 1 raw `ShaderMaterial` (atmosphere
+rim — sky.js:307) + aurora ShaderMaterial (M3 targets ALL of these);
+primitive kit-bash buildings (M2); world.js god-module 1113 lines (split at
+M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
+(warn-sweep at M0).
 
 ## 2. Milestones
 
-### M0 — Land Batch-1 (IN FLIGHT)
-- **Scope:** integrate + verify the 4 in-flight builders' work; merge PR #2.
-- **Exit:** all Batch-1 features pass the verification protocol; eclipse
-  frequency observed ≥ 1 per 30 min of sim time; "Resume session" opens
-  Terminal and resumes the correct session (manually verified once).
-- **Est:** already spent; +0 builder-runs (integration only). 1 session.
+### M0 — Land Batch-1 + build the safety net
+- **Scope:** integrate + verify the four parked builders' work; merge PR #2.
+  Deliverables beyond features: verify kit (`gotoViewpoint`, `seekTime`,
+  capture script, determinism hash), CI action, geometry sanity asserts in
+  `npm test`, silent-fallback warn sweep, three.js pinned exact.
+- **Exit:** verify-kit sweep passes all 5 viewpoints; CI green on the PR;
+  eclipse frequency MEASURED via `seekTime` fast-forward — if a real eclipse
+  occurs less than ~once per 30 sim-minutes, bias one moon's orbit plane
+  until it does (spectacle exists to be seen); "Resume session" opens
+  Terminal and resumes the right session (verified once by hand).
+- **Est:** 1–2 builder-runs (verify kit, CI) + integration. 1 session.
 
-### M1 — Minimal Electron shell (moved early; user call)
-- **Scope:** `npm run app` → Electron window (backgroundThrottling:false),
-  spawns dev server if absent; Dock launcher repointed to Electron; browser
-  path + `planet` alias keep working.
-- **Explicit non-goals:** packaging/signing, auto-update, SQLite, watchers.
-- **Exit:** planet animates while window is unfocused/hidden for 10 min
-  (HUD clock advances); dev hot-reload works inside the shell; Chrome can
-  still open the same URL for verification.
-- **Risks:** Electron download size in repo tooling only (devDep). None
-  architectural.
-- **Est:** 1 builder-run (already launched) + glue. 1 short session.
+### M1 — Minimal Electron shell (BUILT; verification only)
+- **Exit:** planet animates 10 min unfocused/hidden (HUD clock advances) —
+  covering BOTH rAF and timers (the 4s poll must keep firing); hot reload
+  works in-shell; Chrome can still drive the same server; Dock launcher
+  repointed to the Electron app.
+- **Est:** 0 new runs. Folded into the M0 session.
 
-### M2 — Beauty batch (assets + data-driven charm + time-lapse)
-- **Scope:**
-  1. **S4 spike first:** BatchedMesh with ~20k instances of GLTF low-poly
-     parts — measure draw calls + fps. GO if ≥55fps.
-  2. Replace kit-bash buildings + trees with curated CC0 packs
-     (Kenney/Quaternius), per-race material palettes, tier = model variant.
-  3. Git-driven charm: commit fireworks, PR monuments, error thunderclouds
-     (data via `git log`/`gh` per project cwd, polled server-side).
-  4. Model-tier architecture (transcript model ids → building style).
-  5. Wonders at milestone counts (100/250/500 sessions).
-  6. Time-lapse mode: timeline scrubber replaying structure appearance by
-     transcript mtime order (client-side; no new data).
-- **Exit:** settlement close-up screenshot is "screenshot-worthy" (user
-  judgment); fireworks fire on a real commit within 60s; time-lapse replays
-  the full history in ≤ 60s smoothly; fps budget holds.
-- **Risks:** GLTF asset licensing hygiene (CC0 only, recorded in DESIGN.md);
-  git polling cost per project (mitigate: only settlements with active
-  sessions, 60s interval).
-- **Est:** 6–8 builder-runs. 2 sessions.
+### M2 — Beauty batch
+- **Entry tasks (architect):** split world.js → buildings.js / placement.js /
+  labels.js (+world.js orchestration); extract index.html styles → ui.css.
+- **S5 art spike (first hour, GO/NO-GO):** ONE medieval GLTF house + 2–3
+  procedural steampunk bolt-ons (gear, pipe, tank) + a Kenney-vs-Quaternius
+  side-by-side → screenshot → Omer verdict before anything else proceeds.
+- **S4 perf spike:** BatchedMesh @ ~20k GLTF-part instances → GO if ≥55fps
+  and civ layer ≤ ~30 draw calls.
+- **Scope:** asset-pack buildings + trees with per-race palettes and
+  steampunk-by-activity bolt-ons; steam/smoke plumes; git-driven charm
+  (commit fireworks, PR monuments, error thunderclouds — polled only for
+  settlements with active sessions, 60s interval); model-tier architecture;
+  milestone wonders; time-lapse mode (scrub timeline, replay by mtime).
+- **Exit:** settlement close-up passes Omer's eye; fireworks fire on a real
+  commit within 60s; time-lapse replays full history ≤60s smoothly; fps ≥55.
+- **Est:** 7–9 builder-runs. 2 sessions.
 
-### M3 — TSL port (kill the shader hacks) [GATE: S1]
-- **Scope:** S1 spike: cloud-moat material ported to TSL running via
-  `WebGLRenderer.setNodesHandler(WebGLNodesHandler)` alongside legacy
-  materials. GO criteria: renders identically (screenshot diff), no fps
-  regression >10%, coexists with untouched materials. Then port, one PR
-  each: terrain splat → ocean swell → grass-wind (dormant) → aurora →
-  storm/cloud materials. Delete every onBeforeCompile site.
-- **Exit:** `grep -r onBeforeCompile src/` returns zero; visual parity at
-  all 5 standard viewpoints; fps within 10% of baseline.
-- **Risks:** bridge limitations bite (no compile(), fog quirks, instancing
-  edge cases — flora uses InstancedMesh custom attrs!). Mitigation: S1
-  explicitly tests an instanced custom-attribute material second.
-  Fallback: A″ (stay WebGL2, keep hacks, fragment-shader flagships).
-- **Est:** 1 spike + 5–6 builder-runs. 2 sessions.
+### M2.5 — Dragons + airships (pulled forward: joy has no dependency on the migration)
+- **Scope:** one resident dragon (lair on the tallest range, patrol flights,
+  event appearances on milestones); airship dirigibles on great-circle
+  routes between git-related settlements, steam trails, dock masts at
+  qualifying settlements.
+- **Exit:** dragon visible within one sim-day of watching; airships visibly
+  travel between at least 2 settlement pairs derived from real git remotes;
+  fps ≥55.
+- **Est:** 3–4 builder-runs. 1 session.
 
-### M4 — Renderer flip + post stack [GATE: S2]
-- **Scope:** S2 spike: WebGPURenderer boots the scene with TSL materials
-  from M3; measure fps. Then: flip renderer, rebuild post (bloom → TSL
-  postprocessing, AgX tone mapping), fix regressions, keep a
-  `?renderer=webgl` escape hatch for one milestone.
-- **Exit:** WebGPU is default; all 5 viewpoints verified; fps ≥ WebGL
-  baseline −10%; escape hatch works.
-- **Risks:** WebGPU adapter issues on user's machine (unlikely, Apple
-  Silicon Chrome/Electron); subtle color/tone shifts (accept + regrade).
-- **Est:** 1 spike + 2–3 builder-runs. 1–2 sessions.
+### CHOICE-1 (Omer decides after M2.5)
+- **(a) Clean path (architect recommendation):** M3 → M4 → M5a-c. Flagships
+  built once, on the final engine. Cost: ~2 sessions of low-visible-delta
+  migration before the next visual payoff.
+- **(b) Fast-joy detour:** WebGL2 fragment-shader scattering + ocean upgrade
+  FIRST (~2 runs, immediate visuals), migration afterwards, accepting ~2–3
+  runs of flagship rework in TSL later.
 
-### M5 — Compute flagships (sequential, each its own PR)
-- **Order:** (a) atmospheric scattering → (b) FFT ocean + foam →
-  (c) volumetric clouds + hurricane (ambient cover cut ~70%) →
-  (d) GPU erosion bake + rivers.
-  Rationale: scattering is standalone + biggest whole-planet win; ocean next
-  (bounded surface); clouds hardest visually; erosion changes terrain data
-  contracts (sampleHeight) so it goes last.
-- **Exit per flagship:** side-by-side before/after screenshots approved by
-  user; fps ≥ 55 sustained at mid-zoom; determinism preserved (erosion bake
-  cached to disk keyed by seed).
-- **Risks:** clouds perf (mitigate: quarter-res raymarch + upsample,
-  cap steps); erosion invalidates settlement placements (mitigate:
-  placement re-derives from the SAME baked heightmap — bake becomes the
-  single source of truth for sampleHeight).
-- **Est:** 10–14 builder-runs. 4–6 sessions.
+### M3 — TSL port (kill the shader hacks) [gate S1]
+- **S1 spike (retargeted):** port the TREE-SWAY material first — it is the
+  live InstancedMesh + custom-attribute case (18k instances), not the
+  dormant grass. GO criteria: pixel parity, fps within 10%, coexists with
+  legacy materials, AND a forced `material.needsUpdate` mid-session does not
+  produce a visible hitch (the bridge rebuilds instanced geometry buffers on
+  recompile — measure the frame-time spike).
+- **Port list (one PR each):** tree-sway → terrain splat → ocean swell →
+  cloud/storm materials → **atmosphere rim (raw ShaderMaterial — the site
+  the old exit-grep missed)** → aurora (ShaderMaterial) → grass-wind
+  (dormant, port or delete).
+- **Exit:** `grep -rE "onBeforeCompile|new THREE\.(Raw)?ShaderMaterial" src/`
+  → zero hits; visual parity via verify kit; fps within 10% of baseline.
+- **Fallback if S1 NO-GO:** documented A″ (stay WebGL2; flagships as
+  fragment-shader implementations; revisit bridge next three.js version).
+- **Est:** 1 spike + 6–7 builder-runs. 2 sessions.
 
-### M6 — Chunked LOD terrain
-- **Scope:** cube-sphere quadtree, GPU-displaced patches from the M5 bake,
-  crack-free stitching, streaming near camera; structures/flora unchanged
-  (they sample the same height API).
-- **Exit:** street-level coastline shows no polygonal silhouette at
-  minDistance; full-orbit fps unchanged; memory < 1.5GB.
-- **Risk:** biggest single engineering item in the program; if it slips, it
-  slips alone (nothing depends on it).
-- **Est:** 6–8 builder-runs. 2–3 sessions.
+### M4 — Renderer flip + post stack [gate S2]
+- **S2 spike:** WebGPURenderer boots the full TSL scene; fps parity check.
+- **Scope:** flip renderer; REBUILD postprocessing on the WebGPU node stack
+  (bloom via TSL `pass()`/`bloom()` — EffectComposer has no bridge); verify
+  the >1.0-color bloom-headroom trick against TSL bloom's threshold
+  semantics (sky sun/stars depend on it); AgX regrade; `?renderer=webgl`
+  escape hatch retained ONE milestone, scoped to MATERIALS ONLY (no dual
+  post-fx maintenance — WebGL mode runs without bloom).
+- **Exit:** WebGPU default; verify-kit sweep + bloom-parity screenshots;
+  fps ≥ baseline −10%; escape hatch renders (unbloomed) without errors.
+- **Est:** 1 spike + 4–5 builder-runs. 2 sessions.
 
-### M7 — Shell plumbing
-- **Scope:** SQLite session index + FSEvents watcher (instant cold start,
-  history analytics), packaged .app build (electron-builder, unsigned ok),
-  auto-launch dev server retired in packaged mode (static build + local
-  service), Dock launcher replaced by the packaged app.
-- **Exit:** cold start < 3s to first frame; packaged app runs with the dev
-  server off; scanner results identical to filesystem scan (test).
-- **Est:** 4–5 builder-runs. 2 sessions.
+### M5a — Atmospheric scattering
+- **Exit:** before/after approved by Omer; sunset limb + aerial perspective
+  visible at viewpoint 2; fps ≥55. **Est:** 2–3 runs.
+### M5b — FFT ocean + foam
+- **Exit:** approved before/after; shore foam on coasts; fps ≥55.
+  **Est:** 3–4 runs + 1 integration run.
+### M5c — Volumetric clouds + hurricane
+- **Scope:** raymarched volumetrics (quarter-res march + upsample, step
+  caps, blue-noise jitter), weather-map-driven; ambient coverage cut ~70%;
+  hurricane becomes a true rotating density feature. Fallback: keep 2.5D
+  shells, volumetric hurricane only.
+- **Exit:** approved before/after; fps ≥55 sustained at mid-zoom.
+  **Est:** 4–6 runs + 1 integration run.
 
-### M8 — Living world
-- **Scope:** airships & trade routes (medieval-steampunk traversal layer);
-  ruins (deleted projects) + migration caravans (renamed); seasons (real
-  calendar); volcano; resident dragon with lair + event appearances; whales/
-  fish/herds; birds scatter; ambient sound; poster export; auto-tour.
-- **Exit:** per-feature acceptance in its JIT plan; program complete.
-- **Est:** 10–12 builder-runs. 3–4 sessions.
+**══ PROGRAM COMPLETE at M5c exit. Everything below is epilogue, opt-in per session. ══**
+
+### E1 (was M5d) — GPU erosion + rivers [epilogue]
+- **Hard prerequisite task (from technical audit):** design the CPU-side
+  height sampler FIRST — bake → Float32Array grid + bilinear synchronous
+  `sampleHeight` replacement (same signature, allocation-free), because
+  world/storms/wind call it per-frame and placement loops call it 600×.
+  The bake FILE (committed per seed) is the source of truth — machines never
+  recompute independently (GPU compute is not bit-identical across GPUs).
+- **Exit:** rivers/valleys visible; determinism hash stable across reloads;
+  placement unchanged for unchanged seed+bake. **Est:** 4–5 runs.
+### E2 (was M6) — terrain close-up detail [epilogue; spike-first]
+- **S6 spike:** try cheap paths first (base-mesh density bump, min-zoom
+  clamp, detail normal-mapping) and MEASURE memory baseline. Full cube-
+  sphere quadtree LOD ONLY if the spike fails Omer's eye. Depends on E1 if
+  erosion landed (explicit edge: E2 → E1's sampler).
+- **Est:** spike 1 run; full LOD (if needed) 8–12 runs.
+### E3 (was M7a) — packaged .app (electron-builder, unsigned). **Est:** 2–3 runs.
+### E4 (was M8) — living world: ruins, migration caravans, seasons, volcano,
+  whales/fish/herds, bird scatter, ambient sound, poster export, auto-tour.
+  Per-feature JIT plans. **Est:** 8–10 runs.
+### E5 (was M7b) — SQLite index + FSEvents watcher. Parked indefinitely: it
+  reverses the no-database principle to fix a 4s poll nobody minds. Revisit
+  only if cold-start or history-analytics pain becomes real.
 
 ## 3. Dependency graph
 
 ```
-M0 ─→ M1 ─→ M2 ──────────────┐
-              │               ├─→ M8 (needs M2 assets; sound/tour anytime)
-              └─→ M3 ─→ M4 ─→ M5 ─→ M6
-                                └─→ M7 (independent of M5/M6; needs M4 only
-                                        for packaged perf sanity — can start
-                                        after M1 if sessions are spare)
+M0 ─→ M1 ─→ M2 ─→ M2.5 ─→ CHOICE-1 ─→ M3 ─→ M4 ─→ M5a → M5b → M5c ═ COMPLETE
+                                                            (b-path: M5a'/M5b'-lite before M3)
+Epilogue: E1(erosion) ─→ E2(LOD, needs E1's sampler if E1 landed)
+          E3(package), E4(living world) — independent, any time post-M2
+          E5 — parked
 ```
-Slack rule: M7 and parts of M8 are rainy-day work that can interleave when a
-gate blocks the critical path.
 
-## 4. Spike register (GO/NO-GO gates)
+## 4. Spike register
 
-| Spike | Question | GO criteria | Owner | When |
+| Spike | Question | GO criteria | When |
+|---|---|---|---|
+| S1 | TSL bridge on LIVE instanced custom-attr material (tree-sway)? | parity, fps −≤10%, coexists, no recompile hitch | M3 start |
+| S2 | WebGPURenderer full-scene parity? | fps ≥ baseline−10%, nothing missing | M4 start |
+| S4 | BatchedMesh @ 20k GLTF instances? | ≥55fps, ≤~30 civ draw calls | M2 start |
+| S5 | Medieval GLTF + steampunk bolt-ons look intentional? Kenney vs Quaternius clash? | Omer approves 1-house screenshot | M2 first hour |
+| S6 | Cheap terrain close-up fixes beat LOD? | Omer's eye at street level | E2 start |
+
+## 5. Risk register
+
+| # | Risk | L | I | Mitigation |
 |---|---|---|---|---|
-| S1 | TSL-on-WebGL bridge viable incl. instanced custom attrs? | parity screenshots, fps −≤10%, coexists w/ legacy | 1 builder | M3 start |
-| S2 | WebGPURenderer runs full scene at parity? | fps ≥ baseline−10%, no missing features | 1 builder | M4 start |
-| S3 | Packaged Electron + WebGPU + watcher sane? | packaged app 60fps, watcher events < 1s | 1 builder | M7 start |
-| S4 | BatchedMesh @ 20k GLTF instances? | ≥55fps, ≤ 30 draw calls for civ layer | 1 builder | M2 start |
+| 1 | TSL bridge fails on live instancing (S1) | M | H | fallback A″ documented; S1 tests the real case incl. recompile hitch |
+| 2 | Volumetric clouds miss 55fps | M | H | quarter-res+caps; fallback shells+volumetric-hurricane-only |
+| 3 | Erosion breaks height contract | M | H | E1's mandatory CPU-sampler task; bake file committed as source of truth |
+| 4 | Silent fallbacks ship broken visuals | H | M | warn-once rule + console read in verify sweep (M0) |
+| 5 | world.js collisions between builders | M | M | M2-entry split + architect-only file list |
+| 6 | Scope creep from brainstorms | H | M | new ideas → ROADMAP "later"; plan changes via PR only |
+| 7 | three.js drift under caret ranges | M | M | exact pin; deliberate bumps at milestone gates |
+| 8 | Post-fx double-maintenance via escape hatch | M | M | hatch = materials only; WebGL mode ships unbloomed |
+| 9 | Transcript format changes upstream | L | H | tolerant parsing + scanner tests on real files each session |
 
-## 5. Risk register (top items)
+## 6. Budget (builder-runs; architect integration ≈ builder time, not counted)
 
-| # | Risk | L | I | Mitigation / trigger |
-|---|---|---|---|---|
-| 1 | TSL bridge fails on instanced/custom-attr materials | M | H | S1 tests it explicitly; fallback A″ (WebGL2 fragment-shader flagships) documented |
-| 2 | Volumetric clouds can't hold 55fps | M | H | quarter-res march, step caps, blue-noise jitter; fallback: keep 2.5D shells + volumetric hurricane only |
-| 3 | Erosion bake breaks placement determinism | M | M | bake = single height source; placements re-derive; version the bake file with seed+algo hash |
-| 4 | Agent-written modules drift from contracts | M | M | contracts in prompts + integrator verification before merge (protocol §0) |
-| 5 | Electron/WebGPU regression on OS update | L | M | `?renderer=webgl` escape hatch retained through M5 |
-| 6 | Scope creep from feature brainstorms | H | M | new ideas go to ROADMAP "later" list, not into active milestone; plan changes via PR only |
-| 7 | Token spend balloons | M | L | sonnet-only builders; budget column tracked per milestone in PR description |
-| 8 | Session-transcript format changes upstream | L | H | scanner tests on real files each session; tolerant parsing already in place |
+M0: 1–2 · M1: 0 · M2: 7–9 · M2.5: 3–4 · M3: 7–8 · M4: 5–6 ·
+M5a: 2–3 · M5b: 4–5 · M5c: 5–7 → **program ≈ 34–44 runs, ~10–12 sessions.**
+Epilogue (all optional): E1 4–5 · E2 1–13 · E3 2–3 · E4 8–10 · E5 parked.
 
-## 6. Budget summary
+## 7. What the audit changed (v0.9 → v1.0)
 
-| Milestone | Builder-runs | Sessions |
-|---|---|---|
-| M0 | 0 (integration) | 1 |
-| M1 | 1 (spent) | short |
-| M2 | 6–8 | 2 |
-| M3 | 6–7 | 2 |
-| M4 | 3–4 | 1–2 |
-| M5 | 10–14 | 4–6 |
-| M6 | 6–8 | 2–3 |
-| M7 | 4–5 | 2 |
-| M8 | 10–12 | 3–4 |
-| **Total** | **~46–59 runs** | **~18–22 sessions** |
+1. Dragons+airships pulled from last place to M2.5 (scope audit, BLOCKING).
+2. Program-complete line drawn at M5c; E-items are opt-in epilogue (self-audit).
+3. CHOICE-1 added: clean path vs fast-joy detour, Omer decides (self-audit).
+4. E1 gained the mandatory CPU-sampler design + committed-bake determinism
+   (technical audit, BLOCKING).
+5. M3 port list gained atmosphere + aurora ShaderMaterials; exit grep widened
+   (technical audit, BLOCKING).
+6. S1 retargeted to live tree-sway instancing + recompile-hitch test
+   (technical audit, MAJOR).
+7. M4 rebudgeted; escape hatch scoped materials-only; bloom-headroom
+   re-verification added (technical audit, MAJOR).
+8. Verify kit + CI + geometry asserts + silent-fallback rule became M0
+   deliverables (process audit, BLOCKING×2; self-audit).
+9. world.js split + ui.css extraction + architect-only files policy
+   (process audit, MAJOR).
+10. SQLite/watcher demoted to parked E5; packaging split out (scope audit).
+11. LOD demoted to spike-first epilogue E2 with measured memory baseline
+    (scope audit, MAJOR; self-audit).
+12. Eclipse exit criterion changed from invented number to measured-and-
+    biased (self-audit — the moons' inclined orbits may near-never align).
+13. Budgets converted to honest ranges; fake grand total dropped; M5/M6
+    raised per observed hard-run costs (process audit, MAJOR).
+14. CONTRACTS.md idea replaced by targeted `// @ts-check` JSDoc on the five
+    height-contract files + invariants inlined here (process audit; prose
+    docs demonstrably rotted within hours today).
+15. ROADMAP.md marked superseded; JIT plans get committed per milestone
+    (process audit, BLOCKING).
+16. Standing rule recorded: no AI attribution in commits/PRs (user).
 
-## 7. Audit charter (what the adversarial audit must attack)
-
-1. Sequencing errors (anything that should be earlier/later; hidden deps).
-2. Technical claims (bridge, BatchedMesh, WebGPU perf, erosion approach).
-3. Exit criteria that aren't actually measurable or are too weak.
-4. Scope/YAGNI: what should be cut or demoted for a solo fun project.
-5. Budget realism vs. observed builder-run data.
-6. Process gaps: verification blind spots, agent-conflict risks, rollback.
+**Sign-off required from Omer before M0 execution begins.**

@@ -1,5 +1,10 @@
 # Roadmap
 
+> **SUPERSEDED** as of 2026-07-16 by
+> `docs/superpowers/plans/2026-07-16-claude-planet-program-plan.md` (v1.0).
+> This file is kept for the architecture rationale (Godot/Tauri rejection,
+> path analysis) — do not plan work from it.
+
 Solo fun project, high standards. Workflow: feature branch → draft PR → ready →
 self-merge (no review gate). Everything is built by sonnet subagents on
 disjoint modules against contracts pinned by the architect session, then
