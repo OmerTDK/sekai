@@ -285,6 +285,50 @@ export function createPlanet(seed) {
     roughness: 0.95,
     metalness: 0,
   })
+
+  // "HD" ground detail: per-PIXEL procedural grain (two octaves of GPU value
+  // noise in object space) modulating albedo. Per-pixel means it can never
+  // alias into triangle patterns like per-vertex variation did, and it fades
+  // with view distance so the planet stays pristine from space and doesn't
+  // shimmer when far away. Guarded: failed injection just means plain ground.
+  terrainMat.customProgramCacheKey = () => 'terrain-detail-v1'
+  terrainMat.onBeforeCompile = (shader) => {
+    try {
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vDetailPos;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvDetailPos = position;')
+      const frag = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          [
+            '#include <common>',
+            'varying vec3 vDetailPos;',
+            'float phash13(vec3 p){ p = fract(p*0.1031); p += dot(p, p.zyx+31.32); return fract((p.x+p.y)*p.z); }',
+            'float pvnoise(vec3 p){ vec3 i = floor(p); vec3 f = fract(p); f = f*f*(3.0-2.0*f);',
+            '  return mix(mix(mix(phash13(i), phash13(i+vec3(1,0,0)), f.x), mix(phash13(i+vec3(0,1,0)), phash13(i+vec3(1,1,0)), f.x), f.y),',
+            '             mix(mix(phash13(i+vec3(0,0,1)), phash13(i+vec3(1,0,1)), f.x), mix(phash13(i+vec3(0,1,1)), phash13(i+vec3(1,1,1)), f.x), f.y), f.z); }',
+          ].join('\n')
+        )
+        .replace(
+          '#include <color_fragment>',
+          [
+            '#include <color_fragment>',
+            '{',
+            '  float dNear = 1.0 - smoothstep(0.12, 0.85, length(vViewPosition));',
+            '  if (dNear > 0.001) {',
+            '    float g = pvnoise(vDetailPos * 750.0) * 0.62 + pvnoise(vDetailPos * 2900.0) * 0.38;',
+            '    diffuseColor.rgb *= 1.0 + (g - 0.5) * 0.14 * dNear;',
+            '  }',
+            '}',
+          ].join('\n')
+        )
+      if (frag === shader.fragmentShader) throw new Error('planet.js: detail injection point not found')
+      shader.fragmentShader = frag
+    } catch (err) {
+      /* plain ground fallback */
+    }
+  }
+
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat)
 
   // --- ocean mesh -----------------------------------------------------------
