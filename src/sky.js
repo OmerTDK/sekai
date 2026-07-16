@@ -352,41 +352,119 @@ function createSunSprite() {
 
 // ----------------------------------------------------------------- clouds --
 
-/** Samples seeded 3D fbm noise at the sphere DIRECTION for each texel (not
- * the flat u/v), so the equirectangular texture wraps seamlessly at the
- * +/-180 degree seam — no special-casing needed. */
-function makeCloudTexture(noise3, { width, height, scale, threshold, edge, octaves }) {
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-  const img = ctx.createImageData(width, height)
-  const data = img.data
+/** Two-stage Quilez-style domain warp for filaments/swirls, evaluated purely
+ * as a function of the sphere DIRECTION (so the equirect seam at +/-180
+ * stays invisible):
+ *   q = fbm(dir*s1), r = fbm(dir*s1 + q*k), final = fbm(dir*s2 + r*k2)
+ * Before any of that, the direction's latitude (y) component is stretched
+ * relative to x/z so structures elongate along parallels (trade-wind
+ * streaks). The final value is then biased by a couple of seeded cosine
+ * bands over latitude so density favors the equatorial belt and the
+ * mid-latitude storm tracks over the subtropical gaps between them. */
+function warpedCloudField(noise3, dir, lat, cfg) {
+  const sx = dir.x
+  const sy = dir.y * cfg.latStretch
+  const sz = dir.z
+
+  const q = fbm(
+    noise3,
+    sx * cfg.warpScale + 2.1,
+    sy * cfg.warpScale - 6.4,
+    sz * cfg.warpScale + 4.9,
+    cfg.warpOctaves, 2.05, 0.5
+  )
+  const r = fbm(
+    noise3,
+    sx * cfg.warpScale + q * cfg.warpStrength - 3.7,
+    sy * cfg.warpScale + q * cfg.warpStrength + 8.1,
+    sz * cfg.warpScale + q * cfg.warpStrength - 1.3,
+    cfg.warpOctaves, 2.05, 0.5
+  )
+  const n = fbm(
+    noise3,
+    sx * cfg.scale + r * cfg.warpStrength2,
+    sy * cfg.scale + r * cfg.warpStrength2,
+    sz * cfg.scale + r * cfg.warpStrength2,
+    cfg.octaves, 2.05, 0.5
+  )
+
+  // Equatorial belt + mirrored mid-latitude storm tracks with subtropical
+  // gaps in between: a broad equator-to-pole taper plus a 3x-frequency
+  // cosine that carves the subtropical dip / storm-track bump, seeded phase
+  // so the bands sit differently from planet to planet.
+  const latN = lat / (Math.PI / 2)
+  const band = 0.5 + cfg.bandAmp1 * Math.cos(latN * Math.PI) + cfg.bandAmp2 * Math.cos(latN * Math.PI * 3 + cfg.bandPhase)
+
+  return clamp(n * 0.5 + 0.5 + (band - cfg.bandBias) * cfg.bandStrength, 0, 1)
+}
+
+/** Mean soft-thresholded coverage of an already-sampled field — cheap (no
+ * noise calls), so calibrateThreshold can afford several passes over it. */
+function meanCoverage(field, threshold, edge) {
+  let sum = 0
+  for (let i = 0; i < field.length; i++) sum += smoothstep(threshold - edge, threshold + edge, field[i])
+  return sum / field.length
+}
+
+/** Bisects on the already-sampled field for the threshold whose mean
+ * coverage lands on `target`. Coverage is monotonically non-increasing in
+ * threshold, so plain bisection converges in a handful of steps; fully
+ * deterministic and silent, and cheap since it never re-touches the noise
+ * functions — those were already baked into `field` once. */
+function calibrateThreshold(field, edge, target) {
+  let lo = 0.02
+  let hi = 0.98
+  let mid = 0.5
+  for (let i = 0; i < 6; i++) {
+    mid = (lo + hi) / 2
+    if (meanCoverage(field, mid, edge) > target) lo = mid
+    else hi = mid
+  }
+  return mid
+}
+
+/** Builds one cloud layer's alpha texture on a 2048x1024 equirect canvas.
+ * Samples the warped/banded field (see warpedCloudField) once per texel at
+ * the sphere DIRECTION, auto-calibrates the coverage threshold against
+ * `cfg.targetCoverage` (see calibrateThreshold), then rasterizes. */
+function makeCloudTexture(noise3, cfg) {
+  const { width, height, edge, targetCoverage } = cfg
   const dir = new THREE.Vector3()
+  const field = new Float32Array(width * height)
 
   for (let y = 0; y < height; y++) {
     const v = y / (height - 1)
     const lat = (0.5 - v) * Math.PI
     const cosLat = Math.cos(lat)
     const sinLat = Math.sin(lat)
-    const rowOffset = y * width * 4
+    const rowOffset = y * width
     for (let x = 0; x < width; x++) {
       const u = x / (width - 1)
       const lon = (u - 0.5) * Math.PI * 2
       dir.set(cosLat * Math.cos(lon), sinLat, cosLat * Math.sin(lon))
-      const n = fbm(noise3, dir.x * scale, dir.y * scale, dir.z * scale, octaves, 2.05, 0.5)
-      const n01 = n * 0.5 + 0.5
-      const a = smoothstep(threshold - edge, threshold + edge, n01)
-      const idx = rowOffset + x * 4
-      // alphaMap samples the GREEN channel — write coverage into RGB and keep
-      // alpha opaque, otherwise canvas premultiplication turns the texture
-      // into a full-planet milky veil.
-      const g = Math.round(clamp(a, 0, 1) * 255)
-      data[idx] = g
-      data[idx + 1] = g
-      data[idx + 2] = g
-      data[idx + 3] = 255
+      field[rowOffset + x] = warpedCloudField(noise3, dir, lat, cfg)
     }
+  }
+
+  const threshold = calibrateThreshold(field, edge, targetCoverage)
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  const img = ctx.createImageData(width, height)
+  const data = img.data
+  for (let i = 0; i < field.length; i++) {
+    const a = smoothstep(threshold - edge, threshold + edge, field[i])
+    const idx = i * 4
+    // alphaMap samples the GREEN channel — write coverage into RGB and keep
+    // alpha opaque, otherwise canvas premultiplication turns the texture
+    // into a full-planet milky veil.
+    const g = Math.round(clamp(a, 0, 1) * 255)
+    data[idx] = g
+    data[idx + 1] = g
+    data[idx + 2] = g
+    data[idx + 3] = 255
   }
   ctx.putImageData(img, 0, 0)
 
@@ -404,10 +482,22 @@ function createClouds(seed) {
   const lowerTex = makeCloudTexture(lowerNoise, {
     width,
     height,
-    scale: 3.2,
-    threshold: 0.565,
-    edge: 0.09,
+    // Broken cumulus fields + frontal filaments: smaller cells, sharper
+    // edges, a moderate warp for cluster-boundary curl.
+    scale: 3.6,
+    warpScale: 1.3,
+    warpStrength: 0.6,
+    warpStrength2: 0.22,
+    warpOctaves: 2,
     octaves: 4,
+    latStretch: 2.6,
+    bandAmp1: 0.15,
+    bandAmp2: 0.35,
+    bandBias: 0.55,
+    bandStrength: 0.28,
+    bandPhase: rngFromString(seed + ':clouds-bands-lower')() * Math.PI * 2,
+    edge: 0.07,
+    targetCoverage: 0.27,
   })
   const lowerMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.055, 64, 32),
@@ -426,10 +516,23 @@ function createClouds(seed) {
   const upperTex = makeCloudTexture(upperNoise, {
     width,
     height,
-    scale: 4.6,
-    threshold: 0.62,
-    edge: 0.13,
-    octaves: 4,
+    // Thin elongated cirrus streaks: strong longitudinal stretch, very soft
+    // threshold, low density, and only a whisper of warp so the streaks
+    // stay long instead of curling into cumulus-like clumps.
+    scale: 4.0,
+    warpScale: 1.3,
+    warpStrength: 0.18,
+    warpStrength2: 0.08,
+    warpOctaves: 2,
+    octaves: 3,
+    latStretch: 4.0,
+    bandAmp1: 0.15,
+    bandAmp2: 0.35,
+    bandBias: 0.55,
+    bandStrength: 0.22,
+    bandPhase: rngFromString(seed + ':clouds-bands-upper')() * Math.PI * 2,
+    edge: 0.16,
+    targetCoverage: 0.13,
   })
   const upperMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.07, 64, 32),
