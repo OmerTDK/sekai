@@ -8,6 +8,10 @@ import { createPlanet } from './planet.js'
 import { createSky } from './sky.js'
 import { createWorld } from './world.js'
 import { createBirds } from './birds.js'
+import { createFlora } from './flora.js'
+import { createWind } from './wind.js'
+import { createStorms } from './storms.js'
+import { createUI } from './ui.js'
 import { clamp, fantasyName } from './util.js'
 
 const SEED = new URLSearchParams(location.search).get('seed') ?? 'aetherion-1'
@@ -34,6 +38,15 @@ scene.add(world.group)
 const birds = createBirds(SEED)
 scene.add(birds.group)
 
+const flora = createFlora(planet, camera, SEED)
+scene.add(flora.group)
+
+const wind = createWind(planet, camera, SEED)
+scene.add(wind.group)
+
+const storms = createStorms(planet, camera, SEED)
+scene.add(storms.group)
+
 // Cinematic pass: subtle bloom lifts the sun, atmosphere rim and emissives.
 const composer = new EffectComposer(renderer)
 composer.addPass(new RenderPass(scene, camera))
@@ -58,7 +71,9 @@ addEventListener('resize', () => {
 })
 
 // Dev handle for poking the live scene from the console.
-window.__planet = { scene, camera, planet, sky, world, birds, renderer, composer, controls }
+const ui = createUI(world)
+
+window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, ui, renderer, composer, controls }
 
 const clock = new THREE.Clock()
 let hudTimer = 0
@@ -75,6 +90,10 @@ renderer.setAnimationLoop(() => {
   sky.update(dt, camera)
   world.update(dt)
   birds.update(dt)
+  flora.update(dt)
+  wind.update(dt)
+  storms.update(dt)
+  ui.update(dt)
   controls.update()
 
   hudTimer -= dt

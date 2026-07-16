@@ -42,8 +42,8 @@ const TREE_MAX_SLOPE = 0.4
 const TREE_MAX_POLAR = 0.3
 
 const COLOR_TRUNK = 0x6b4a32
-const COLOR_CANOPY_DARK = 0x3f6b39
-const COLOR_CANOPY_LIGHT = 0x55884a
+const COLOR_CANOPY_DARK = 0x4a7f45
+const COLOR_CANOPY_LIGHT = 0x639855
 
 // -- rocks --
 const ROCK_CAPACITY = 6000
@@ -166,16 +166,21 @@ const PATCH_OFFSETS = buildPatchOffsets()
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
+// User verdict: individual grass blades read as visual noise on this planet's
+// scale — disabled, machinery kept in case a future pass revives them.
+const GRASS_ENABLED = false
+
 export function createFlora(planet, camera, seed) {
-  const grass = buildGrass(planet, camera, seed)
+  const grass = GRASS_ENABLED ? buildGrass(planet, camera, seed) : null
   const trees = buildTrees(planet, camera, seed)
   const rocks = buildRocks(planet, camera, seed)
 
   const group = new THREE.Group()
-  group.add(grass.mesh, trees.mesh, rocks.mesh)
+  if (grass) group.add(grass.mesh)
+  group.add(trees.mesh, rocks.mesh)
 
   function update(dt) {
-    grass.update(dt)
+    if (grass) grass.update(dt)
     trees.update(dt)
     rocks.update(dt)
   }
@@ -415,7 +420,10 @@ function buildTreeGeometry() {
   paintFlatColor(canopyHighGeo, COLOR_CANOPY_LIGHT)
 
   const unitHeight = highY + highR
-  const merged = mergeGeometries([trunkGeo, canopyLowGeo, canopyHighGeo], false) || trunkGeo
+  // CylinderGeometry is indexed, IcosahedronGeometry is not — mergeGeometries
+  // refuses mixed indexing and returns null (which silently shipped
+  // canopy-less stump trees). Un-index the trunk first.
+  const merged = mergeGeometries([trunkGeo.toNonIndexed(), canopyLowGeo, canopyHighGeo], false) || trunkGeo
   return { geo: merged, unitHeight }
 }
 

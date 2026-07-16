@@ -3,6 +3,7 @@
 // shell. Everything is derived from `seed` so the same seed always yields the
 // same planet.
 import * as THREE from 'three'
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
 import { SEA_LEVEL, makeNoise3D, fbm, ridged, clamp, smoothstep } from './util.js'
 
 // ---------------------------------------------------------------------------
@@ -28,7 +29,7 @@ const BELT_BAND_WIDTH = 0.32
 // Height contribution budget (relative to SEA_LEVEL = 1.0).
 const LAND_RISE = 0.012 // base lowland elevation
 const MOUNTAIN_RISE = 0.03 // additional peak elevation on top of land
-const DETAIL_AMP = 0.0035 // rolling small-scale bumps
+const DETAIL_AMP = 0.0025 // rolling small-scale bumps
 const OCEAN_BASE_DEPTH = 0.016 // base basin depth below sea level
 const OCEAN_FLOOR_AMP = 0.008 // gentle ocean floor variation
 
@@ -52,7 +53,7 @@ const SNOW_STEEP_HI = 1.3
 // Concavity p90~0.002, tail out to ~0.02-0.03 at sharp valleys/ridges.
 const AO_CONCAVITY_LO = 0.0006
 const AO_CONCAVITY_HI = 0.004
-const AO_MIN_MUL = 0.93 // subtle: strong per-vertex AO reads as triangular blotches on smooth shading
+const AO_MIN_MUL = 0.97 // near-off: per-vertex AO reads as triangular blotches on smooth shading
 
 // ---------------------------------------------------------------------------
 // Palette
@@ -114,7 +115,7 @@ export function createPlanet(seed) {
     const ridge = ridged(nMountain, x * MOUNTAIN_SCALE, y * MOUNTAIN_SCALE, z * MOUNTAIN_SCALE, 4, 2.1, 0.55)
     const mountains = ridge * belt * continent // chains, masked to land
 
-    const detail = fbm(nDetail, x * DETAIL_SCALE, y * DETAIL_SCALE, z * DETAIL_SCALE, 4, 2.0, 0.5)
+    const detail = fbm(nDetail, x * DETAIL_SCALE, y * DETAIL_SCALE, z * DETAIL_SCALE, 3, 2.0, 0.5)
     const floor = fbm(nOceanFloor, x * OCEAN_FLOOR_SCALE, y * OCEAN_FLOOR_SCALE, z * OCEAN_FLOOR_SCALE, 4, 2.0, 0.5)
 
     let h = SEA_LEVEL
@@ -141,7 +142,7 @@ export function createPlanet(seed) {
     const h = sampleHeight(dir)
     out.h = h
     out.landT = clamp((h - SEA_LEVEL) / LAND_COLOR_RANGE, 0, 1)
-    out.moisture = fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 4, 2.0, 0.5) * 0.5 + 0.5
+    out.moisture = fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 2, 2.0, 0.5) * 0.5 + 0.5
     const { slope } = estimateSlopeAndConcavity(x, y, z, h)
     out.slope = clamp(slope / ROCK_SLOPE_HI, 0, 1)
     const capNoiseVal = fbm(nCap, x * CAP_SCALE, y * CAP_SCALE, z * CAP_SCALE, 3, 2.0, 0.5)
@@ -199,7 +200,9 @@ export function createPlanet(seed) {
       out.copy(cShallow).lerp(cDeep, smoothstep(0, 1, depthT))
     } else {
       const landT = clamp((h - SEA_LEVEL) / LAND_COLOR_RANGE, 0, 1)
-      const moisture = fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 4, 2.0, 0.5) * 0.5 + 0.5
+      // 2 octaves only: high-frequency moisture flips forest/grass per vertex,
+      // which reads as triangle mosaic. Low-freq -> large coherent forests.
+      const moisture = fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 2, 2.0, 0.5) * 0.5 + 0.5
 
       // Rock wins from elevation OR from being a steep face -- cliffs and
       // mountainsides read as rock regardless of altitude band, which is
@@ -235,19 +238,22 @@ export function createPlanet(seed) {
     const aoT = smoothstep(AO_CONCAVITY_LO, AO_CONCAVITY_HI, concavity)
     const aoMul = 1 - aoT * (1 - AO_MIN_MUL)
 
-    // Hand-painted per-vertex value jitter, combined with AO. Kept subtle:
-    // smooth shading shows speckle much more than flat facets did.
-    const shade = (1 + jitter * 0.012) * aoMul
+    // Value jitter killed: any per-vertex brightness variation reads as
+    // triangle mosaic under smooth shading. Clean fields win.
+    const shade = aoMul
     out.r = clamp(out.r * shade, 0, 1)
     out.g = clamp(out.g * shade, 0, 1)
     out.b = clamp(out.b * shade, 0, 1)
   }
 
   // --- terrain mesh ---------------------------------------------------------
-  // detail=128 -> ~327k tris, ~164k verts; smooth-shaded with per-vertex
-  // biome colors. Smooth normals + tight biome bands read as clean painted
-  // fields with crisp borders — no visible triangulation up close.
-  const terrainGeo = new THREE.IcosahedronGeometry(1, 128)
+  // detail=128 -> ~327k tris. IcosahedronGeometry is NON-indexed (every
+  // triangle owns its 3 vertices), so computeVertexNormals would produce
+  // per-face normals and the planet renders faceted no matter what the
+  // material says — weld the vertices first, THEN displace and shade.
+  const rawGeo = new THREE.IcosahedronGeometry(1, 128)
+  const terrainGeo = mergeVertices(rawGeo)
+  rawGeo.dispose()
   const posAttr = terrainGeo.attributes.position
   const vertexCount = posAttr.count
   const colorArray = new Float32Array(vertexCount * 3)
