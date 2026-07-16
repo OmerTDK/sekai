@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Claude Planet</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #04060c;
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+      }
+      canvas {
+        display: block;
+      }
+      .hud {
+        position: fixed;
+        pointer-events: none;
+        color: #cfd8e3;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+      }
+      #title {
+        top: 18px;
+        left: 20px;
+        font-size: 15px;
+        letter-spacing: 0.08em;
+      }
+      #title .planet-name {
+        font-size: 22px;
+        color: #eaf2ff;
+        display: block;
+        margin-bottom: 2px;
+      }
+      #stats {
+        top: 76px;
+        left: 20px;
+        font-size: 12px;
+        line-height: 1.7;
+        color: #9fb2c8;
+        white-space: pre-line;
+      }
+      #hint {
+        bottom: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 11px;
+        color: #6d7f95;
+        letter-spacing: 0.05em;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="title" class="hud"><span class="planet-name"></span><span class="sub">a world built by your sessions</span></div>
+    <div id="stats" class="hud"></div>
+    <div id="hint" class="hud">drag to rotate &nbsp;·&nbsp; scroll to zoom &nbsp;·&nbsp; click a settlement to visit</div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

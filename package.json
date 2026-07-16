@@ -1,0 +1,19 @@
+{
+  "name": "claude-planet",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "vite --open",
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node server/scan.test.js"
+  },
+  "dependencies": {
+    "simplex-noise": "^4.0.3",
+    "three": "^0.185.0"
+  },
+  "devDependencies": {
+    "vite": "^8.1.0"
+  }
+}
