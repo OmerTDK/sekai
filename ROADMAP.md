@@ -53,6 +53,13 @@ heavy scenes, and Tauri's own docs document webview GPU sharp edges) —
 - [ ] Building inspector (click → session card) with **Resume session** (Terminal + `claude --resume`)
 - [ ] Cmd-K palette, photo mode
 
+## Phase 0.5 — minimal Electron shell (moved up: user call, and a correct one)
+- [ ] Electron window wrapping the dev server (spawns it if not running),
+      `backgroundThrottling: false` — the planet never pauses again
+- [ ] Dock presence + menu basics; `npm run app` one-command launch
+- [ ] Keep browser path + `planet` alias working (dev/verification loop unchanged)
+- [ ] Heavy shell plumbing (SQLite, FSEvents, packaging) stays in Phase 4
+
 ## Phase 1 — the beauty batch
 - [ ] CC0 asset-pack settlements + trees (Kenney/Quaternius), per-race palettes [gate S4]
 - [ ] Commit fireworks, PR monuments, error thunderclouds (git/gh data)
