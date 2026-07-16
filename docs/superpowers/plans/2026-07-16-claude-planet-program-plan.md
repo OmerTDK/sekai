@@ -148,13 +148,11 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
   fps ≥55.
 - **Est:** 3–4 builder-runs. 1 session.
 
-### CHOICE-1 (Omer decides after M2.5)
-- **(a) Clean path (architect recommendation):** M3 → M4 → M5a-c. Flagships
-  built once, on the final engine. Cost: ~2 sessions of low-visible-delta
-  migration before the next visual payoff.
-- **(b) Fast-joy detour:** WebGL2 fragment-shader scattering + ocean upgrade
-  FIRST (~2 runs, immediate visuals), migration afterwards, accepting ~2–3
-  runs of flagship rework in TSL later.
+### CHOICE-1 — RESOLVED: (a) clean path (Omer, 2026-07-16, decided early)
+- Sequence stands as written: M2 → M2.5 → M3 (TSL port) → M4 (renderer flip)
+  → M5a-c, each flagship built exactly once on the final engine.
+- The fast-joy detour (b) is rejected; do not build WebGL2 throwaway
+  versions of scattering/ocean.
 
 ### M3 — TSL port (kill the shader hacks) [gate S1]
 - **S1 spike (retargeted):** port the TREE-SWAY material first — it is the
