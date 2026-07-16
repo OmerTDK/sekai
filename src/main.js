@@ -1,5 +1,9 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { createPlanet } from './planet.js'
 import { createSky } from './sky.js'
 import { createWorld } from './world.js'
@@ -30,6 +34,12 @@ scene.add(world.group)
 const birds = createBirds(SEED)
 scene.add(birds.group)
 
+// Cinematic pass: subtle bloom lifts the sun, atmosphere rim and emissives.
+const composer = new EffectComposer(renderer)
+composer.addPass(new RenderPass(scene, camera))
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.3, 0.7, 1.0))
+composer.addPass(new OutputPass())
+
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = true
 controls.dampingFactor = 0.07
@@ -44,7 +54,11 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight
   camera.updateProjectionMatrix()
   renderer.setSize(innerWidth, innerHeight)
+  composer.setSize(innerWidth, innerHeight)
 })
+
+// Dev handle for poking the live scene from the console.
+window.__planet = { scene, camera, planet, sky, world, birds, renderer, composer, controls }
 
 const clock = new THREE.Clock()
 let hudTimer = 0
@@ -70,5 +84,5 @@ renderer.setAnimationLoop(() => {
     statsEl.textContent = `${s.settlements} settlements · ${s.structures} structures\n${s.agents} agent${s.agents === 1 ? '' : 's'} at work`
   }
 
-  renderer.render(scene, camera)
+  composer.render()
 })

@@ -69,7 +69,7 @@ const OCEAN_COLOR = 0x2d6f9e
 const OCEAN_EMISSIVE = 0x123a5e
 // Multiplicative vertex-color tint (on top of OCEAN_COLOR) brightening +
 // cooling shallow water for a sun-glint read; neutral (1,1,1) at depth.
-const OCEAN_SHALLOW_MUL = [1.15, 1.38, 1.32]
+const OCEAN_SHALLOW_MUL = [1.06, 1.16, 1.14]
 const OCEAN_DEEP_MUL = [1, 1, 1]
 
 export function createPlanet(seed) {
@@ -201,9 +201,9 @@ export function createPlanet(seed) {
       // faces -- snow doesn't cling to cliffs, it exposes rock instead.
       const peakT = smoothstep(0.72, 0.93, landT)
       const capNoiseVal = fbm(nCap, x * CAP_SCALE, y * CAP_SCALE, z * CAP_SCALE, 3, 2.0, 0.5)
-      const capThreshold = 0.7 + capNoiseVal * 0.14
+      const capThreshold = 0.86 + capNoiseVal * 0.07 // caps stay poleward of ~57-68 deg
       const lat = Math.abs(y)
-      const polarT = smoothstep(capThreshold - 0.05, capThreshold + 0.05, lat)
+      const polarT = smoothstep(capThreshold - 0.04, capThreshold + 0.04, lat)
       const steepDamp = 1 - smoothstep(SNOW_STEEP_LO, SNOW_STEEP_HI, slope) * 0.6
       const snowW = clamp(Math.max(peakT, polarT) + jitter * 0.05, 0, 1) * steepDamp
       out.lerp(cSnow, snowW)
@@ -287,7 +287,7 @@ export function createPlanet(seed) {
     vertexColors: true,
     transparent: true,
     opacity: 0.86,
-    roughness: 0.18,
+    roughness: 0.42, // low enough for a glint, high enough not to blow out a hemisphere
     metalness: 0.02,
     emissive: OCEAN_EMISSIVE,
     emissiveIntensity: 0.25,

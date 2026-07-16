@@ -4,6 +4,8 @@
 import * as THREE from 'three'
 import { makeNoise3D, fbm, rngFromString, clamp, lerp, smoothstep } from './util.js'
 
+const Y_AXIS = new THREE.Vector3(0, 1, 0)
+
 // Other modules assume this exact sun direction — do not change.
 const SUN_DIR = new THREE.Vector3(1, 0.45, 0.9).normalize()
 
@@ -13,7 +15,8 @@ export function createSky(seed) {
   group.add(createStarfield(seed))
   group.add(createNebulae(seed))
   group.add(createAtmosphere())
-  group.add(createSunSprite())
+  const sunSprite = createSunSprite()
+  group.add(sunSprite)
 
   const clouds = createClouds(seed)
   group.add(clouds.lowerMesh, clouds.upperMesh)
@@ -24,10 +27,27 @@ export function createSky(seed) {
   const moons = createMoons(seed)
   for (const moon of moons) group.add(moon.pivot)
 
+  // Day/night cycle: the sun sweeps a full orbit every ~10 minutes so every
+  // settlement gets its dawn (with a fixed sun, half the world would live in
+  // eternal night).
+  const SUN_ORBIT_RATE = (Math.PI * 2) / 600
+
   function update(dt /* sec */, camera /* THREE.PerspectiveCamera */) {
     clouds.lowerMesh.rotateOnWorldAxis(clouds.lowerAxis, clouds.lowerRate * dt)
     clouds.upperMesh.rotateOnWorldAxis(clouds.upperAxis, clouds.upperRate * dt)
     for (const moon of moons) moon.pivot.rotateY(moon.rate * dt)
+
+    const sunAngle = SUN_ORBIT_RATE * dt
+    lights.sun.position.applyAxisAngle(Y_AXIS, sunAngle)
+    sunSprite.position.applyAxisAngle(Y_AXIS, sunAngle)
+
+    // Fade the cloud deck away as the camera dives toward the surface, so
+    // close-up views of settlements aren't fogged out. Full deck from 2.4R
+    // out, thin wisps by 1.35R.
+    const dist = camera.position.length()
+    const fade = smoothstep(1.35, 2.4, dist)
+    clouds.lowerMesh.material.opacity = 0.88 * Math.max(fade, 0.08)
+    clouds.upperMesh.material.opacity = 0.5 * Math.max(fade, 0.05)
   }
 
   return { group, update }
@@ -358,10 +378,14 @@ function makeCloudTexture(noise3, { width, height, scale, threshold, edge, octav
       const n01 = n * 0.5 + 0.5
       const a = smoothstep(threshold - edge, threshold + edge, n01)
       const idx = rowOffset + x * 4
-      data[idx] = 255
-      data[idx + 1] = 255
-      data[idx + 2] = 255
-      data[idx + 3] = Math.round(clamp(a, 0, 1) * 255)
+      // alphaMap samples the GREEN channel — write coverage into RGB and keep
+      // alpha opaque, otherwise canvas premultiplication turns the texture
+      // into a full-planet milky veil.
+      const g = Math.round(clamp(a, 0, 1) * 255)
+      data[idx] = g
+      data[idx + 1] = g
+      data[idx + 2] = g
+      data[idx + 3] = 255
     }
   }
   ctx.putImageData(img, 0, 0)
@@ -380,8 +404,8 @@ function createClouds(seed) {
   const lowerTex = makeCloudTexture(lowerNoise, {
     width,
     height,
-    scale: 2.1,
-    threshold: 0.52,
+    scale: 3.2,
+    threshold: 0.565,
     edge: 0.09,
     octaves: 4,
   })
@@ -394,7 +418,7 @@ function createClouds(seed) {
       depthWrite: false,
       roughness: 1,
       metalness: 0,
-      opacity: 0.95,
+      opacity: 0.88,
     })
   )
 
@@ -402,8 +426,8 @@ function createClouds(seed) {
   const upperTex = makeCloudTexture(upperNoise, {
     width,
     height,
-    scale: 3.4,
-    threshold: 0.58,
+    scale: 4.6,
+    threshold: 0.62,
     edge: 0.13,
     octaves: 4,
   })
@@ -440,12 +464,12 @@ function createClouds(seed) {
 // ------------------------------------------------------------------ lights --
 
 function createLights() {
-  const sun = new THREE.DirectionalLight(new THREE.Color('#fff2d8'), 2.6)
+  const sun = new THREE.DirectionalLight(new THREE.Color('#fff2d8'), 2.3)
   sun.position.copy(SUN_DIR).multiplyScalar(10)
   const target = new THREE.Object3D() // stays at the origin: the planet
   sun.target = target
 
-  const hemi = new THREE.HemisphereLight(new THREE.Color('#9db8ff'), new THREE.Color('#2a2119'), 0.5)
+  const hemi = new THREE.HemisphereLight(new THREE.Color('#9db8ff'), new THREE.Color('#3a3128'), 0.62)
 
   return { sun, hemi, target }
 }

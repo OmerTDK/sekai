@@ -48,6 +48,7 @@ function realUserTopic(message) {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
   if (!trimmed || trimmed.startsWith('<') || trimmed.startsWith('Caveat:')) return null;
+  if (trimmed.startsWith('Base directory for')) return null; // skill-invocation preamble
   return formatTopic(trimmed);
 }
 

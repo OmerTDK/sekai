@@ -37,12 +37,12 @@ const FOOT_LIFT = PERSON_HEIGHT * 0.05
 const CLICK_MOVE_THRESHOLD = 6 // px
 const TWEEN_DURATION = 1.1 // seconds
 
-const SETTLEMENT_LABEL_K = 0.014
-const SETTLEMENT_LABEL_MIN = 0.028
-const SETTLEMENT_LABEL_MAX = 0.11
-const TOPIC_LABEL_K = 0.014
-const TOPIC_LABEL_MIN = 0.018
-const TOPIC_LABEL_MAX = 0.045
+const SETTLEMENT_LABEL_K = 0.022
+const SETTLEMENT_LABEL_MIN = 0.006
+const SETTLEMENT_LABEL_MAX = 0.085
+const TOPIC_LABEL_K = 0.02
+const TOPIC_LABEL_MIN = 0.0045
+const TOPIC_LABEL_MAX = 0.028
 const TOPIC_LABEL_REF_DIST = 1.15 // representative "up close" distance used to size topic labels once
 
 // ---------------------------------------------------------------------------
@@ -983,9 +983,11 @@ export function createWorld(planet, camera, domElement) {
       poll()
     }
 
-    const camDist = camera.position.length()
     for (const settlement of settlements.values()) {
-      applyLabelScale(settlement.labelSprite, camDist, SETTLEMENT_LABEL_K, SETTLEMENT_LABEL_MIN, SETTLEMENT_LABEL_MAX)
+      // scale by distance to the label itself, so close-ups get signposts,
+      // not billboards
+      const d = settlement.labelSprite.position.distanceTo(camera.position)
+      applyLabelScale(settlement.labelSprite, d, SETTLEMENT_LABEL_K, SETTLEMENT_LABEL_MIN, SETTLEMENT_LABEL_MAX)
     }
 
     for (const st of constructingSet) {
@@ -1006,8 +1008,18 @@ export function createWorld(planet, camera, domElement) {
     labelThrottle -= dt
     if (labelThrottle <= 0) {
       labelThrottle = LABEL_THROTTLE
+      // Only the nearest few topics get a label — a 100-building city would
+      // otherwise be a wall of text.
+      const inRange = []
       for (const st of structures.values()) {
-        st.topicSprite.visible = st.structureRoot.position.distanceTo(camera.position) < TOPIC_VISIBLE_DIST
+        const d = st.structureRoot.position.distanceTo(camera.position)
+        st.topicSprite.visible = false
+        if (d < TOPIC_VISIBLE_DIST) inRange.push({ st, d })
+      }
+      inRange.sort((a, b) => a.d - b.d)
+      for (const { st, d } of inRange.slice(0, 12)) {
+        st.topicSprite.visible = true
+        applyLabelScale(st.topicSprite, d, TOPIC_LABEL_K, TOPIC_LABEL_MIN, TOPIC_LABEL_MAX)
       }
     }
 
@@ -1032,5 +1044,5 @@ export function createWorld(planet, camera, domElement) {
     stats.agents = agents.size
   }
 
-  return { group, update, stats }
+  return { group, update, stats, _tween: tween }
 }
