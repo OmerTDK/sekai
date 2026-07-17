@@ -210,6 +210,22 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
      vignette-tune) sequenced AFTER the M-LD wave ships, one variable at a
      time. Motion blur = anti-rule. Outline/ink stylization = owner
      question, default SKIP. Fog stopgap killed (CHOICE-1 conflict).
+  6. Industry-technique research (2026-07-17, user ask) — adopted into slots:
+     **flow maps** (three's own Water2, coastal currents → M5b-or-sooner);
+     **stochastic hex-tiling** (kills splat repetition → rides M3 splat
+     port); **dithered LOD crossfade** (bayer16 ships in TSL → any LOD
+     fade, post-M4); **curl-noise particles** (TSL primitive → post-M4
+     plume upgrade); **Poisson-disk scattering** (CPU, anytime → flora/
+     placement quality); **clustered many-light night windows** (real
+     per-window lights → M4+ flagship-adjacent); **dragon neck/tail CCD IK**
+     (M2.5 polish); **snow/moss top-down coverage on props** + **vertex-AO
+     bake** (ride the crispness pass); **space-colonization rivers/roads**
+     (E1). Rejected with reasons: interior mapping (cottages have 1-2
+     windows — weak fit, tier-3 only maybe), WFC town layout (CONFLICTS
+     with sessions-ARE-placement invariant; paths only), billboard cloud
+     imposters (superseded by octahedral), parallax-corrected cubemaps
+     (single-probe world), crepuscular billboards (god-rays double-build).
+     Octahedral impostors + VAT crowds parked as scale insurance (E2/late).
 - **Exit:** ART.md approved + committed; one verdict recorded per packet;
   M3/M5 JIT plans MUST cite ART.md as binding art direction.
 - **Follow-on — the "surface crispness pass" (user asks 2026-07-17: blurry
