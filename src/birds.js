@@ -24,7 +24,9 @@ export function createBirds(seed) {
       start,
       angle: rng() * Math.PI * 2,
       speed: 0.012 + rng() * 0.01,
-      altitude: 1.058 + rng() * 0.014,
+      // Flight band ~1.065-1.073 (+ sine wobble below): above HEIGHT_MAX
+      // 1.06 peaks, below the 1.075 lower cloud shell.
+      altitude: 1.065 + rng() * 0.008,
       phase: rng() * Math.PI * 2,
       birds: [],
     }
