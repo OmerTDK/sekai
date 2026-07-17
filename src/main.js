@@ -31,15 +31,18 @@ import { clamp, fantasyName } from './util.js'
 
 const SEED = new URLSearchParams(location.search).get('seed') ?? 'aetherion-1'
 
-// M3: WebGPURenderer on the forceWebGL host (WebGL2 backend today; the M4
-// flip is deleting forceWebGL). Init is async — everything downstream that
-// touches the renderer (asset PMREM capture, first render) waits on it.
-const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: true })
+// M4: run on the real WebGPU backend by default; init() negotiates it and
+// auto-falls-back to WebGL2 when WebGPU is unavailable. `?renderer=webgl`
+// forces the WebGL2 fallback (support/parity escape hatch, kept one milestone).
+// Every shader is TSL and post is node PostProcessing, so no scene code changes.
+const forceWebGL = new URLSearchParams(location.search).get('renderer') === 'webgl'
+const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL })
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.setSize(innerWidth, innerHeight)
 renderer.toneMapping = THREE.ACESFilmicToneMapping
 document.body.appendChild(renderer.domElement)
 await renderer.init()
+console.log(`[sekai] renderer backend: ${renderer.backend?.isWebGPUBackend ? 'WebGPU' : 'WebGL2'}`)
 
 const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.005, 300)
