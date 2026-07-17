@@ -493,3 +493,65 @@ Epilogue (all optional): E1 4–5 · E2 1–13 · E3 2–3 · E4 8–10 · E5 pa
 16. Standing rule recorded: no AI attribution in commits/PRs (user).
 
 **Sign-off required from Omer before M0 execution begins.**
+
+---
+
+## Delight, UX & deep-simulation backlog (added 2026-07-17, live brainstorm with Omer)
+
+Captured mid-M3 so nothing evaporates. Sequenced AFTER the migration frees the
+modules, except the pure-UI items which ship independently off `main`.
+
+### UX / controls (wave `ui-controls`, ships off main — no renderer dependency)
+- [ ] Zoom in/out buttons, bottom-right (dispatch wheel events to OrbitControls).
+- [ ] Make the sidebar hide/unhide toggle obvious (the `‹` exists but is too subtle).
+- [ ] **Feature-toggle panel** — live show/hide of birds, flora, hurricane
+      (storms), sea life, weather, sea ice, trails, dragon, airships via
+      `.group.visible` on the exposed `__planet` handles (no module changes).
+
+### God-controls / spectacle wave (post-migration; needs module trigger methods)
+- [ ] **Meteor strike on click** — streak + impact flash + crater that heals
+      (covenant). Stretch: a real force-push / reverted commit auto-summons one.
+- [ ] Summon-weather: conjure a hurricane, call an aurora, trigger an eclipse,
+      drag the sun to set time-of-day. (Modules exist; expose triggers post-port.)
+- [ ] Clouds on/off (needs a sky.js sub-group setter — deferred past the sky port).
+
+### "Soul" features — make Aemunis reflect real work (the app's whole point)
+- [ ] **The Aemunis Herald** — a fantasy news ticker narrating REAL git/session
+      activity as chronicle ("Clooverforge raised 12 halls overnight"; "a merge
+      bridged Omertdkdeep and Dataplatformstead").
+- [ ] **Living construction + session health** — active session = building under
+      construction (scaffolds/cranes/sparks); errored session = smoke/scorch;
+      big clean session = banners. The world becomes a work dashboard.
+- [ ] **Roads & bridges** — co-edited projects grow roads between settlements; a
+      PR merge builds a bridge; a monorepo becomes a megacity.
+- [ ] Soundscape (wind/ocean/forge swelling near activity); ride-along camera
+      (follow dragon/airship; walk a worker first-person-ish).
+
+### Deep world-simulation ladder (extends E-SIM; covenant-bound, data-driven)
+Everything deterministic from session/git history + a seeded sim clock;
+simulation is ADDITIVE and always heals — never destroys session structures.
+- **Economy layer:** settlement prosperity from recent session activity; trade
+  caravans/airships between frequently-co-edited projects; "industry" from
+  tokens spent, "materials" from lines changed, "fortifications" from test
+  coverage. Dormant projects overgrow into (weathered, intact) ruins that
+  revive when you return.
+- **Population/demographics:** population = cumulative session count; cities grow
+  a historic old-town (early sessions) + new suburbs (recent); citizen roles by
+  work type (tests→inspectors, refactor→masons, feature→builders, bugfix→
+  firefighters); work moving between projects = visible migration caravans.
+- **Politics/diplomacy (deepens E-SIM raids):** factions = project clusters
+  (Cloover kingdom vs tmp/experiment wildlands); merges = treaties/bridges,
+  reverts = broken pacts, long branches = breakaway colonies; territory shading
+  shifts with activity; merge conflicts = border skirmishes; big rebase =
+  invasion; resolution = peace.
+- **Data-driven live events:** CI failure = fire/plague until fixed; feature
+  merge = festival + new landmark; security fix = walls raised; late-night real
+  work = lanterns burning late; commit streak = flourishing, long absence =
+  quiet.
+- **Emergent/ambitious ceiling:** agent needs + day/night schedules (work by day,
+  taverns by night); light wildlife food-web (herds/predators/seasonal
+  migration); a true tick-based sim that evolves between visits but stays
+  deterministically replayable from the data — "fast-forward the civilization."
+- Recommended first cut once appetite allows: **Herald + living-construction/
+  health + prosperity/ruins** (highest soul-per-effort), THEN the E-SIM rung-1
+  skirmish theater for spectacle.
