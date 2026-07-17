@@ -248,6 +248,9 @@ export function createVerifyKit(handles) {
   // touch controls.target (see requirement below), so there is nothing to
   // read or write on it here.
   const { scene, camera, composer, renderer, planet, sky, world, birds, flora, wind, storms } = handles
+  // M-WX modules — optional so an older embed of the kit still works; each is
+  // pumped in seekTime only if present, matching the real render loop.
+  const { seaIce, weather, seaLife, trails, floods } = handles
 
   // Headless sim fast-forward: fixed dt=1/30 steps, exactly main.js's update
   // order (minus ui.update/controls.update -- neither is part of this kit's
@@ -266,11 +269,16 @@ export function createVerifyKit(handles) {
       planet.update(SEEK_DT)
       sky.update(SEEK_DT, camera)
       world.update(SEEK_DT)
-      birds.update(SEEK_DT)
+      birds.update(SEEK_DT, camera)
       flora.update(SEEK_DT)
       wind.update(SEEK_DT)
       storms.update(SEEK_DT, sky.getSunDir(_sunDirScratch))
       sky.setStormClearing(_stormDirScratch, storms.getPrimary(_stormDirScratch))
+      if (floods) floods.update(SEEK_DT)
+      if (seaIce) seaIce.update(SEEK_DT)
+      if (weather) weather.update(SEEK_DT, camera)
+      if (seaLife) seaLife.update(SEEK_DT, camera)
+      if (trails) trails.update(SEEK_DT)
     }
     composer.render()
     composer.render()

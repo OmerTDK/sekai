@@ -171,6 +171,11 @@ window.__planet.verify = createVerifyKit({
   flora,
   wind,
   storms,
+  floods,
+  seaIce,
+  weather,
+  seaLife,
+  trails,
 })
 
 const clock = new THREE.Clock()
