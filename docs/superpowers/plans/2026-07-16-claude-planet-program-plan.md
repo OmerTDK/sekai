@@ -237,10 +237,17 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
 - **Exit:** rivers/valleys visible; determinism hash stable across reloads;
   placement unchanged for unchanged seed+bake. **Est:** 4–5 runs.
 ### E2 (was M6) — terrain close-up detail [epilogue; spike-first]
-- **S6 spike:** try cheap paths first (base-mesh density bump, min-zoom
-  clamp, detail normal-mapping) and MEASURE memory baseline. Full cube-
-  sphere quadtree LOD ONLY if the spike fails Omer's eye. Depends on E1 if
-  erosion landed (explicit edge: E2 → E1's sampler).
+- **S6 spike:** try cheap paths first, in this order (user ask 2026-07-17:
+  "tessellation or the technique that imitates it" = parallax occlusion
+  mapping): (1) detail normal maps from the ambientCG height/normal sets we
+  already source, (2) parallax occlusion mapping on the ground splat
+  (per-pixel heightmap ray-march — fake relief, zero new triangles, fades
+  with altitude like the existing detail), (3) base-mesh density bump,
+  (4) min-zoom clamp. MEASURE memory + frame-time at each rung. True
+  tessellation stages don't exist in WebGL/WebGPU — full cube-sphere
+  quadtree LOD is the only real-subdivision path, built ONLY if the spike
+  rungs fail Omer's eye. Depends on E1 if erosion landed (explicit edge:
+  E2 → E1's sampler).
 - **Est:** spike 1 run; full LOD (if needed) 8–12 runs.
 ### E3 (was M7a) — packaged .app (electron-builder, unsigned). **Est:** 2–3 runs.
 ### E4 (was M8) — living world: ruins, migration caravans, seasons, volcano,
