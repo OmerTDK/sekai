@@ -29,16 +29,21 @@ import { createCivRender } from './civrender.js'
 import { createEarthquakes } from './earthquake.js'
 import { createHerald } from './herald.js'
 import { createRoads } from './roads.js'
+import { createAtmosphereScattering } from './atmosphere.js'
+import { createVolumetricClouds } from './clouds.js'
 import { createUI } from './ui.js'
 import { clamp, fantasyName } from './util.js'
 
 const SEED = new URLSearchParams(location.search).get('seed') ?? 'aetherion-1'
 
-// M4: run on the real WebGPU backend by default; init() negotiates it and
-// auto-falls-back to WebGL2 when WebGPU is unavailable. `?renderer=webgl`
-// forces the WebGL2 fallback (support/parity escape hatch, kept one milestone).
-// Every shader is TSL and post is node PostProcessing, so no scene code changes.
-const forceWebGL = new URLSearchParams(location.search).get('renderer') === 'webgl'
+// Default to the WebGL2 backend (WebGPURenderer's WebGL2 path — M3's proven
+// host where EVERY material renders). True WebGPU is opt-in via ?renderer=webgpu:
+// it works broadly (M4 flip verified) but a few TSL materials still hit
+// per-material WGSL compile gaps on the WebGPU backend (custom vertex attributes
+// like birds' wingSide, point-sprite coords) that don't exist on WebGL2 — those
+// are being hardened before WebGPU becomes the default. All shaders are TSL and
+// post is node PostProcessing, so both backends render the same scene code.
+const forceWebGL = new URLSearchParams(location.search).get('renderer') !== 'webgpu'
 const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL })
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.setSize(innerWidth, innerHeight)
@@ -174,8 +179,21 @@ setInterval(pollEvents, 60_000)
 // bloom's threshold. Tone mapping still applies via renderer.toneMapping.
 const post = new THREE.PostProcessing(renderer)
 const scenePass = pass(scene, camera)
-const bloomPass = bloom(scenePass, 0.3, 0.7, 1.0)
-post.outputNode = scenePass.add(bloomPass)
+const scenePassDepth = scenePass.getTextureNode('depth')
+// M5a atmospheric scattering, then M5c volumetric clouds, composited over the
+// scene before bloom: scene → scattering → clouds → bloom.
+const atmo = createAtmosphereScattering(SEED, camera)
+const atmoNode = atmo.node(scenePass, scenePassDepth)
+const clouds = createVolumetricClouds(scenePass, camera, {
+  getSunDir: (o) => sky.getSunDir(o),
+  storms,
+  planet,
+  sky,
+})
+sky.setCloudsVisible(false) // volumetric clouds replace the 2.5D shells
+const cloudComposite = clouds.compositeOver(atmoNode)
+const bloomPass = bloom(cloudComposite, 0.3, 0.7, 1.0)
+post.outputNode = cloudComposite.add(bloomPass)
 
 document.querySelector('#title .planet-name').textContent = fantasyName(SEED)
 const statsEl = document.getElementById('stats')
@@ -226,6 +244,8 @@ window.__planet = {
   earthquake: earthquakes,
   roads,
   herald,
+  atmosphere: atmo,
+  clouds,
   cameraFeel,
   ui,
   renderer,
@@ -273,6 +293,8 @@ renderer.setAnimationLoop(() => {
   wind.update(dt)
   storms.update(dt, sky.getSunDir(sunDirScratch))
   sky.setStormClearing(stormDirScratch, storms.getPrimary(stormDirScratch))
+  atmo.update(dt, sky.getSunDir(sunDirScratch))
+  clouds.update(dt, camera)
   floods.update(dt)
   events.update(dt)
   dragon.update(dt, sky.getSunDir(sunDirScratch))

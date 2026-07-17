@@ -14,13 +14,16 @@
 //   * positionNode  -- a seam-free spherical sum-of-Gerstner-waves evaluated in
 //                      OBJECT space (phase = k*dot(Dir,P) + c*t), so wavefronts
 //                      are planar slabs cutting the sphere with no pole/seam tear.
-//                      6 waves: 4 long swell (low steepness) + 2 short chop.
+//                      A seeded directional SPECTRUM: WAVE_COUNT octaves along a
+//                      geometric wavelength progression, spread in a cone about
+//                      one wind direction, amplitude following a spectral falloff.
 //   * normalNode    -- analytic finite-difference of that displacement in a
-//                      pole-safe tangent basis, plus a procedural scrolling
-//                      micro-normal for close-up sparkle.
+//                      pole-safe tangent basis, plus a two-octave procedural
+//                      scrolling micro-normal for close-up sparkle.
 //   * colorNode     -- the ported stylized fresnel / 3-stop depth-absorption /
 //                      coast-glow look (matches the old ocean palette exactly),
-//                      with aDepth-driven lapping shore foam + Gerstner crest foam.
+//                      with aDepth-driven lapping shore foam + Jacobian-fold
+//                      whitecap crest foam.
 //
 // Determinism: every wave direction/wavelength/amplitude/speed/steepness is
 // derived from `seed` via rngFromString (same seed -> same ocean). uTime is a
@@ -48,6 +51,7 @@ import {
   uniform,
   color,
   float,
+  vec2,
   vec3,
   mix,
   step,
@@ -97,23 +101,33 @@ const SEGMENTS_W = 128
 const SEGMENTS_H = 96
 
 // ---------------------------------------------------------------------------
-// Wave-set tuning knobs.
-//  * SWELL: long wavelength, low steepness -> broad rolling groundswell.
-//  * CHOP:  short wavelength, higher steepness -> sharper surface texture.
-// Amplitudes (world units on a radius-1 planet) sum so a typical (RMS) surface
-// sits ~0.004-0.005 with peaks to ~0.008 -- visible at the 1.06 skim, inside
-// the stylized look (the old ocean displaced only +-0.00027, i.e. glass).
+// Wave-set tuning knobs -- a seeded directional SPECTRUM (M5b flagship). Rather
+// than two hand-tuned bands we synthesize WAVE_COUNT octaves along a geometric
+// wavelength progression from WAVELEN_LONG (broad groundswell) down to
+// WAVELEN_SHORT (surface chop, floored to >= ~2.5 vertex spacings so geometry
+// never sub-samples into facet noise). Per octave:
+//   * amplitude follows a spectral falloff  A ~ (L/Lmax)^AMP_FALLOFF  (long waves
+//     dominate the sea's energy) and the whole set is then renormalized so the
+//     summed vertical amplitude hits TARGET_AMP_SUM exactly -- this pins the sea
+//     state independent of octave count, so LOD/coast tuning never regresses.
+//   * steepness rises toward shorter waves (sharp chop crests, broad swell).
+//   * speed follows deep-water dispersion  c ~ sqrt(k)  (long swell outruns chop).
+//   * direction is spread in a cone about a single seeded WIND direction, the
+//     cone widening for shorter waves (directional spreading) -- a COHERENT
+//     wind-driven sea rather than six waves pointing at random.
+// Amplitudes are world units on a radius-1 planet; the renormalized peak sits
+// ~0.008-0.011 -- visible at the 1.06 skim (the old ocean displaced +-0.00027).
 // ---------------------------------------------------------------------------
-const SWELL_COUNT = 4
-const CHOP_COUNT = 2
-const SWELL_WAVELEN = [0.55, 1.05] // rad (world units on the unit sphere)
-const SWELL_AMP = [0.0016, 0.0026]
-const SWELL_STEEP = [0.28, 0.5]
-const SWELL_SPEED = [0.5, 0.95] // phase-speed multiplier on uTime
-const CHOP_WAVELEN = [0.18, 0.3]
-const CHOP_AMP = [0.0006, 0.0011]
-const CHOP_STEEP = [0.6, 0.9]
-const CHOP_SPEED = [0.9, 1.5]
+const WAVE_COUNT = 9
+const WAVELEN_LONG = 1.15 // rad (world units on the unit sphere)
+const WAVELEN_SHORT = 0.14 // >= ~2.5 * (2*PI/128) vertex spacing
+const AMP_FALLOFF = 0.9 // A_i ~ (L_i / WAVELEN_LONG)^AMP_FALLOFF
+const TARGET_AMP_SUM = 0.011 // summed vertical amplitude after renormalization
+const STEEP_LONG = 0.3 // Gerstner steepness at the longest wave
+const STEEP_SHORT = 0.95 // ... at the shortest wave
+const SPEED_BASE = 0.2 // c_i = SPEED_BASE * sqrt(k_i) (deep-water dispersion)
+const CONE_LONG = 0.22 // directional-spread cone half-angle (rad) at long waves
+const CONE_SHORT = 0.9 // ... at short waves (wider -> choppier, less aligned)
 
 // Finite-difference / micro-normal / foam tunables.
 const NORMAL_EPS = 0.01 // world-space tangent offset for the analytic normal
@@ -121,8 +135,15 @@ const MICRO_FREQ = 30 // spatial frequency of the sparkle micro-normal
 const MICRO_EPS = 0.02 // world offset used to finite-difference the noise slope
 const MICRO_STRENGTH = 0.28 // how hard the sparkle bends the shading normal (at full LOD)
 const MICRO_FLOW = 0.28 // scroll speed of the micro-normal noise
-const CREST_HI = 0.0032 // heightSum above which crest foam appears
-const CREST_W = 0.0014 // crest-foam smoothstep width
+const MICRO_FREQ2 = 78 // finer second sparkle octave (close-up only via LOD gate)
+const MICRO_FLOW2 = 0.6 // faster counter-scroll of the fine octave
+const MICRO_STRENGTH2 = 0.16 // strength of the fine octave (LOD^2 gated)
+// Whitecap crest foam is driven by the Gerstner JACOBIAN fold rather than raw
+// height: fold_i = Q_i*A_i*k_i*sin(phase_i) peaks where the surface compresses at
+// steep crests (short/steep waves fold hardest -> physical whitecaps). Thresholds
+// are fractions of foldMax = sum Q_i*A_i*k_i so they auto-scale with the spectrum.
+const CREST_FOLD_LO = 0.38 // fold/foldMax where whitecaps begin
+const CREST_FOLD_HI = 0.74 // ... where they saturate to solid white
 const SHORE_FOAM_DEPTH = 0.12 // aDepth band the shore foam lives inside (0 at shoreline)
 
 // LOD altitude band: full detail at/under NEAR, fully calm by FAR.
@@ -137,23 +158,49 @@ function randUnitVec(rng) {
   return new THREE.Vector3(r * Math.cos(t), r * Math.sin(t), z)
 }
 
-/** Seeded 6-wave set: 4 swell + 2 chop, each a plain-number descriptor. */
+/** A random unit vector perpendicular to W (uniform azimuth in W's tangent plane). */
+function randPerp(W, rng) {
+  const a = Math.abs(W.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
+  const t1 = new THREE.Vector3().crossVectors(W, a).normalize()
+  const t2 = new THREE.Vector3().crossVectors(W, t1) // already unit (W,t1 orthonormal)
+  const phi = rng() * Math.PI * 2
+  return t1.multiplyScalar(Math.cos(phi)).add(t2.multiplyScalar(Math.sin(phi)))
+}
+
+/**
+ * Seeded directional wave SPECTRUM: WAVE_COUNT octaves along a geometric
+ * wavelength progression, spread in a cone about one seeded wind direction, with
+ * a spectral amplitude falloff renormalized to TARGET_AMP_SUM. Each entry is a
+ * plain-number descriptor { dir, k, A, Q, c }.
+ */
 function makeWaves(seed) {
   const rng = rngFromString(seed + ':ocean:waves')
+  const wind = randUnitVec(rng) // dominant sea direction
   const waves = []
-  const push = (wl, amp, steep, spd) => {
-    const dir = randUnitVec(rng)
-    const L = lerp(wl[0], wl[1], rng())
-    waves.push({
-      dir,
-      k: (2 * Math.PI) / L, // wavenumber
-      A: lerp(amp[0], amp[1], rng()),
-      Q: lerp(steep[0], steep[1], rng()),
-      c: lerp(spd[0], spd[1], rng()),
-    })
+  for (let i = 0; i < WAVE_COUNT; i++) {
+    // t in [0,1]: 0 -> longest swell, 1 -> shortest chop. Jittered so octaves
+    // don't beat against each other in a perfectly even comb.
+    const t = (i + (rng() - 0.5) * 0.6) / (WAVE_COUNT - 1)
+    const tc = clamp(t, 0, 1)
+    const L = WAVELEN_LONG * Math.pow(WAVELEN_SHORT / WAVELEN_LONG, tc) // geometric
+    const k = (2 * Math.PI) / L
+    const A = Math.pow(L / WAVELEN_LONG, AMP_FALLOFF) // spectral falloff (pre-norm)
+    const Q = lerp(STEEP_LONG, STEEP_SHORT, tc)
+    const c = SPEED_BASE * Math.sqrt(k) // deep-water dispersion
+    const cone = lerp(CONE_LONG, CONE_SHORT, tc)
+    const theta = (rng() * 2 - 1) * cone
+    const perp = randPerp(wind, rng)
+    const dir = wind
+      .clone()
+      .multiplyScalar(Math.cos(theta))
+      .add(perp.multiplyScalar(Math.sin(theta))) // unit: cos*W + sin*perp
+    waves.push({ dir, k, A, Q, c })
   }
-  for (let i = 0; i < SWELL_COUNT; i++) push(SWELL_WAVELEN, SWELL_AMP, SWELL_STEEP, SWELL_SPEED)
-  for (let i = 0; i < CHOP_COUNT; i++) push(CHOP_WAVELEN, CHOP_AMP, CHOP_STEEP, CHOP_SPEED)
+  // Renormalize amplitudes so the summed vertical amplitude == TARGET_AMP_SUM,
+  // pinning the sea state regardless of octave count / falloff exponent.
+  const ampSum = waves.reduce((s, w) => s + w.A, 0)
+  const scale = TARGET_AMP_SUM / ampSum
+  for (const w of waves) w.A *= scale
   return waves
 }
 
@@ -203,13 +250,20 @@ export function createOcean(planet, camera, seed) {
   const aDepth = attribute('aDepth', 'float')
 
   // Wave constants baked into the graph.
-  const waveNodes = makeWaves(seed).map((w) => ({
+  const waves = makeWaves(seed)
+  const waveNodes = waves.map((w) => ({
     dir: vec3(w.dir.x, w.dir.y, w.dir.z),
     k: float(w.k),
     A: float(w.A),
     Q: float(w.Q),
     c: float(w.c),
   }))
+
+  // Max possible Gerstner fold (sum of per-wave Q*A*k). Whitecap thresholds are
+  // fractions of this so they auto-scale with the seeded spectrum.
+  const foldMax = waves.reduce((s, w) => s + w.Q * w.A * w.k, 0)
+  const uFoldLo = float(foldMax * CREST_FOLD_LO)
+  const uFoldHi = float(foldMax * CREST_FOLD_HI)
 
   // Shared spherical-Gerstner displacement, evaluated in OBJECT space. Returns
   // the vec3 displacement to add to positionLocal. The tangential (crest-pinch)
@@ -232,18 +286,23 @@ export function createOcean(planet, camera, seed) {
     { P: 'vec3', return: 'vec3' },
   )
 
-  // Just the summed vertical term (crest-foam driver) -- cheaper than the full
-  // displacement when only the height is needed.
-  const waveHeight = Fn(
+  // Foam drivers -- returns vec2(height, fold): the summed vertical term (shore
+  // lapping) and the summed Gerstner Jacobian fold sum Q*A*k*sin(phase) (whitecap
+  // crest compression). Cheaper than the full displacement when only these
+  // scalars are needed.
+  const waveScalars = Fn(
     ([P]) => {
       const hSum = float(0).toVar()
+      const foldSum = float(0).toVar()
       for (const w of waveNodes) {
         const phase = w.k.mul(dot(w.dir, P)).add(w.c.mul(uTime))
-        hSum.addAssign(w.A.mul(sin(phase)))
+        const s = sin(phase)
+        hSum.addAssign(w.A.mul(s))
+        foldSum.addAssign(w.Q.mul(w.A).mul(w.k).mul(s))
       }
-      return hSum
+      return vec2(hSum, foldSum)
     },
-    { P: 'vec3', return: 'float' },
+    { P: 'vec3', return: 'vec2' },
   )
 
   // Per-vertex geometric-amplitude scale: LOD * shoreline fade (crests shrink
@@ -274,23 +333,31 @@ export function createOcean(planet, camera, seed) {
     const nrm = normalize(cross(Pu.sub(P0), Pv.sub(P0))).toVar()
 
     // Procedural scrolling micro-normal (object-space finite-diff of a noise
-    // field along U/V) -- the fine sparkle the geometry can't carry. Faded by
-    // LOD so the distant ocean never shimmers.
+    // field along U/V) -- the fine sparkle the geometry can't carry. Two octaves:
+    // a broad drift plus a finer counter-scrolling octave (LOD^2-gated) that only
+    // sharpens up close, so the distant ocean never shimmers/aliases.
     const scroll = vec3(uTime.mul(MICRO_FLOW), 0, uTime.mul(MICRO_FLOW * 0.8))
     const nUp = mx_noise_float(positionLocal.add(U.mul(MICRO_EPS)).mul(MICRO_FREQ).add(scroll))
     const nUn = mx_noise_float(positionLocal.sub(U.mul(MICRO_EPS)).mul(MICRO_FREQ).add(scroll))
     const nVp = mx_noise_float(positionLocal.add(V.mul(MICRO_EPS)).mul(MICRO_FREQ).add(scroll))
     const nVn = mx_noise_float(positionLocal.sub(V.mul(MICRO_EPS)).mul(MICRO_FREQ).add(scroll))
-    const microStrength = uWaveLOD.mul(MICRO_STRENGTH)
-    nrm.assign(
-      normalize(
-        nrm.sub(
-          U.mul(nUp.sub(nUn))
-            .add(V.mul(nVp.sub(nVn)))
-            .mul(microStrength),
-        ),
-      ),
+    const slope = U.mul(nUp.sub(nUn))
+      .add(V.mul(nVp.sub(nVn)))
+      .mul(uWaveLOD.mul(MICRO_STRENGTH))
+      .toVar()
+
+    const scroll2 = vec3(uTime.mul(-MICRO_FLOW2), 0, uTime.mul(MICRO_FLOW2 * 0.9))
+    const mUp = mx_noise_float(positionLocal.add(U.mul(MICRO_EPS)).mul(MICRO_FREQ2).add(scroll2))
+    const mUn = mx_noise_float(positionLocal.sub(U.mul(MICRO_EPS)).mul(MICRO_FREQ2).add(scroll2))
+    const mVp = mx_noise_float(positionLocal.add(V.mul(MICRO_EPS)).mul(MICRO_FREQ2).add(scroll2))
+    const mVn = mx_noise_float(positionLocal.sub(V.mul(MICRO_EPS)).mul(MICRO_FREQ2).add(scroll2))
+    slope.addAssign(
+      U.mul(mUp.sub(mUn))
+        .add(V.mul(mVp.sub(mVn)))
+        .mul(uWaveLOD.mul(uWaveLOD).mul(MICRO_STRENGTH2)),
     )
+
+    nrm.assign(normalize(nrm.sub(slope)))
 
     return transformNormalToView(nrm).normalize()
   })()
@@ -330,17 +397,29 @@ export function createOcean(planet, camera, seed) {
     waterColor.assign(mix(waterColor, uShoreBand, shoreBandT.mul(0.6)))
 
     // --- foam -------------------------------------------------------------
-    const h = waveHeight(positionLocal)
+    const sc = waveScalars(positionLocal)
+    const h = sc.x
+    const fold = sc.y
 
-    // Crest foam: white highlights on the steepest wave crests (approximates
-    // the Gerstner Jacobian fold via the summed vertical term).
-    const crest = smoothstep(float(CREST_HI), float(CREST_HI).add(CREST_W), h).mul(uWaveLOD)
-
-    // Shore foam: a lapping white band where the ocean meets shallow coast,
-    // modulated by scrolling noise and by wave phase so it laps in and out.
-    const shoreNoise = mx_noise_float(positionWorld.mul(42).add(vec3(uTime.mul(0.5), 0, uTime.mul(0.4))))
+    // Crest whitecaps: driven by the Gerstner Jacobian fold (steep short crests
+    // fold hardest), broken up by scrolling noise so caps are patchy foam, not a
+    // solid painted line.
+    const crestRaw = smoothstep(uFoldLo, uFoldHi, fold)
+    const crestNoise = mx_noise_float(positionWorld.mul(19).add(vec3(uTime.mul(0.7), 0, uTime.mul(0.55))))
       .mul(0.5)
       .add(0.5)
+    const crest = crestRaw.mul(crestNoise.mul(0.55).add(0.45)).mul(uWaveLOD)
+
+    // Shore foam: a lapping white band where the ocean meets shallow coast, two
+    // scrolling noise octaves (broad drift + fine froth) modulated by wave phase
+    // so it laps in and out rather than sitting static.
+    const shoreN1 = mx_noise_float(positionWorld.mul(42).add(vec3(uTime.mul(0.5), 0, uTime.mul(0.4))))
+      .mul(0.5)
+      .add(0.5)
+    const shoreN2 = mx_noise_float(positionWorld.mul(96).add(vec3(uTime.mul(-0.7), 0, uTime.mul(0.9))))
+      .mul(0.5)
+      .add(0.5)
+    const shoreNoise = shoreN1.mul(0.65).add(shoreN2.mul(0.35))
     const lap = h.mul(60).add(uTime.mul(1.3)).sin().mul(0.5).add(0.5)
     const shoreMask = smoothstep(float(SHORE_FOAM_DEPTH), float(0), aDepth).mul(uWaveLOD)
     const shoreFoam = shoreMask.mul(shoreNoise).mul(lap.mul(0.55).add(0.45))
