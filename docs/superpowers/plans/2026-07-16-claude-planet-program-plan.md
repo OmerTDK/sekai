@@ -280,7 +280,17 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
   the new renderer once ALL materials are NodeMaterials. Interim strategy is
   therefore branch-local (spike page + progressively-ported modules verified
   off-main) rather than shipping a half-ported main.
-- **S1 spike (retargeted to the forceWebGL host — RUNNING 2026-07-17):**
+- **S1 spike — GO (architect-confirmed live in Chrome, 2026-07-17).** All
+  mechanism gates passed on `window.__S1`: forceWebGL→`WebGLBackend`;
+  per-instance attribute sway proven by a zero-phase discriminator
+  (`zeroingChangedImage:true, restoreReverted:true`); BatchedMesh+NodeMaterial
+  renders no-error; the true-WebGPU flip even boots on this machine. Two
+  watch-items, both bounded: (1) fps deltas are a submit-bound micro-benchmark
+  artifact (0.04→0.11ms on empty scenes) — advisory, profile the real app;
+  (2) a **187ms node-recompile hitch** on structural graph changes → M3 law:
+  build every node graph once, pre-warm at load, animate via `uniform()`
+  writes only. Full design in `docs/spikes/2026-07-17-s1-tsl-webgpu.md`.
+- **Original spike framing (retargeted to the forceWebGL host):**
   a standalone page renders a representative scene (customized sphere +
   InstancedMesh-with-per-instance-attribute sway + BatchedMesh) under both
   WebGLRenderer/onBeforeCompile (baseline) and WebGPURenderer(forceWebGL)/TSL
