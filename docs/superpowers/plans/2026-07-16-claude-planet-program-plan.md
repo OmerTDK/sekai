@@ -309,9 +309,30 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
   E2 → E1's sampler).
 - **Est:** spike 1 run; full LOD (if needed) 8–12 runs.
 ### E3 (was M7a) — packaged .app (electron-builder, unsigned). **Est:** 2–3 runs.
-### E4 (was M8) — living world: ruins, migration caravans, seasons, volcano,
-  whales/fish/herds, bird scatter, ambient sound, poster export, auto-tour.
-  Per-feature JIT plans. **Est:** 8–10 runs.
+### M-WX — weather & life (added 2026-07-17 from the owner's "dreaming" list —
+### none of it was crazy; sequenced after M2.5/M-SKY land)
+- [ ] REAL birds: articulated low-poly models (CC0 or built) replacing the
+      day-one 2-triangle silhouettes; same flock logic
+- [ ] Material-distinction pass (the "clay/play-dough" fix): per-material-class
+      roughness/normal/micro-albedo on buildings & props — wood/stone/cloth/
+      metal each respond to light distinctly; stylized, NOT photoreal PBR
+      (S5 verdict stands); extends the terrain-only crispness pass
+- [ ] Sea ice: polar freeze mask on the ocean (matte white-blue, pressure
+      cracks, no swell, ragged noise edge); extent hooks into E4 seasons later
+- [ ] Precipitation: camera-local snowfall in cold zones, rain under wet
+      fronts; lightweight ambient weather-front state drifting across the world
+- [ ] Hurricane landfall → coastal flooding: temporary waterline rise + wet
+      ground darkening on low shores under a landfalling storm
+- [ ] Footprint decal trails behind workers/caravans in snow biomes (the
+      honest version of snow deformation)
+- [ ] Whales + dolphins pulled forward from E4 (second owner request):
+      breaches, spouts via the plume pool, coastal dolphin pods
+- Parked with reasons: true RT snow deformation and dynamic hydrological
+  floods (payoff-per-cost fails at miniature scale; revisit for a close-up mode)
+
+### E4 (was M8) — living world remainder: ruins, migration caravans, seasons,
+  volcano, fish schools, herds, bird scatter, ambient sound, poster export,
+  auto-tour. Per-feature JIT plans. **Est:** 6–8 runs.
 ### E5 (was M7b) — SQLite index + FSEvents watcher. Parked indefinitely: it
   reverses the no-database principle to fix a 4s poll nobody minds. Revisit
   only if cold-start or history-analytics pain becomes real.
