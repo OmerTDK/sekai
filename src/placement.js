@@ -5,7 +5,7 @@
 // argument each search takes. Split out of world.js (see the M2 program
 // plan) along that file's own section boundaries — no behavior change, only
 // where this code lives.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { SEA_LEVEL, clamp } from './util.js'
 
 const MAX_BUILD_HEIGHT = SEA_LEVEL + 0.03 // sampleHeight() must be below this to build/walk

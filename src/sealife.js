@@ -32,7 +32,7 @@
 // WHALE_DIVE_WAYPOINT_ALT comments) — the normal surfacing/diving cycle
 // keeps its highest point (dorsal fin tip, worst case) a couple thousandths
 // of a world unit above the cap's margin, never close to it.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { SEA_LEVEL, rngFromString, clamp, lerp, smoothstep } from './util.js'
 import { tangentBasis } from './placement.js'

@@ -15,7 +15,7 @@
 // texture to individual `material.envMap` instead, scoped to metalness>0.3
 // materials only. See spikes/s5/scene.js's own comment on this for the
 // original finding.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 
 // Fixed sun-direction fallback — mirrors src/sky.js's own SUN_DIR invariant

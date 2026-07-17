@@ -4,7 +4,7 @@
 // race palettes/glyphs/naming, and structure type/tier classification. Split
 // out of world.js (see the M2 program plan) along that file's own section
 // boundaries — no behavior change, only where this code lives.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { hash01 } from './util.js'
 
 // ---------------------------------------------------------------------------

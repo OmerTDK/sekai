@@ -22,7 +22,7 @@
 //
 // Three draw calls total: north sheet, south sheet, one shared InstancedMesh
 // of drifting floes.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { SEA_LEVEL, rngFromString, makeNoise3D, fbm, ridged, clamp, lerp, smoothstep } from './util.js'
 
 // ---------------------------------------------------------------------------

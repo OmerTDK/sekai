@@ -38,7 +38,7 @@
 //      terrain+0.006-0.012, with a noise-driven organic loop-radius wobble.
 //
 // Contract (pinned): createBirds(planet, seed) -> { group, update(dt, camera) }.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { rngFromString, makeNoise3D, clamp, lerp } from './util.js'
 import { tangentBasis } from './placement.js'

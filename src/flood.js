@@ -6,7 +6,7 @@
 // shows), and a larger, fainter wet-ground ring that lingers after the
 // flood drains. Fully reactive to storms' own state + planet terrain -- no
 // randomness anywhere, so `seed` is accepted (API contract) but unused.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { SEA_LEVEL, clamp, smoothstep } from './util.js'
 
 const LANDFALL_STRENGTH_MIN = 0.35 // storms.getPrimary() strength floor for "landfall"

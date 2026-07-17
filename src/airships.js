@@ -23,7 +23,7 @@
 // (its own /api/sessions poll), the fleet is built lazily on first update()
 // calls, not at construction time — see the tiny waiting/settling/ready
 // state machine at the bottom of this file.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { rngFromString, clamp, lerp, smoothstep } from './util.js'
 import { RACE_PALETTES, boxGeo, sphereGeo } from './buildings.js'
 import { findLandAnchor, tangentBasis, orientOnSurface, stepToward } from './placement.js'

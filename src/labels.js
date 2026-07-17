@@ -4,7 +4,7 @@
 // always drawn via canvas fillText, never innerHTML. Split out of world.js
 // (see the M2 program plan) along that file's own section boundaries — no
 // behavior change, only where this code lives.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { clamp } from './util.js'
 
 export const SETTLEMENT_LABEL_K = 0.022

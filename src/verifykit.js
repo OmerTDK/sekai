@@ -4,7 +4,7 @@
 // verified without a human clicking through the scene by hand. Wired by
 // main.js as `window.__planet.verify` -- see docs/superpowers/plans/
 // 2026-07-16-m0-execution-plan.md (Task A) for the contract this implements.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 
 // ---------------------------------------------------------------------------
 // Viewpoints (names fixed by the M0 execution plan)

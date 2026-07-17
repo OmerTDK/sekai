@@ -3,7 +3,7 @@
 // dark eye ringed by a bright eyewall, ragged log-spiral feeder bands).
 // Everything is derived from `seed` + a per-storm spawn counter, so a given
 // seed always produces the same sequence of storms (origin, track, texture).
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { SEA_LEVEL, rngFromString, makeNoise3D, fbm, clamp, lerp, smoothstep } from './util.js'
 
 // ---------------------------------------------------------------------------

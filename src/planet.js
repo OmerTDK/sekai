@@ -2,7 +2,7 @@
 // from deterministic noise fields, plus a subtly animated translucent ocean
 // shell. Everything is derived from `seed` so the same seed always yields the
 // same planet.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
 import { SEA_LEVEL, makeNoise3D, fbm, ridged, clamp, smoothstep } from './util.js'
 // M-SKY cloud-shadows-on-terrain: architect-pinned contract, see sky.js's

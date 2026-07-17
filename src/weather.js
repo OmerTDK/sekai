@@ -8,7 +8,7 @@
 // of drizzle. WHAT falls (rain vs snow) comes from planet.biomeAt at the
 // camera's own footprint: polar or high-altitude ground gets snow, sea level
 // elsewhere gets rain, blended continuously across the transition.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { SEA_LEVEL, rngFromString, makeNoise3D, fbm, clamp, lerp, smoothstep } from './util.js'
 
 const TWO_PI = Math.PI * 2

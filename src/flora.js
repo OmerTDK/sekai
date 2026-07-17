@@ -8,7 +8,7 @@
 // quality (see createSpacingGrid below): a candidate within a minimum
 // angular distance of an already-accepted point of the SAME layer is
 // rejected too, so growth stays dense without clumping.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { rngFromString, clamp, lerp, smoothstep } from './util.js'
 

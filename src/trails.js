@@ -20,7 +20,7 @@
 // circle, non-uniformly scaled per instance, lifted off the terrain along
 // its own placement direction) -- this file reuses that same geometry/
 // placement idea for the footprint ovals themselves.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { rngFromString, hash01, smoothstep } from './util.js'
 
 // ---------------------------------------------------------------------------

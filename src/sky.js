@@ -1,7 +1,7 @@
 // Stars, atmosphere, clouds, moons and all scene lighting for the stylized
 // planet. Everything here is deterministic from the seed string — same seed,
 // same sky, every launch. This module owns every light in the scene.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { makeNoise3D, fbm, rngFromString, clamp, lerp, smoothstep } from './util.js'
 
 const Y_AXIS = new THREE.Vector3(0, 1, 0)
