@@ -82,3 +82,4 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
   getCloudShadowUniforms() contract (sky.js -> planet.js) is live, not
   static. `m-sky-08-terrain-cloud-shadow-zoom.png` is a close crop of the
   after-state showing a shadow band right at a cloud/coast boundary.
+- `screenshot-…-64.jpg` — **the galaxy arrives**: PR #4 wave complete — baked milky way, shaded clouds, dragon + airships live.
