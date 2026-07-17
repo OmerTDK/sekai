@@ -154,7 +154,7 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
       shader via an architect-pinned contract)
 - [ ] Ambient coverage cut to ART.md's 15-25% target
 - [ ] Hurricane casts a soft moving shadow on the ocean beneath it
-- Carryovers queued for the NEXT wave (not this one): camera swoop/skim
+- IN PROGRESS 2026-07-17 (PR #5): camera swoop/skim
   implementation, surface-crispness pass, wonders, model-tier styling,
   orbit label-soup fix.
 
