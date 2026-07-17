@@ -209,7 +209,7 @@ function warnAssetsCreate(reason) {
 // createWorld
 // ---------------------------------------------------------------------------
 
-export function createWorld(planet, camera, domElement, renderer = null, cameraFeel = null) {
+export function createWorld(planet, camera, domElement, renderer = null, cameraFeel = null, sky = null) {
   const group = new THREE.Group()
   const settlementsGroup = new THREE.Group()
   const structuresGroup = new THREE.Group()
@@ -276,7 +276,7 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
       return
     }
     try {
-      const api = await mod.loadBuildingAssets(renderer)
+      const api = await mod.loadBuildingAssets(renderer, sky)
       if (api && api.ready) {
         assetsApi = api
         assetsReady = true
@@ -1440,5 +1440,23 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
     return true
   }
 
-  return { group, update, stats, list, visit, _tween: tween, onStructureClick, setTimeFilter, getTimeRange }
+  // M-WX: read-only walker iteration for surface-effect modules (footprint
+  // trails). Callback gets (id, dir, race); dir is the LIVE unit-vector the
+  // agent walks on -- treat as read-only, never mutate or retain it.
+  function forEachWalker(fn) {
+    for (const [id, a] of agents) fn(id, a.dir, a.settlement.race)
+  }
+
+  return {
+    group,
+    update,
+    stats,
+    list,
+    visit,
+    _tween: tween,
+    onStructureClick,
+    setTimeFilter,
+    getTimeRange,
+    forEachWalker,
+  }
 }

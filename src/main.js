@@ -48,7 +48,7 @@ controls.maxDistance = 9
 
 const cameraFeel = createCameraFeel(planet, camera, controls)
 
-const world = createWorld(planet, camera, renderer.domElement, renderer, cameraFeel)
+const world = createWorld(planet, camera, renderer.domElement, renderer, cameraFeel, sky)
 scene.add(world.group)
 
 const birds = createBirds(SEED)
