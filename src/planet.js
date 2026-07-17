@@ -5,6 +5,14 @@
 import * as THREE from 'three'
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
 import { SEA_LEVEL, makeNoise3D, fbm, ridged, clamp, smoothstep } from './util.js'
+// M-SKY cloud-shadows-on-terrain: architect-pinned contract, see sky.js's
+// getCloudShadowUniforms() doc comment for the uniform shapes and the
+// world-dir -> shell-UV formula this file's onBeforeCompile block replicates
+// in GLSL. Imported at the top per normal ES-module style; the GETTER is
+// still called lazily (inside onBeforeCompile, not at module load) and
+// guarded (its own try/catch + warn-once flag below) so a contract mismatch
+// degrades gracefully instead of breaking terrain rendering.
+import { getCloudShadowUniforms } from './sky.js'
 
 // ---------------------------------------------------------------------------
 // Noise coordinate scales (multiplied into the unit direction before sampling)
@@ -127,6 +135,7 @@ const OCEAN_DEEP_MUL = [1, 1, 1]
 // ---------------------------------------------------------------------------
 let warnedTerrainSplat = false
 let warnedOceanShader = false
+let warnedCloudShadow = false
 
 // Guarded shader-chunk injection: replaces an `#include <x>` anchor with
 // itself + extra GLSL lines, throwing if the anchor wasn't found (guards
@@ -520,6 +529,60 @@ export function createPlanet(seed) {
       if (!warnedTerrainSplat) {
         warnedTerrainSplat = true
         console.warn('[planet] planet.js: terrain detail-texture splat degraded — onBeforeCompile injection failed, ground renders without triplanar detail textures: ' + err)
+      }
+    }
+
+    // M-SKY cloud-shadows-on-terrain (scoped addition — the one bit of this
+    // file outside planet.js's own ownership, per the M-SKY architect-pinned
+    // contract with sky.js's getCloudShadowUniforms()). Its OWN independent
+    // try/catch + warn-once flag, deliberately separate from the triplanar
+    // block above, so a failure in either can never take down the other.
+    // Samples the lower cloud deck's alpha texture along each fragment's
+    // world direction (planet.group never rotates, so object space IS world
+    // space here — normalize(vDetailPos), the SAME varying the triplanar
+    // block above already populates from the vertex position, already IS
+    // that world direction) and darkens diffuseColor by up to ~18% under
+    // dense cloud, faded by the SAME near-camera distance factor the splat
+    // detail uses above (recomputed fresh here: that block's own `dNear` is
+    // scoped to its own { } and isn't reachable from this one).
+    try {
+      Object.assign(shader.uniforms, getCloudShadowUniforms())
+      const frag2 = shader.fragmentShader
+        .replace(
+          '#include <clipping_planes_pars_fragment>',
+          [
+            '#include <clipping_planes_pars_fragment>',
+            'uniform sampler2D uCloudTex;',
+            'uniform mat3 uCloudMat;',
+            'uniform float uCloudShadowOn;',
+          ].join('\n')
+        )
+        .replace(
+          '#include <roughnessmap_fragment>',
+          [
+            '#include <roughnessmap_fragment>',
+            '{',
+            '  float dNearShadow = 1.0 - smoothstep(0.3, 1.7, length(vViewPosition));',
+            '  if (uCloudShadowOn > 0.003 && dNearShadow > 0.003) {',
+            '    vec3 worldDir = normalize(vDetailPos);',
+            '    vec3 localDir = normalize(uCloudMat * worldDir);',
+            '    float theta = acos(clamp(localDir.y, -1.0, 1.0));',
+            '    float phi = atan(localDir.z, -localDir.x);',
+            '    if (phi < 0.0) phi += 6.283185307179586;',
+            '    vec2 cloudUv = vec2(phi / 6.283185307179586, 1.0 - theta / 3.141592653589793);',
+            '    float cloudDensity = texture2D(uCloudTex, cloudUv).g;', // alphaMap convention: coverage lives in the GREEN channel
+            '    float shadowT = cloudDensity * uCloudShadowOn * dNearShadow;',
+            '    diffuseColor.rgb *= 1.0 - shadowT * 0.18;',
+            '  }',
+            '}',
+          ].join('\n')
+        )
+      if (frag2 === shader.fragmentShader) throw new Error('planet.js: cloud-shadow injection point not found')
+      shader.fragmentShader = frag2
+    } catch (err) {
+      if (!warnedCloudShadow) {
+        warnedCloudShadow = true
+        console.warn('[planet] planet.js: cloud-shadow-on-terrain degraded — onBeforeCompile injection failed, ground renders without moving cloud shadows: ' + err)
       }
     }
   }

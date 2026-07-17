@@ -4,7 +4,7 @@
 // Everything is derived from `seed` + a per-storm spawn counter, so a given
 // seed always produces the same sequence of storms (origin, track, texture).
 import * as THREE from 'three'
-import { rngFromString, makeNoise3D, fbm, clamp, lerp, smoothstep } from './util.js'
+import { SEA_LEVEL, rngFromString, makeNoise3D, fbm, clamp, lerp, smoothstep } from './util.js'
 
 // ---------------------------------------------------------------------------
 // Texture (procedural canvas, drawn once per storm spawn, polar coordinates
@@ -146,12 +146,15 @@ const RENDER_ORDER = 2 // above the cloud shells (sky.js leaves them at the defa
 // by `sizeScale`, re-centered on its own patch-center point (rather than the
 // planet origin) so that scaling the mesh grows/shrinks it toward its own
 // surface anchor instead of toward the planet's core. mesh.position must
-// then track (storm dir * PATCH_RADIUS) every frame -- see updateStorm().
-function buildPatch(sizeScale) {
+// then track (storm dir * radius) every frame -- see updateStorm(). `radius`
+// defaults to PATCH_RADIUS (the cloud patch itself); the M-SKY ocean-shadow
+// mesh reuses this same builder at SHADOW_RADIUS (just above sea level) so
+// its silhouette is pixel-identical to the storm's own shape.
+function buildPatch(sizeScale, radius = PATCH_RADIUS) {
   const phiLength = PATCH_PHI_LENGTH * sizeScale
   const thetaLength = PATCH_THETA_LENGTH * sizeScale
   const thetaStart = Math.PI / 2 - thetaLength / 2
-  const geo = new THREE.SphereGeometry(PATCH_RADIUS, PATCH_SEGMENTS, PATCH_SEGMENTS, 0, phiLength, thetaStart, thetaLength)
+  const geo = new THREE.SphereGeometry(radius, PATCH_SEGMENTS, PATCH_SEGMENTS, 0, phiLength, thetaStart, thetaLength)
 
   // SphereGeometry vertex formula: x=-sin(theta)cos(phi), y=cos(theta),
   // z=sin(theta)sin(phi). Patch center is at u=v=0.5 -> theta=PI/2 (always,
@@ -159,13 +162,83 @@ function buildPatch(sizeScale) {
   const phiCenter = phiLength / 2
   const centerDir = new THREE.Vector3(-Math.cos(phiCenter), 0, Math.sin(phiCenter)).normalize()
 
-  geo.translate(-centerDir.x * PATCH_RADIUS, -centerDir.y * PATCH_RADIUS, -centerDir.z * PATCH_RADIUS)
+  geo.translate(-centerDir.x * radius, -centerDir.y * radius, -centerDir.z * radius)
   geo.computeBoundingSphere()
-  return { geo, centerDir }
+  return { geo, centerDir, phiLength, thetaStart, thetaLength }
 }
 
 const PRIMARY_PATCH = buildPatch(1)
 const SECONDARY_PATCH = buildPatch(SECONDARY_SCALE)
+
+// M-SKY: the storm's soft shadow on the ocean -- same silhouette, sea level.
+const SHADOW_RADIUS = SEA_LEVEL + 0.001 // just above sea level
+const PRIMARY_SHADOW_PATCH = buildPatch(1, SHADOW_RADIUS)
+const SECONDARY_SHADOW_PATCH = buildPatch(SECONDARY_SCALE, SHADOW_RADIUS)
+
+/** Local-space unit direction -> a PATCH's own bounded UV window (phiStart
+ * is always 0 for these patches; see buildPatch). Same theta/phi formula as
+ * sky.js's localDirToUV for the full-sphere cloud shells, just remapped onto
+ * this patch's much smaller phi/theta sweep (~0.95 rad, not 2*PI/PI) instead
+ * of wrapped to a periodic [0,1) -- there's no seam to wrap around on a
+ * bounded patch, so (unlike sky.js) this is a plain, non-periodic remap.
+ * Only meaningful as a DIRECTION source (uSunUV - fragment's own uv, then
+ * normalized) rather than a literal sample position, which is why it stays
+ * well-behaved even though the sun usually sits well outside the patch's
+ * own [0,1] window -- and in practice it isn't THAT far outside: the
+ * sun-seeking behavior in updateStorm() keeps the storm within ~56 degrees
+ * of the sun whenever possible, comparable to the patch's own half-angle. */
+function localDirToPatchUV(dir, patch, out) {
+  const theta = Math.acos(clamp(dir.y, -1, 1))
+  const phi = Math.atan2(dir.z, -dir.x)
+  const uLocal = phi / patch.phiLength
+  const vLocal = (theta - patch.thetaStart) / patch.thetaLength
+  return out.set(uLocal, 1 - vLocal)
+}
+
+/** M-SKY 2.5D shading for the hurricane's own cloud material -- the SAME
+ * offset-toward-the-sun alphaMap trick sky.js's cloud shells use (see
+ * sky.js's applyStormClearing doc comment for the full rationale), just
+ * without the periodic U-wrap (this patch is a small bounded sweep, not a
+ * full sphere -- see localDirToPatchUV above). Returns this material's own
+ * {uSunUV} uniform (per-storm-slot, not shared -- see updateStorm()). */
+function applySunShading(mat) {
+  const sunShadeUniforms = { uSunUV: { value: new THREE.Vector2(0, 0) } }
+  mat.customProgramCacheKey = () => 'storm-sun-shade-v1'
+  mat.onBeforeCompile = (shader) => {
+    try {
+      Object.assign(shader.uniforms, sunShadeUniforms)
+      const frag = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform vec2 uSunUV;')
+        .replace(
+          '#include <alphamap_fragment>',
+          [
+            '#include <alphamap_fragment>',
+            '{',
+            '  vec2 toSun = uSunUV - vAlphaMapUv;',
+            '  float toSunLen = length(toSun);',
+            '  vec2 sunDirUv = toSunLen > 1e-5 ? toSun / toSunLen : vec2(1.0, 0.0);',
+            '  float ownDensity = texture2D(alphaMap, vAlphaMapUv).g;',
+            '  float sunSample = texture2D(alphaMap, vAlphaMapUv + sunDirUv * 0.015).g;',
+            '  // high density both here AND toward the sun -> shadowed base of a',
+            '  // thicker mass; low density toward the sun but cloud here -> a',
+            '  // sun-facing rim, catches a thin highlight.',
+            '  float shadowT = smoothstep(0.18, 0.7, sunSample) * ownDensity;',
+            '  float edgeT = (1.0 - smoothstep(0.05, 0.4, sunSample)) * ownDensity;',
+            '  vec3 shadeTint = vec3(0.7255, 0.7686, 0.8314);', // #b9c4d4
+            '  diffuseColor.rgb *= mix(vec3(1.0), shadeTint, shadowT * 0.6);',
+            '  diffuseColor.rgb *= 1.0 + edgeT * 0.08;',
+            '  diffuseColor.rgb = min(diffuseColor.rgb, vec3(1.0));', // stay white-dominant, never glow (ART.md 2.5/8)
+            '}',
+          ].join('\n')
+        )
+      if (frag === shader.fragmentShader) throw new Error('storms.js: sun-shading injection point not found')
+      shader.fragmentShader = frag
+    } catch (err) {
+      /* hurricane cloud material simply ignores sun-shading on failure */
+    }
+  }
+  return sunShadeUniforms
+}
 
 // ---------------------------------------------------------------------------
 // Behavior tunables
@@ -190,6 +263,12 @@ const CAM_FADE_FAR = 1.6
 const MIN_LAT = 0.1 // real hurricanes avoid the equator...
 const MAX_LAT = 0.65 // ...and the poles. (dir.y used as a cheap latitude proxy, as planet.js does)
 const SECOND_STORM_CHANCE = 0 // user rule: exactly one hurricane at a time (machinery kept dormant)
+
+// M-SKY: the storm's soft shadow on the ocean.
+const SHADOW_OPACITY = 0.22
+const SHADOW_SUN_PUSH = 0.09 // how far the shadow displaces from storm.dir, away from the sun
+const SHADOW_COLOR = 0x1c2733 // dark slate-blue -- multiply-style darkening, never pure black
+const SHADOW_RENDER_ORDER = 1 // above the plain ocean (default 0), below the storm's own cloud patch (RENDER_ORDER=2)
 
 const UP = new THREE.Vector3(0, 1, 0)
 const RIGHT = new THREE.Vector3(1, 0, 0)
@@ -234,6 +313,27 @@ function pickStormOrigin(rng, planet, out) {
   return out // fallback: last sample: rare in practice given ~30-40% land coverage
 }
 
+// M-SKY: the storm's soft shadow on the ocean -- a second, dark
+// semi-transparent patch mesh at sea level, same texture (silhouette) as the
+// storm's own alphaMap, tracking the same drift/spin each frame but
+// displaced away from the sun (see updateStorm). Plain MeshBasicMaterial
+// (unlit, flat, predictable darkness) rather than the shaded cloud
+// material -- a shadow is an absence of light, not a lit surface.
+function createShadowSlot(sizeScale) {
+  const patch = sizeScale === 1 ? PRIMARY_SHADOW_PATCH : SECONDARY_SHADOW_PATCH
+  const material = new THREE.MeshBasicMaterial({
+    color: SHADOW_COLOR,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.NormalBlending, // "multiply-style" via a dark, low-opacity color -- true MultiplyBlending is order-fragile with other transparents
+    opacity: 0,
+  })
+  const mesh = new THREE.Mesh(patch.geo, material)
+  mesh.renderOrder = SHADOW_RENDER_ORDER
+  mesh.visible = false
+  return { mesh, material, patch }
+}
+
 function createStormSlot(sizeScale) {
   const patch = sizeScale === 1 ? PRIMARY_PATCH : SECONDARY_PATCH
   const material = new THREE.MeshStandardMaterial({
@@ -244,6 +344,7 @@ function createStormSlot(sizeScale) {
     metalness: 0,
     opacity: 0,
   })
+  const sunShadeUniforms = applySunShading(material)
   const mesh = new THREE.Mesh(patch.geo, material)
   mesh.renderOrder = RENDER_ORDER
   mesh.visible = false
@@ -251,6 +352,8 @@ function createStormSlot(sizeScale) {
     mesh,
     material,
     patch,
+    sunShadeUniforms,
+    shadow: createShadowSlot(sizeScale),
     texture: null,
     dir: new THREE.Vector3(),
     axis: new THREE.Vector3(),
@@ -273,7 +376,7 @@ export function createStorms(planet, camera, seed) {
 
   const slotA = createStormSlot(1) // always present
   const slotB = createStormSlot(SECONDARY_SCALE) // sometimes present, smaller
-  group.add(slotA.mesh, slotB.mesh)
+  group.add(slotA.mesh, slotB.mesh, slotA.shadow.mesh, slotB.shadow.mesh)
 
   // Deterministic sequence: rngFromString(seed + ':storm:' + counter). One
   // rng draws the whole storm -- origin, track, lifetime, and texture -- so
@@ -297,10 +400,15 @@ export function createStorms(planet, camera, seed) {
     storm.texture = makeHurricaneTexture(rng, spawnSeed + ':tex', storm.spinSign)
     storm.material.alphaMap = storm.texture
     storm.material.opacity = 0
+    // Ocean shadow reuses the SAME texture -- its silhouette always matches
+    // the cloud patch actually rendered overhead.
+    storm.shadow.material.alphaMap = storm.texture
+    storm.shadow.material.opacity = 0
 
     storm.mesh.scale.setScalar(MIN_SPAWN_SCALE)
     storm.active = true
     storm.mesh.visible = true
+    storm.shadow.mesh.visible = true
   }
 
   spawn(slotA)
@@ -316,11 +424,15 @@ export function createStorms(planet, camera, seed) {
   function finishB() {
     slotB.active = false
     slotB.mesh.visible = false
+    slotB.shadow.mesh.visible = false
   }
 
   // Scratch -- reused every frame across both slots, never reallocated.
   const orientQuat = new THREE.Quaternion()
   const spinQuat = new THREE.Quaternion()
+  const _invQuatStorm = new THREE.Quaternion()
+  const _localSunStorm = new THREE.Vector3()
+  const _shadowDirStorm = new THREE.Vector3()
 
   function updateStorm(storm, onFinish, dt) {
     if (!storm.active) return
@@ -397,6 +509,28 @@ export function createStorms(planet, camera, seed) {
     const camDist = camera.position.length()
     const camFade = smoothstep(CAM_FADE_NEAR, CAM_FADE_FAR, camDist)
     storm.material.opacity = lifecycleOpacity * camFade
+
+    // M-SKY 2.5D shading: project the sun into this patch's own local UV
+    // space (mesh.quaternion was just set above) — see applySunShading.
+    if (_hasSun) {
+      _invQuatStorm.copy(storm.mesh.quaternion).invert()
+      _localSunStorm.copy(_sunDir).applyQuaternion(_invQuatStorm)
+      localDirToPatchUV(_localSunStorm, storm.patch, storm.sunShadeUniforms.uSunUV.value)
+    }
+
+    // M-SKY ocean shadow: same drift/spin as the storm's own cloud patch
+    // (reuses orientQuat/spinQuat, already done with storm.mesh above this
+    // frame), just at sea level and displaced slightly AWAY from the sun --
+    // a cloud's shadow falls on the ground on the far side from the light.
+    _shadowDirStorm.copy(storm.dir)
+    if (_hasSun) _shadowDirStorm.addScaledVector(_sunDir, -SHADOW_SUN_PUSH)
+    _shadowDirStorm.normalize()
+    orientQuat.setFromUnitVectors(storm.shadow.patch.centerDir, _shadowDirStorm)
+    spinQuat.setFromAxisAngle(storm.shadow.patch.centerDir, storm.spinAngle)
+    storm.shadow.mesh.quaternion.copy(orientQuat).multiply(spinQuat)
+    storm.shadow.mesh.position.copy(_shadowDirStorm).multiplyScalar(SHADOW_RADIUS)
+    storm.shadow.mesh.scale.copy(storm.mesh.scale)
+    storm.shadow.material.opacity = lifecycleOpacity * camFade * SHADOW_OPACITY
   }
 
   let sunPrimed = false
