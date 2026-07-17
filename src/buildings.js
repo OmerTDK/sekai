@@ -338,3 +338,230 @@ export function buildPersonGroup(race) {
 
   return g
 }
+
+// ---------------------------------------------------------------------------
+// M2 asset-kit recipes — consumed by src/assets.js to assemble Kenney/
+// Quaternius GLB/glTF parts into merged BatchedMesh geometry. Kept here (not
+// in assets.js) so all visual tuning lives in one place alongside the
+// palettes/kit sizes above, per the M2 program plan. buildKit() and friends
+// above are UNCHANGED and remain the procedural fallback for when the asset
+// pack fails to load (assets.js returns { ready: false } in that case).
+//
+// Coordinates are each vendor's own native module space (Kenney ~1 unit per
+// wall module, Quaternius ~2 unit modules / ~3.1 unit wall height); assets.js
+// normalizes every merged (type,tier) recipe to the same "roughly 1 unit
+// tall" authored convention buildTower/buildHall/etc. use above, so
+// KIT_UNIT_SIZE/TIER_MULT keep applying unchanged to either path — the asset
+// path is not a second, independently-tuned size system.
+// ---------------------------------------------------------------------------
+
+export const ASSET_BASE = '/models/'
+
+// Color role -> hex, reusing the exact flat palette the procedural kits use.
+export const ROLE_COLOR = {
+  wood: COLOR_WOOD,
+  whitewash: COLOR_WHITEWASH,
+  stone: COLOR_STONE,
+  dark: COLOR_DARK,
+  field: COLOR_FIELD_A,
+}
+// 'roof' and 'banner' are the two TINTABLE roles: assets.js bakes them as
+// pure white vertex color and applies the race palette via BatchedMesh's
+// per-instance setColorAt at createStructureVisual time. Every role in
+// ROLE_COLOR above is baked as a fixed neutral color and never tinted —
+// mirrors raceMat() only touching 'roof'/'banner'/'accent' above.
+export const TINTABLE_ROLES = ['roof', 'banner']
+
+// Kenney parts all carry one generic "colormap" material (no semantic name —
+// see public/models/SOURCES.md), so color role is decided by filename
+// substring, first match wins, default 'stone' (most Kenney parts used here
+// are the unpainted stone wall/roof family).
+export const KENNEY_PART_ROLES = [
+  ['roof', 'roof'],
+  ['banner', 'banner'],
+  ['chimney', 'dark'],
+  ['lantern', 'dark'],
+  ['wood', 'wood'],
+  ['fence', 'wood'],
+  ['hedge', 'field'],
+  ['stall', 'wood'],
+  ['plank', 'wood'],
+  ['pole', 'wood'],
+  ['overhang', 'wood'],
+  ['cart', 'wood'],
+]
+export const KENNEY_DEFAULT_ROLE = 'stone'
+
+// Quaternius parts keep their descriptive per-primitive material NAME
+// (textures/samplers/images stripped, name preserved — see SOURCES.md) —
+// role decided by that name, first match wins, same 'stone' default.
+export const MATERIAL_NAME_ROLES = [
+  ['RoundTiles', 'roof'],
+  ['WoodTrim', 'wood'],
+  ['Plaster', 'whitewash'],
+  ['UnevenBrick', 'stone'],
+  ['RockTrim', 'stone'],
+  ['Brick', 'stone'],
+  ['MetalOrnaments', 'dark'],
+]
+
+// --- Kenney recipes: tier1 "modest" / tier2 "bigger, extended" -------------
+// Each part: { u: filename in public/models/kenney/, x,y,z: local position,
+// ry: Y rotation radians }. Kenney wall parts are pre-offset to their own
+// 1x1 cell edge, so a plain 4-way ring only needs to rotate about a shared
+// origin (no per-side XZ offset) — same convention spikes/s5/scene.js used.
+const kPart = (u, x, y, z, ry = 0) => ({ u, x, y, z, ry })
+const RING_RY = [0, Math.PI / 2, Math.PI, -Math.PI / 2]
+function kRing(urls, y) {
+  return urls.map((u, i) => kPart(u, 0, y, 0, RING_RY[i]))
+}
+
+export const KIT_RECIPES = {
+  tower: {
+    tier1: [...kRing(['wall-door.glb', 'wall-block.glb', 'wall-block.glb', 'wall-window-shutters.glb'], 0), kPart('roof-high-point.glb', 0, 1, 0)],
+    tier2: [
+      ...kRing(['wall-door.glb', 'wall-block.glb', 'wall-block.glb', 'wall-window-shutters.glb'], 0),
+      ...kRing(['wall-block.glb', 'wall-window-shutters.glb', 'wall-block.glb', 'wall-window-shutters.glb'], 1),
+      kPart('roof-high-point.glb', 0, 2, 0),
+      kPart('pillar-stone.glb', 0.62, 0, 0.55),
+      kPart('pillar-stone.glb', -0.62, 0, 0.55),
+    ],
+  },
+  hall: {
+    tier1: [
+      ...kRing(['wall-wood-door.glb', 'wall-wood-block.glb', 'wall-wood-block.glb', 'wall-wood-window-shutters.glb'], 0),
+      kPart('roof-high-gable.glb', 0, 1, 0),
+      kPart('chimney-base.glb', -0.25, 0.75, -0.25),
+      kPart('chimney.glb', -0.25, 1.75, -0.25),
+    ],
+    tier2: [
+      ...kRing(['wall-wood-door.glb', 'wall-wood-block.glb', 'wall-wood-block.glb', 'wall-wood-window-shutters.glb'], 0),
+      kPart('roof-high-gable.glb', 0, 1, 0),
+      kPart('roof-gable-top.glb', 0, 1.85, 0),
+      kPart('chimney-base.glb', -0.25, 0.75, -0.25),
+      kPart('chimney.glb', -0.25, 1.75, -0.25),
+      kPart('overhang.glb', 0, 1.0, 0.55),
+      kPart('pillar-wood.glb', 0.38, 0, 0.6),
+      kPart('pillar-wood.glb', -0.38, 0, 0.6),
+    ],
+  },
+  farm: {
+    tier1: [
+      ...kRing(['wall-wood-door.glb', 'wall-wood-block.glb', 'wall-wood-block.glb', 'wall-wood-block.glb'], 0),
+      kPart('roof-gable.glb', 0, 1, 0),
+      kPart('hedge.glb', 0.9, 0, -0.45, Math.PI / 2),
+      kPart('hedge.glb', 0.9, 0, -0.1, Math.PI / 2),
+      kPart('hedge.glb', 0.9, 0, 0.25, Math.PI / 2),
+      kPart('fence-gate.glb', 0.9, 0, 0.6, Math.PI / 2),
+    ],
+    tier2: [
+      ...kRing(['wall-wood-door.glb', 'wall-wood-block.glb', 'wall-wood-block.glb', 'wall-wood-block.glb'], 0),
+      kPart('roof-gable.glb', 0, 1, 0),
+      kPart('hedge.glb', 0.9, 0, -0.6, Math.PI / 2),
+      kPart('hedge.glb', 0.9, 0, -0.25, Math.PI / 2),
+      kPart('hedge.glb', 0.9, 0, 0.1, Math.PI / 2),
+      kPart('hedge.glb', 0.9, 0, 0.45, Math.PI / 2),
+      kPart('fence-gate.glb', 0.9, 0, 0.8, Math.PI / 2),
+      kPart('cart.glb', -0.85, 0, 0.55, 0.4),
+      kPart('stall.glb', -0.8, 0, -0.55, -0.5),
+    ],
+  },
+  barracks: {
+    tier1: [...kRing(['wall-door.glb', 'wall-block.glb', 'wall-block.glb', 'wall-block.glb'], 0), kPart('roof-flat.glb', 0, 1, 0), kPart('banner-red.glb', 0.55, 0, 0.55)],
+    tier2: [
+      ...kRing(['wall-door.glb', 'wall-block.glb', 'wall-block.glb', 'wall-block.glb'], 0),
+      kPart('roof-flat.glb', 0, 1, 0),
+      kPart('banner-red.glb', 0.55, 0, 0.55),
+      kPart('banner-green.glb', -0.55, 0, 0.55),
+      kPart('stairs-stone.glb', 0, 0, 0.65),
+      kPart('fence-gate.glb', 0, 0, 0.95),
+    ],
+  },
+  observatory: {
+    tier1: [
+      ...kRing(['wall-door.glb', 'wall-block.glb', 'wall-window-glass.glb', 'wall-window-glass.glb'], 0),
+      kPart('roof-corner-round.glb', 0, 1, 0),
+      kPart('pillar-stone.glb', 0.55, 0, 0.55),
+      kPart('pillar-stone.glb', -0.55, 0, 0.55),
+    ],
+    tier2: [
+      ...kRing(['wall-door.glb', 'wall-block.glb', 'wall-window-glass.glb', 'wall-window-glass.glb'], 0),
+      ...kRing(['wall-window-glass.glb', 'wall-window-glass.glb', 'wall-window-glass.glb', 'wall-window-glass.glb'], 1),
+      kPart('roof-high-corner-round.glb', 0, 2, 0),
+      kPart('pillar-stone.glb', 0.55, 0, 0.55),
+      kPart('pillar-stone.glb', -0.55, 0, 0.55),
+      kPart('stairs-stone.glb', 0, 0, 0.65),
+    ],
+  },
+  library: {
+    tier1: [
+      ...kRing(['wall-door.glb', 'wall-window-glass.glb', 'wall-block.glb', 'wall-window-glass.glb'], 0),
+      kPart('roof-flat.glb', 0, 1, 0),
+      kPart('pillar-stone.glb', 0.6, 0, 0.55),
+      kPart('pillar-stone.glb', -0.6, 0, 0.55),
+    ],
+    tier2: [
+      ...kRing(['wall-door.glb', 'wall-window-glass.glb', 'wall-block.glb', 'wall-window-glass.glb'], 0),
+      kPart('roof-flat.glb', 0, 1, 0),
+      kPart('roof-gable-top.glb', 0, 1.8, 0),
+      kPart('pillar-stone.glb', 0.6, 0, 0.55),
+      kPart('pillar-stone.glb', -0.6, 0, 0.55),
+      kPart('pillar-stone.glb', 0.35, 0, 0.62),
+      kPart('pillar-stone.glb', -0.35, 0, 0.62),
+      kPart('stairs-stone.glb', 0, 0, 0.7),
+    ],
+  },
+  forge: {
+    tier1: [
+      ...kRing(['wall-door.glb', 'wall-block.glb', 'wall-block.glb', 'wall-block.glb'], 0),
+      kPart('roof-flat.glb', 0, 1, 0),
+      kPart('chimney-base.glb', 0.22, 0.75, -0.2),
+      kPart('chimney.glb', 0.22, 1.75, -0.2),
+    ],
+    tier2: [
+      ...kRing(['wall-door.glb', 'wall-block.glb', 'wall-block.glb', 'wall-block.glb'], 0),
+      kPart('roof-flat.glb', 0, 1, 0),
+      kPart('chimney-base.glb', 0.22, 0.75, -0.2),
+      kPart('chimney.glb', 0.22, 1.75, -0.2),
+      kPart('chimney-base.glb', -0.22, 0.75, -0.22),
+      kPart('chimney.glb', -0.22, 1.75, -0.22),
+      kPart('planks.glb', 0.6, 0, 0.5),
+      kPart('stairs-stone.glb', 0, 0, 0.65),
+    ],
+  },
+}
+
+// --- Quaternius tier-3 "grand" recipe: shared shell, per-type roof swap ----
+// The shell is the exact wall+chimney assembly spikes/s5/scene.js validated
+// (buildQuaterniusHouse); every type shares it (all 7 tier-3 buildings are
+// the same grand footprint) and only the roof + bolt-on set differ per type,
+// per the M2 art verdict ("Quaternius reserved for grand tier-3 landmarks").
+const qPart = (u, x, y, z, ry = 0) => ({ u, x, y, z, ry })
+const Q_WALL_TOP_Y = 3.1227
+const QUATERNIUS_SHELL = [
+  qPart('Wall_UnevenBrick_Door_Flat.gltf', 0, 0, 1, 0),
+  qPart('Wall_UnevenBrick_Straight.gltf', 0, 0, -1, Math.PI),
+  qPart('Wall_UnevenBrick_Window_Wide_Flat.gltf', -1, 0, 0, -Math.PI / 2),
+  qPart('Wall_UnevenBrick_Straight.gltf', 1, 0, 0, Math.PI / 2),
+  qPart('Prop_Chimney.gltf', -0.6, Q_WALL_TOP_Y, -0.6, 0),
+]
+const QUATERNIUS_ROOF_DEFAULT = [qPart('Roof_Wooden_2x1_Center.gltf', 0, Q_WALL_TOP_Y, 0, 0), qPart('Roof_Wooden_2x1_Center.gltf', 0, Q_WALL_TOP_Y, 0, Math.PI)]
+const QUATERNIUS_ROOF_TOWER = [qPart('Roof_Tower_RoundTiles.gltf', 0, Q_WALL_TOP_Y, 0, 0)]
+
+export const GRAND_RECIPES = {}
+for (const gtype of ['tower', 'hall', 'farm', 'barracks', 'observatory', 'library', 'forge']) {
+  GRAND_RECIPES[gtype] = [...QUATERNIUS_SHELL, ...(gtype === 'tower' ? QUATERNIUS_ROOF_TOWER : QUATERNIUS_ROOF_DEFAULT)]
+}
+
+// --- Steampunk bolt-on density, per §0.5 (dwarf full-industrial, human
+// medieval-clockwork, orc scrap-punk, elf organic/least) -------------------
+// Tier 1-2 get exactly the listed kinds (count IS the density signal); tier 3
+// always gets the full {gear,pipe,tank} set plus an optional 2nd gear for the
+// races with the densest machinery.
+export const BOLT_ON_KINDS_BY_RACE = {
+  dwarf: ['gear', 'pipe', 'tank'],
+  human: ['gear', 'pipe'],
+  orc: ['pipe', 'tank'],
+  elf: ['gear'],
+}
+export const BOLT_ON_SECOND_GEAR_RACES = ['dwarf', 'orc']
