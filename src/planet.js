@@ -2,16 +2,39 @@
 // from deterministic noise fields, plus a subtly animated translucent ocean
 // shell. Everything is derived from `seed` so the same seed always yields the
 // same planet.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+// M3/TSL: the terrain + ocean shader customizations are node graphs now
+// (the classic string-injection compile hook is silently ignored under
+// WebGPURenderer). These are the exact node factories/accessors used below.
+import {
+  Fn,
+  If,
+  attribute,
+  uniform,
+  texture,
+  color,
+  vec2,
+  vec3,
+  mix,
+  step,
+  atan,
+  positionGeometry,
+  positionLocal,
+  positionView,
+  positionWorld,
+  normalLocal,
+  normalWorld,
+  cameraPosition,
+  transformNormalToView,
+} from 'three/tsl'
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js'
 import { SEA_LEVEL, makeNoise3D, fbm, ridged, clamp, smoothstep } from './util.js'
 // M-SKY cloud-shadows-on-terrain: architect-pinned contract, see sky.js's
 // getCloudShadowUniforms() doc comment for the uniform shapes and the
-// world-dir -> shell-UV formula this file's onBeforeCompile block replicates
-// in GLSL. Imported at the top per normal ES-module style; the GETTER is
-// still called lazily (inside onBeforeCompile, not at module load) and
-// guarded (its own try/catch + warn-once flag below) so a contract mismatch
-// degrades gracefully instead of breaking terrain rendering.
+// world-dir -> shell-UV formula the terrain colorNode below replicates in
+// TSL. Imported at the top per normal ES-module style; the GETTER is called
+// once at construction and guarded (try/catch + warn-once flag below) so a
+// contract mismatch degrades gracefully instead of breaking terrain rendering.
 import { getCloudShadowUniforms } from './sky.js'
 
 // ---------------------------------------------------------------------------
@@ -130,24 +153,51 @@ const OCEAN_SHALLOW_MUL = [1.06, 1.16, 1.14]
 const OCEAN_DEEP_MUL = [1, 1, 1]
 
 // ---------------------------------------------------------------------------
-// Silent-fallback rule: every graceful-degradation path warns exactly once
-// (module-level flags, since onBeforeCompile can re-run on shader recompile).
+// Silent-fallback rule: every graceful-degradation path warns exactly once.
 // ---------------------------------------------------------------------------
-let warnedTerrainSplat = false
-let warnedOceanShader = false
 let warnedCloudShadow = false
 let warnedNormalMapLoad = false
 
-// Guarded shader-chunk injection: replaces an `#include <x>` anchor with
-// itself + extra GLSL lines, throwing if the anchor wasn't found (guards
-// against three.js shader-chunk drift across versions -- ported from the
-// ld-water spike's `mustInject` helper). Used by the ocean material's
-// extended onBeforeCompile below; callers wrap it in try/catch + warn-once
-// per the silent-fallback rule above.
-function injectShaderChunk(src, marker, lines) {
-  const out = src.replace(marker, marker + '\n' + lines.join('\n'))
-  if (out === src) throw new Error('planet.js: injection point "' + marker + '" not found')
-  return out
+// ---------------------------------------------------------------------------
+// TSL node helpers (M3): the terrain splat/detail-normal chains, formerly GLSL
+// injected as shader-chunk strings, are node composition now. These build
+// lazily inside the colorNode/normalNode Fn graphs (which supply the stack).
+// ---------------------------------------------------------------------------
+
+// Tangentless triplanar albedo blend: sample `texNode` on the three world
+// planes (yz/xz/xy) of object-space position `p`, blended by the per-axis
+// weights `bw`. Mirrors planet.js's former GLSL triplanar() exactly.
+function triplanarColor(texNode, p, bw, scale) {
+  const cx = texNode.sample(p.yz.mul(scale)).rgb
+  const cy = texNode.sample(p.xz.mul(scale)).rgb
+  const cz = texNode.sample(p.xy.mul(scale)).rgb
+  return cx.mul(bw.x).add(cy.mul(bw.y)).add(cz.mul(bw.z))
+}
+
+// Tangentless "whiteout" triplanar normal blend — folds the in-plane
+// components of the flat object-space normal `n` into each planar sample
+// before the final swizzle (no per-vertex tangent needed). Mirrors the former
+// GLSL triplanarNormal(); returns a perturbed object-space normal.
+function triplanarNormalSample(texNode, p, n, bw, scale) {
+  const tx = texNode.sample(p.yz.mul(scale)).xyz.mul(2).sub(1).toVar()
+  const ty = texNode.sample(p.xz.mul(scale)).xyz.mul(2).sub(1).toVar()
+  const tz = texNode.sample(p.xy.mul(scale)).xyz.mul(2).sub(1).toVar()
+  tx.assign(vec3(tx.xy.add(n.yz), tx.z.abs().mul(n.x)))
+  ty.assign(vec3(ty.xy.add(n.xz), ty.z.abs().mul(n.y)))
+  tz.assign(vec3(tz.xy.add(n.xy), tz.z.abs().mul(n.z)))
+  return tx.zxy.mul(bw.x).add(ty.xzy.mul(bw.y)).add(tz.xyz.mul(bw.z)).normalize()
+}
+
+// 1x1 placeholder so every texture() node has a valid, correctly-colorspaced
+// texture at graph-build time; the async loaders swap in the real maps via
+// `.value` (a cheap binding refresh, never a graph rebuild). Detail/normal
+// layers stay gated off (uDetailOn/uNormalOn = 0) until their four maps land,
+// so the placeholder is never visible.
+function makePlaceholderTexture(colorSpace, rgba) {
+  const tex = new THREE.DataTexture(new Uint8Array(rgba), 1, 1)
+  tex.colorSpace = colorSpace
+  tex.needsUpdate = true
+  return tex
 }
 
 export function createPlanet(seed) {
@@ -448,12 +498,22 @@ export function createPlanet(seed) {
   terrainGeo.computeVertexNormals()
   terrainGeo.computeBoundingSphere()
 
-  const terrainMat = new THREE.MeshStandardMaterial({
-    vertexColors: true,
+  const terrainMat = new THREE.MeshStandardNodeMaterial({
+    // M3/TSL: vertexColors is intentionally NOT set. The vertex color is
+    // consumed inside colorNode (attribute('color')) so the former GLSL's
+    // per-layer clamp(diffuseColor, 0, 1) — which clamps the vColor * detail
+    // PRODUCT after the near-detail and macro layers — can be reproduced
+    // exactly. NodeMaterial's own vertexColors path multiplies vColor AFTER
+    // colorNode, which would defeat that clamp. Vertex colors are fully
+    // preserved, just applied in-graph.
     flatShading: false, // smooth fields, crisp band edges — no triangle mosaics
     roughness: 0.95,
     metalness: 0,
   })
+
+  // Per-vertex biome splat weights (grass/rock/sand/snow), read by both the
+  // colorNode and normalNode graphs below.
+  const biomeW = attribute('biomeW', 'vec4')
 
   // "HD" ground detail: real CC0 material textures (ambientCG), triplanar-
   // mapped per pixel (no UVs, no seams on a sphere) and blended by the
@@ -462,7 +522,7 @@ export function createPlanet(seed) {
   // orbit views stay clean; uDetailOn stays 0 until all four maps are loaded.
   //
   // M-POLISH surface-crispness pass adds two more layers on this same
-  // triplanar plumbing (see onBeforeCompile below): (1) NormalGL detail
+  // triplanar plumbing (see colorNode/normalNode below): (1) NormalGL detail
   // normal maps, perturbing the shaded normal at the same near-camera fade
   // + biomeW blend as the albedo above (uNormalOn gates once all four
   // normal maps load, independently of uDetailOn so one missing/failed
@@ -472,31 +532,41 @@ export function createPlanet(seed) {
   // have already faded — breaks up the flat interpolated-vertex-color look
   // at mid zoom without fighting the close-up detail. Sources for all eight
   // (four Color + four NormalGL) maps: public/textures/SOURCES.md.
+  //
+  // TSL wiring: one texture() node per map (re-sampled at three planar UVs by
+  // triplanarColor/triplanarNormalSample), swapped from placeholder to loaded
+  // map via `.value` in the loader callbacks; uDetailOn/uNormalOn are
+  // uniform() gates flipped to 1 once each group's four maps land.
   const texLoader = new THREE.TextureLoader()
-  const detailUniforms = {
-    uDetailOn: { value: 0 },
-    uGrassTex: { value: null },
-    uRockTex: { value: null },
-    uSandTex: { value: null },
-    uSnowTex: { value: null },
-  }
+  // NoColorSpace (raw): the pre-port GLSL read these detail albedo maps via a
+  // hand-written texture2D().rgb sampler, which does NOT sRGB-decode. The
+  // near/macro detail constants (det/0.45, clamp 0.35..1.9 / 0.94..1.06) are
+  // calibrated to those RAW ~sRGB mid-gray texels; TSL texture() auto-decodes
+  // an SRGBColorSpace map, halving mid-zoom albedo. Reading raw keeps the
+  // original calibration. (Normal maps below are separately NoColorSpace.)
+  const colorPlaceholder = makePlaceholderTexture(THREE.NoColorSpace, [128, 128, 128, 255])
+  const uDetailOn = uniform(0)
+  const grassTexNode = texture(colorPlaceholder)
+  const rockTexNode = texture(colorPlaceholder)
+  const sandTexNode = texture(colorPlaceholder)
+  const snowTexNode = texture(colorPlaceholder)
   {
-    const files = {
-      uGrassTex: '/textures/Grass004_1K-JPG_Color.jpg',
-      uRockTex: '/textures/Rock030_1K-JPG_Color.jpg',
-      uSandTex: '/textures/Ground080_1K-JPG_Color.jpg',
-      uSnowTex: '/textures/Snow_Color.jpg',
-    }
+    const files = [
+      [grassTexNode, '/textures/Grass004_1K-JPG_Color.jpg'],
+      [rockTexNode, '/textures/Rock030_1K-JPG_Color.jpg'],
+      [sandTexNode, '/textures/Ground080_1K-JPG_Color.jpg'],
+      [snowTexNode, '/textures/Snow_Color.jpg'],
+    ]
     let loaded = 0
-    const total = Object.keys(files).length
-    for (const [key, url] of Object.entries(files)) {
+    const total = files.length
+    for (const [node, url] of files) {
       texLoader.load(url, (tex) => {
         tex.wrapS = THREE.RepeatWrapping
         tex.wrapT = THREE.RepeatWrapping
-        tex.colorSpace = THREE.SRGBColorSpace
+        tex.colorSpace = THREE.NoColorSpace // read raw ~sRGB texels (no decode) to match the pre-port GLSL sampler the detail constants were tuned for
         tex.anisotropy = 8 // keeps ground texture crisp at grazing angles
-        detailUniforms[key].value = tex
-        if (++loaded === total) detailUniforms.uDetailOn.value = 1
+        node.value = tex
+        if (++loaded === total) uDetailOn.value = 1
       })
     }
   }
@@ -506,23 +576,22 @@ export function createPlanet(seed) {
   // above but gated by their OWN uNormalOn flag -- a missing/failed normal
   // map degrades to flat (unperturbed) shading without blocking the albedo
   // detail layer, and vice versa.
-  const normalUniforms = {
-    uNormalOn: { value: 0 },
-    uGrassNrm: { value: null },
-    uRockNrm: { value: null },
-    uSandNrm: { value: null },
-    uSnowNrm: { value: null },
-  }
+  const normalPlaceholder = makePlaceholderTexture(THREE.NoColorSpace, [128, 128, 255, 255])
+  const uNormalOn = uniform(0)
+  const grassNrmNode = texture(normalPlaceholder)
+  const rockNrmNode = texture(normalPlaceholder)
+  const sandNrmNode = texture(normalPlaceholder)
+  const snowNrmNode = texture(normalPlaceholder)
   {
-    const files = {
-      uGrassNrm: '/textures/Grass004_1K-JPG_NormalGL.jpg',
-      uRockNrm: '/textures/Rock030_1K-JPG_NormalGL.jpg',
-      uSandNrm: '/textures/Ground080_1K-JPG_NormalGL.jpg',
-      uSnowNrm: '/textures/Snow_NormalGL.jpg',
-    }
+    const files = [
+      [grassNrmNode, '/textures/Grass004_1K-JPG_NormalGL.jpg'],
+      [rockNrmNode, '/textures/Rock030_1K-JPG_NormalGL.jpg'],
+      [sandNrmNode, '/textures/Ground080_1K-JPG_NormalGL.jpg'],
+      [snowNrmNode, '/textures/Snow_NormalGL.jpg'],
+    ]
     let loaded = 0
-    const total = Object.keys(files).length
-    for (const [key, url] of Object.entries(files)) {
+    const total = files.length
+    for (const [node, url] of files) {
       texLoader.load(
         url,
         (tex) => {
@@ -530,8 +599,8 @@ export function createPlanet(seed) {
           tex.wrapT = THREE.RepeatWrapping
           tex.colorSpace = THREE.NoColorSpace // normal maps encode directions, not sRGB color
           tex.anisotropy = 8
-          normalUniforms[key].value = tex
-          if (++loaded === total) normalUniforms.uNormalOn.value = 1
+          node.value = tex
+          if (++loaded === total) uNormalOn.value = 1
         },
         undefined,
         (err) => {
@@ -549,220 +618,120 @@ export function createPlanet(seed) {
     }
   }
 
-  terrainMat.customProgramCacheKey = () => 'terrain-splat-v2'
-  terrainMat.onBeforeCompile = (shader) => {
-    try {
-      Object.assign(shader.uniforms, detailUniforms)
-      Object.assign(shader.uniforms, normalUniforms)
-      shader.vertexShader = shader.vertexShader
-        .replace(
-          '#include <common>',
-          '#include <common>\nattribute vec4 biomeW;\nvarying vec4 vBiomeW;\nvarying vec3 vDetailPos;\nvarying vec3 vObjNormal;',
-        )
-        .replace(
-          '#include <begin_vertex>',
-          '#include <begin_vertex>\nvDetailPos = position;\nvObjNormal = normal;\nvBiomeW = biomeW;',
-        )
-      const frag = shader.fragmentShader
-        .replace(
-          '#include <common>',
-          [
-            '#include <common>',
-            'uniform float uDetailOn;',
-            'uniform sampler2D uGrassTex;',
-            'uniform sampler2D uRockTex;',
-            'uniform sampler2D uSandTex;',
-            'uniform sampler2D uSnowTex;',
-            'uniform float uNormalOn;',
-            'uniform sampler2D uGrassNrm;',
-            'uniform sampler2D uRockNrm;',
-            'uniform sampler2D uSandNrm;',
-            'uniform sampler2D uSnowNrm;',
-            // Not declared elsewhere in this shader (no .normalMap set, so
-            // three.js never emits normalmap_pars_fragment's own copy) --
-            // three.js still fills it in every frame regardless of which
-            // chunk declared it, the same per-object uniform refresh that
-            // powers USE_NORMALMAP_OBJECTSPACE's normal_fragment_maps path.
-            'uniform mat3 normalMatrix;',
-            'varying vec4 vBiomeW;',
-            'varying vec3 vDetailPos;',
-            'varying vec3 vObjNormal;',
-            'vec3 triplanar(sampler2D tex, vec3 p, vec3 bw, float scale) {',
-            '  vec3 cx = texture2D(tex, p.yz * scale).rgb;',
-            '  vec3 cy = texture2D(tex, p.xz * scale).rgb;',
-            '  vec3 cz = texture2D(tex, p.xy * scale).rgb;',
-            '  return cx * bw.x + cy * bw.y + cz * bw.z;',
-            '}',
-            'vec3 triplanarNormal(sampler2D tex, vec3 p, vec3 n, vec3 bw, float scale) {',
-            '  vec3 tx = texture2D(tex, p.yz * scale).xyz * 2.0 - 1.0;',
-            '  vec3 ty = texture2D(tex, p.xz * scale).xyz * 2.0 - 1.0;',
-            '  vec3 tz = texture2D(tex, p.xy * scale).xyz * 2.0 - 1.0;',
-            '  // Whiteout blend -- the standard tangentless triplanar normal',
-            '  // technique: fold the in-plane components of the flat object-',
-            '  // space normal into each planar sample before the final',
-            '  // swizzle (no per-vertex tangent/bitangent needed). Same',
-            '  // p.yz/p.xz/p.xy sample axes as triplanar() above so bumps',
-            '  // register under the matching albedo pixel.',
-            '  tx = vec3(tx.xy + n.yz, abs(tx.z) * n.x);',
-            '  ty = vec3(ty.xy + n.xz, abs(ty.z) * n.y);',
-            '  tz = vec3(tz.xy + n.xy, abs(tz.z) * n.z);',
-            '  return normalize(tx.zxy * bw.x + ty.xzy * bw.y + tz.xyz * bw.z);',
-            '}',
-          ].join('\n'),
-        )
-        .replace(
-          '#include <color_fragment>',
-          [
-            '#include <color_fragment>',
-            '{',
-            '  float dNear = 1.0 - smoothstep(0.3, 1.7, length(vViewPosition));',
-            '  if (uDetailOn > 0.5 && dNear > 0.003) {',
-            '    vec3 n = normalize(vObjNormal);',
-            '    vec3 bw = abs(n);',
-            '    bw /= (bw.x + bw.y + bw.z);',
-            '    const float TILE = 80.0; // chunky stylized tiles: readable features, no sub-pixel mush',
-            '    vec3 det = triplanar(uGrassTex, vDetailPos, bw, TILE) * vBiomeW.x',
-            '             + triplanar(uRockTex,  vDetailPos, bw, TILE) * vBiomeW.y',
-            '             + triplanar(uSandTex,  vDetailPos, bw, TILE) * vBiomeW.z',
-            '             + triplanar(uSnowTex,  vDetailPos, bw, TILE) * vBiomeW.w;',
-            '    float wTot = vBiomeW.x + vBiomeW.y + vBiomeW.z + vBiomeW.w;',
-            '    det /= max(wTot, 0.001);',
-            '    // divide by per-blend mid-gray so the vertex color keeps owning the hue',
-            '    vec3 mult = det / vec3(0.45);',
-            '    diffuseColor.rgb *= mix(vec3(1.0), clamp(mult, 0.35, 1.9), dNear * 0.95);',
-            '    diffuseColor.rgb = clamp(diffuseColor.rgb, 0.0, 1.0);',
-            '  }',
-            '}',
-            '{',
-            '  // MID-ZOOM MACRO LAYER: a second, much-larger-scale sample of',
-            '  // the same four textures, active only in the camera-to-',
-            '  // planet-center distance band where the close-up detail',
-            '  // layer above has already faded out -- its envelope is that',
-            '  // one INVERTED: ramps in 1.2R-1.5R, full strength 1.5R-3R,',
-            '  // ramps out 3R-4R. Kills the flat interpolated-vertex-color',
-            '  // "gradient" look at mid zoom without fighting the close-up',
-            '  // detail, which fades on camera-to-FRAGMENT distance instead',
-            '  // (near-ground only, see dNear above).',
-            '  float camR = length(cameraPosition);',
-            '  float macroT = smoothstep(1.2, 1.5, camR) * (1.0 - smoothstep(3.0, 4.0, camR));',
-            '  if (uDetailOn > 0.5 && macroT > 0.003) {',
-            '    vec3 n2 = normalize(vObjNormal);',
-            '    vec3 bw2 = abs(n2);',
-            '    bw2 /= (bw2.x + bw2.y + bw2.z);',
-            '    const float TILE_MACRO = 7.0; // broad mid-zoom variation, well below TILE so it never moires against the close-up layer',
-            '    vec3 macroDet = triplanar(uGrassTex, vDetailPos, bw2, TILE_MACRO) * vBiomeW.x',
-            '                  + triplanar(uRockTex,  vDetailPos, bw2, TILE_MACRO) * vBiomeW.y',
-            '                  + triplanar(uSandTex,  vDetailPos, bw2, TILE_MACRO) * vBiomeW.z',
-            '                  + triplanar(uSnowTex,  vDetailPos, bw2, TILE_MACRO) * vBiomeW.w;',
-            '    float macroWTot = vBiomeW.x + vBiomeW.y + vBiomeW.z + vBiomeW.w;',
-            '    macroDet /= max(macroWTot, 0.001);',
-            '    vec3 macroMult = macroDet / vec3(0.45);',
-            '    // +-6% subtle value tint -- the clamp range IS the effect budget',
-            '    diffuseColor.rgb *= mix(vec3(1.0), clamp(macroMult, 0.94, 1.06), macroT);',
-            '    diffuseColor.rgb = clamp(diffuseColor.rgb, 0.0, 1.0);',
-            '  }',
-            '}',
-          ].join('\n'),
-        )
-        .replace(
-          '#include <normal_fragment_maps>',
-          [
-            '#include <normal_fragment_maps>',
-            '{',
-            '  float dNearNrm = 1.0 - smoothstep(0.3, 1.7, length(vViewPosition));',
-            '  if (uNormalOn > 0.5 && dNearNrm > 0.003) {',
-            '    vec3 nrmN = normalize(vObjNormal);',
-            '    vec3 nrmBw = abs(nrmN);',
-            '    nrmBw /= (nrmBw.x + nrmBw.y + nrmBw.z);',
-            '    const float TILE = 80.0; // same tile scale as the albedo layer so bumps sit under the matching surface pattern',
-            '    vec3 detN = triplanarNormal(uGrassNrm, vDetailPos, nrmN, nrmBw, TILE) * vBiomeW.x',
-            '              + triplanarNormal(uRockNrm,  vDetailPos, nrmN, nrmBw, TILE) * vBiomeW.y',
-            '              + triplanarNormal(uSandNrm,  vDetailPos, nrmN, nrmBw, TILE) * vBiomeW.z',
-            '              + triplanarNormal(uSnowNrm,  vDetailPos, nrmN, nrmBw, TILE) * vBiomeW.w;',
-            '    float nrmWTot = vBiomeW.x + vBiomeW.y + vBiomeW.z + vBiomeW.w;',
-            '    vec3 blendedObjN = nrmWTot > 0.001 ? normalize(detN) : nrmN;',
-            '    // ART.md silhouettes-over-noise: keep strength modest, and',
-            '    // fade with the same near-camera falloff as the albedo',
-            '    // detail layer above.',
-            '    const float NORMAL_STRENGTH = 0.55;',
-            '    blendedObjN = normalize(mix(nrmN, blendedObjN, NORMAL_STRENGTH * dNearNrm));',
-            '    normal = normalize(normalMatrix * blendedObjN);',
-            '  }',
-            '}',
-          ].join('\n'),
-        )
-      if (frag === shader.fragmentShader) throw new Error('planet.js: splat injection point not found')
-      shader.fragmentShader = frag
-      terrainMat.userData.shader = shader // debug/inspection handle
-    } catch (err) {
-      terrainMat.userData.shaderError = String(err)
-      if (!warnedTerrainSplat) {
-        warnedTerrainSplat = true
-        console.warn(
-          '[planet] planet.js: terrain detail-texture splat degraded — onBeforeCompile injection failed, ground renders without triplanar detail textures, normal perturbation, or the mid-zoom macro layer: ' +
-            err,
-        )
-      }
-    }
-
-    // M-SKY cloud-shadows-on-terrain (scoped addition — the one bit of this
-    // file outside planet.js's own ownership, per the M-SKY architect-pinned
-    // contract with sky.js's getCloudShadowUniforms()). Its OWN independent
-    // try/catch + warn-once flag, deliberately separate from the triplanar
-    // block above, so a failure in either can never take down the other.
-    // Samples the lower cloud deck's alpha texture along each fragment's
-    // world direction (planet.group never rotates, so object space IS world
-    // space here — normalize(vDetailPos), the SAME varying the triplanar
-    // block above already populates from the vertex position, already IS
-    // that world direction) and darkens diffuseColor by up to ~18% under
-    // dense cloud, faded by the SAME near-camera distance factor the splat
-    // detail uses above (recomputed fresh here: that block's own `dNear` is
-    // scoped to its own { } and isn't reachable from this one).
-    try {
-      Object.assign(shader.uniforms, getCloudShadowUniforms())
-      const frag2 = shader.fragmentShader
-        .replace(
-          '#include <clipping_planes_pars_fragment>',
-          [
-            '#include <clipping_planes_pars_fragment>',
-            'uniform sampler2D uCloudTex;',
-            'uniform mat3 uCloudMat;',
-            'uniform float uCloudShadowOn;',
-          ].join('\n'),
-        )
-        .replace(
-          '#include <roughnessmap_fragment>',
-          [
-            '#include <roughnessmap_fragment>',
-            '{',
-            '  float dNearShadow = 1.0 - smoothstep(0.3, 1.7, length(vViewPosition));',
-            '  if (uCloudShadowOn > 0.003 && dNearShadow > 0.003) {',
-            '    vec3 worldDir = normalize(vDetailPos);',
-            '    vec3 localDir = normalize(uCloudMat * worldDir);',
-            '    float theta = acos(clamp(localDir.y, -1.0, 1.0));',
-            '    float phi = atan(localDir.z, -localDir.x);',
-            '    if (phi < 0.0) phi += 6.283185307179586;',
-            '    vec2 cloudUv = vec2(phi / 6.283185307179586, 1.0 - theta / 3.141592653589793);',
-            '    float cloudDensity = texture2D(uCloudTex, cloudUv).g;', // alphaMap convention: coverage lives in the GREEN channel
-            '    float shadowT = cloudDensity * uCloudShadowOn * dNearShadow;',
-            '    diffuseColor.rgb *= 1.0 - shadowT * 0.18;',
-            '  }',
-            '}',
-          ].join('\n'),
-        )
-      if (frag2 === shader.fragmentShader)
-        throw new Error('planet.js: cloud-shadow injection point not found')
-      shader.fragmentShader = frag2
-    } catch (err) {
-      if (!warnedCloudShadow) {
-        warnedCloudShadow = true
-        console.warn(
-          '[planet] planet.js: cloud-shadow-on-terrain degraded — onBeforeCompile injection failed, ground renders without moving cloud shadows: ' +
-            err,
-        )
-      }
+  // M-SKY cloud-shadows-on-terrain (architect-pinned contract with sky.js's
+  // getCloudShadowUniforms()). sky.js OWNS these uniform objects and mutates
+  // their `.value` every frame; planet.js is the consumer. Under WebGPURenderer
+  // we bridge them into TSL handles: uCloudShadowOn (float), uCloudMat (mat3),
+  // and cloudTexNode (the lower deck's alpha texture) — copied from sky.js each
+  // frame in update(). Guarded + warn-once so a contract mismatch degrades to
+  // no cloud shadows (uCloudShadowOn stays 0) instead of breaking terrain.
+  const cloudPlaceholder = makePlaceholderTexture(THREE.NoColorSpace, [0, 0, 0, 255])
+  const uCloudShadowOn = uniform(0)
+  const uCloudMat = uniform(new THREE.Matrix3())
+  const cloudTexNode = texture(cloudPlaceholder)
+  let cloudShadowSource = null
+  try {
+    cloudShadowSource = getCloudShadowUniforms()
+  } catch (err) {
+    if (!warnedCloudShadow) {
+      warnedCloudShadow = true
+      console.warn(
+        '[planet] planet.js: cloud-shadow uniforms unavailable — ground renders without moving cloud shadows: ' +
+          err,
+      )
     }
   }
+
+  // colorNode = vColor * near-detail splat * mid-zoom macro * cloud-shadow
+  // darkening. Reproduces the former <color_fragment> + <roughnessmap_fragment>
+  // GLSL injections as node composition. vColor is applied here (not via the
+  // material's vertexColors flag) so the per-layer clamp(., 0, 1) lands on the
+  // vColor * detail product exactly as the GLSL did. Built ONCE; the graph is
+  // static, only uniform()/texture() values change per frame (spike §6 law).
+  const detailPos = positionGeometry // displaced terrain position; object space == world dir (group at origin)
+  const objNormal = normalLocal.normalize()
+  terrainMat.colorNode = Fn(() => {
+    const dNear = positionView.length().smoothstep(0.3, 1.7).oneMinus().toVar()
+    const col = attribute('color', 'vec3').toVar()
+
+    // Near-camera triplanar albedo detail (chunky stylized tiles).
+    If(uDetailOn.greaterThan(0.5).and(dNear.greaterThan(0.003)), () => {
+      const bw = objNormal.abs().toVar()
+      bw.assign(bw.div(bw.x.add(bw.y).add(bw.z)))
+      const det = triplanarColor(grassTexNode, detailPos, bw, 80)
+        .mul(biomeW.x)
+        .add(triplanarColor(rockTexNode, detailPos, bw, 80).mul(biomeW.y))
+        .add(triplanarColor(sandTexNode, detailPos, bw, 80).mul(biomeW.z))
+        .add(triplanarColor(snowTexNode, detailPos, bw, 80).mul(biomeW.w))
+        .toVar()
+      const wTot = biomeW.x.add(biomeW.y).add(biomeW.z).add(biomeW.w)
+      det.assign(det.div(wTot.max(0.001)))
+      const mult = det.div(0.45) // per-blend mid-gray so the vertex color keeps owning the hue
+      col.assign(col.mul(mix(vec3(1), mult.clamp(0.35, 1.9), dNear.mul(0.95))))
+      col.assign(col.clamp(0, 1))
+    })
+
+    // Mid-zoom macro layer (inverted envelope: 1.2R-4R camera-to-center band).
+    const camR = cameraPosition.length()
+    const macroT = camR.smoothstep(1.2, 1.5).mul(camR.smoothstep(3.0, 4.0).oneMinus()).toVar()
+    If(uDetailOn.greaterThan(0.5).and(macroT.greaterThan(0.003)), () => {
+      const bw2 = objNormal.abs().toVar()
+      bw2.assign(bw2.div(bw2.x.add(bw2.y).add(bw2.z)))
+      const macroDet = triplanarColor(grassTexNode, detailPos, bw2, 7)
+        .mul(biomeW.x)
+        .add(triplanarColor(rockTexNode, detailPos, bw2, 7).mul(biomeW.y))
+        .add(triplanarColor(sandTexNode, detailPos, bw2, 7).mul(biomeW.z))
+        .add(triplanarColor(snowTexNode, detailPos, bw2, 7).mul(biomeW.w))
+        .toVar()
+      const macroWTot = biomeW.x.add(biomeW.y).add(biomeW.z).add(biomeW.w)
+      macroDet.assign(macroDet.div(macroWTot.max(0.001)))
+      const macroMult = macroDet.div(0.45) // +-6% subtle value tint — clamp range IS the budget
+      col.assign(col.mul(mix(vec3(1), macroMult.clamp(0.94, 1.06), macroT)))
+      col.assign(col.clamp(0, 1))
+    })
+
+    // Cloud shadows: sample the lower deck's alpha along this fragment's world
+    // direction (equirect UV via the same acos/atan formula sky.js documents)
+    // and darken up to ~18%, faded by the same near-camera factor.
+    If(uCloudShadowOn.greaterThan(0.003).and(dNear.greaterThan(0.003)), () => {
+      const worldDir = detailPos.normalize()
+      const localDir = uCloudMat.mul(worldDir).normalize()
+      const theta = localDir.y.clamp(-1, 1).acos()
+      const phi = atan(localDir.z, localDir.x.negate())
+      const cloudUv = vec2(phi.div(Math.PI * 2).fract(), theta.div(Math.PI).oneMinus())
+      const cloudDensity = cloudTexNode.sample(cloudUv).g // coverage lives in the GREEN channel
+      const shadowT = cloudDensity.mul(uCloudShadowOn).mul(dNear)
+      col.assign(col.mul(shadowT.mul(0.18).oneMinus()))
+    })
+
+    return col
+  })()
+
+  // normalNode = whiteout-triplanar detail-normal perturbation transformed
+  // object->view (the former <normal_fragment_maps> injection). When the layer
+  // is gated off / far, this returns the plain geometry view normal — identical
+  // to not setting normalNode at all.
+  terrainMat.normalNode = Fn(() => {
+    const nrmN = normalLocal.normalize().toVar()
+    const outN = transformNormalToView(nrmN).normalize().toVar()
+    const dNearNrm = positionView.length().smoothstep(0.3, 1.7).oneMinus().toVar()
+    If(uNormalOn.greaterThan(0.5).and(dNearNrm.greaterThan(0.003)), () => {
+      const bw = nrmN.abs().toVar()
+      bw.assign(bw.div(bw.x.add(bw.y).add(bw.z)))
+      const detN = triplanarNormalSample(grassNrmNode, detailPos, nrmN, bw, 80)
+        .mul(biomeW.x)
+        .add(triplanarNormalSample(rockNrmNode, detailPos, nrmN, bw, 80).mul(biomeW.y))
+        .add(triplanarNormalSample(sandNrmNode, detailPos, nrmN, bw, 80).mul(biomeW.z))
+        .add(triplanarNormalSample(snowNrmNode, detailPos, nrmN, bw, 80).mul(biomeW.w))
+        .toVar()
+      const nrmWTot = biomeW.x.add(biomeW.y).add(biomeW.z).add(biomeW.w)
+      const blendedObjN = nrmWTot.greaterThan(0.001).select(detN.normalize(), nrmN).toVar()
+      // ART.md silhouettes-over-noise: modest strength (0.55), same near-camera fade.
+      blendedObjN.assign(mix(nrmN, blendedObjN, dNearNrm.mul(0.55)).normalize())
+      outN.assign(transformNormalToView(blendedObjN).normalize())
+    })
+    return outN
+  })()
 
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat)
 
@@ -797,9 +766,12 @@ export function createPlanet(seed) {
   oceanGeo.setAttribute('color', new THREE.BufferAttribute(oceanColorArray, 3))
   oceanGeo.setAttribute('aDepth', new THREE.BufferAttribute(oceanDepthArray, 1))
 
-  const oceanMat = new THREE.MeshStandardMaterial({
+  const oceanMat = new THREE.MeshStandardNodeMaterial({
     color: OCEAN_COLOR,
-    vertexColors: true,
+    // M3/TSL: vertexColors NOT set — the colorNode below fully REPLACES the
+    // diffuse (as the former GLSL did: `diffuseColor.rgb = waterColor`), so the
+    // baked per-vertex ocean tint was already discarded in the shipped shader.
+    // The `color`/`aDepth` geometry attributes are still built (unchanged).
     transparent: true,
     opacity: 0.86,
     roughness: 0.42, // low enough for a glint, high enough not to blow out a hemisphere
@@ -810,121 +782,85 @@ export function createPlanet(seed) {
   })
 
   // Living-water feel + M-LD water styling (hybrid of the ld-water spike's
-  // treatments 2+3, stylized-leaning verdict), all in ONE guarded
-  // onBeforeCompile: vertices displace along their normal by a few summed
-  // sines of object-space position + time (unchanged from pre-M-LD); the
-  // fragment shader then replaces diffuseColor.rgb with a view-dependent
-  // fresnel mix of deep sapphire (grazing) / turquoise shallows (looking
-  // down) over a 3-stop depth-absorption base, an animated coast glow band
-  // (treatment 2), and ONE thin hard-edged posterized "shelf line" band
-  // with a subtly wobbling edge just seaward of the coast glow (treatment
-  // 3's graphic accent -- owner "really liked the stylized look"). Guarded
-  // so a shader-chunk mismatch in a future three.js version degrades to the
-  // plain vertex-tinted static water this material rendered pre-M-LD,
-  // instead of breaking the material -- M3 ports this whole thing to TSL.
-  let waterUniforms = null
+  // treatments 2+3, stylized-leaning verdict), ported to TSL node graphs:
+  // vertices displace along their normal by a few summed sines
+  // of object-space position + time (positionNode); the colorNode replaces
+  // diffuse with a view-dependent fresnel mix of deep sapphire (grazing) /
+  // turquoise shallows (looking down) over a 3-stop depth-absorption base, an
+  // animated coast glow band (treatment 2), and ONE thin hard-edged posterized
+  // "shelf line" band with a subtly wobbling edge just seaward of the coast
+  // glow (treatment 3's graphic accent). Built ONCE; only uTime animates.
+  const uTime = uniform(0)
+  const uSapphire = color(0x0f3a66)
+  const uTurquoise = color(0x2f8fa8)
+  const uStopShallow = color(0x8fe2d1)
+  const uStopMid = color(0x2f8fa8)
+  const uStopDeep = color(0x0f3a66)
+  const uCoastColor = color(0xcdeee6)
+  const uShoreBand = color(0x7fe0c8)
+  const aDepth = attribute('aDepth', 'float')
+
+  // Vertex swell: sum of three sines of object-space position + time, pushed
+  // along the object normal. positionNode outputs LOCAL (pre-transform) space;
+  // the renderer applies the model matrix after (spike §5/§8.7).
+  const swell = positionLocal
+    .dot(vec3(1.3, 0.7, 0.4))
+    .mul(18)
+    .add(uTime.mul(1.1))
+    .sin()
+    .add(
+      positionLocal
+        .dot(vec3(-0.6, 1.1, 0.8))
+        .mul(24)
+        .sub(uTime.mul(0.8))
+        .sin(),
+    )
+    .add(
+      positionLocal
+        .dot(vec3(0.9, -0.5, 1.2))
+        .mul(14)
+        .add(uTime.mul(1.6))
+        .sin(),
+    )
+  oceanMat.positionNode = positionLocal.add(normalLocal.mul(swell.mul(0.00027)))
+
+  oceanMat.colorNode = Fn(() => {
+    // World-space view + up (positionWorld reflects the swell; matches the
+    // former vWaterPos/vLocalUp world-space convention).
+    const view = cameraPosition.sub(positionWorld).normalize()
+    const fresnel = view.dot(normalWorld).clamp(0, 1).oneMinus().pow(3).toVar()
+    const fresnelColor = mix(uTurquoise, uSapphire, fresnel)
+
+    const depthShallow = mix(uStopShallow, uStopMid, aDepth.div(0.35))
+    const depthDeep = mix(uStopMid, uStopDeep, aDepth.sub(0.35).div(0.65).clamp(0, 1))
+    const depthColor = aDepth.lessThan(0.35).select(depthShallow, depthDeep)
+
+    const waterColor = mix(depthColor, fresnelColor, fresnel.mul(0.65)).toVar()
+
+    // Animated coast glow band (treatment 2).
+    const coastNoise = positionWorld.x
+      .mul(27)
+      .add(uTime.mul(0.4))
+      .sin()
+      .mul(positionWorld.z.mul(22).sub(uTime.mul(0.3)).sin())
+    const coastBand = aDepth.smoothstep(0.02, 0.14).oneMinus().mul(coastNoise.mul(0.45).add(0.55))
+    waterColor.assign(mix(waterColor, uCoastColor, coastBand.clamp(0, 1).mul(0.55)))
+
+    // Treatment-3 graphic accent: ONE thin hard-edged posterized band just
+    // seaward of the coast glow, edge wobbling subtly so it never reads static.
+    const shoreWobble = positionWorld.x
+      .mul(6)
+      .add(uTime.mul(0.12))
+      .sin()
+      .mul(positionWorld.z.mul(5.1).sub(uTime.mul(0.09)).sin())
+      .mul(0.012)
+    const shoreBandT = step(shoreWobble.add(0.16), aDepth).mul(step(shoreWobble.add(0.2), aDepth).oneMinus())
+    waterColor.assign(mix(waterColor, uShoreBand, shoreBandT.mul(0.6)))
+
+    return waterColor
+  })()
+
   let waterElapsed = 0
-  oceanMat.onBeforeCompile = (shader) => {
-    try {
-      shader.uniforms.uTime = { value: waterElapsed }
-      Object.assign(shader.uniforms, {
-        // Treatment 2 (graded-fresnel): deep/shallow fresnel mix + 3-stop
-        // depth absorption + animated coast glow tint.
-        uSapphire: { value: new THREE.Color(0x0f3a66) },
-        uTurquoise: { value: new THREE.Color(0x2f8fa8) },
-        uStopShallow: { value: new THREE.Color(0x8fe2d1) },
-        uStopMid: { value: new THREE.Color(0x2f8fa8) },
-        uStopDeep: { value: new THREE.Color(0x0f3a66) },
-        uCoastColor: { value: new THREE.Color(0xcdeee6) },
-        // Treatment 3 accent: the ONE posterized shore-band color.
-        uShoreBand: { value: new THREE.Color(0x7fe0c8) },
-      })
-
-      let vs = `uniform float uTime;\n${shader.vertexShader}`
-      vs = injectShaderChunk(vs, '#include <common>', [
-        'attribute float aDepth;',
-        'varying float vDepth;',
-        'varying vec3 vWaterPos;',
-        'varying vec3 vLocalUp;',
-      ])
-      vs = injectShaderChunk(vs, '#include <begin_vertex>', [
-        // NOTE: unlike the pre-M-LD version of this injection (which fully
-        // REPLACED the `#include <begin_vertex>` marker), injectShaderChunk
-        // preserves the marker and appends after it -- the standard chunk
-        // it resolves to already declares `vec3 transformed = vec3(
-        // position );`, so redeclaring it here would be a GLSL redefinition
-        // error. Only ever mutate `transformed` (+=) below, never redeclare.
-        'vDepth = aDepth;',
-        'float swell =',
-        '  sin( dot( position, vec3( 1.3, 0.7, 0.4 ) ) * 18.0 + uTime * 1.1 ) +',
-        '  sin( dot( position, vec3( -0.6, 1.1, 0.8 ) ) * 24.0 - uTime * 0.8 ) +',
-        '  sin( dot( position, vec3( 0.9, -0.5, 1.2 ) ) * 14.0 + uTime * 1.6 );',
-        'transformed += normal * ( swell * 0.00027 );',
-        // World-space (not object-space) so the fresnel view vector below
-        // stays correct if the planet group is ever rotated/transformed --
-        // matches sky.js's own vWorldPosition/vWorldNormal convention.
-        'vWaterPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;',
-        'vLocalUp = normalize( mat3( modelMatrix ) * normal );',
-      ])
-      shader.vertexShader = vs
-
-      let fs = shader.fragmentShader
-      fs = injectShaderChunk(fs, '#include <common>', [
-        'uniform float uTime;',
-        'uniform vec3 uSapphire;',
-        'uniform vec3 uTurquoise;',
-        'uniform vec3 uStopShallow;',
-        'uniform vec3 uStopMid;',
-        'uniform vec3 uStopDeep;',
-        'uniform vec3 uCoastColor;',
-        'uniform vec3 uShoreBand;',
-        'varying float vDepth;',
-        'varying vec3 vWaterPos;',
-        'varying vec3 vLocalUp;',
-      ])
-      fs = injectShaderChunk(fs, '#include <color_fragment>', [
-        '{',
-        '  vec3 V = normalize( cameraPosition - vWaterPos );',
-        '  float fresnel = pow( 1.0 - clamp( dot( V, vLocalUp ), 0.0, 1.0 ), 3.0 );',
-        '  vec3 fresnelColor = mix( uTurquoise, uSapphire, fresnel );',
-        '  vec3 depthColor;',
-        '  if ( vDepth < 0.35 ) {',
-        '    depthColor = mix( uStopShallow, uStopMid, vDepth / 0.35 );',
-        '  } else {',
-        '    depthColor = mix( uStopMid, uStopDeep, clamp( (vDepth - 0.35) / 0.65, 0.0, 1.0 ) );',
-        '  }',
-        '  vec3 waterColor = mix( depthColor, fresnelColor, fresnel * 0.65 );',
-        '',
-        '  float coastNoise = sin( vWaterPos.x * 27.0 + uTime * 0.4 ) * sin( vWaterPos.z * 22.0 - uTime * 0.3 );',
-        '  float coastBand = ( 1.0 - smoothstep( 0.02, 0.14, vDepth ) ) * ( 0.55 + 0.45 * coastNoise );',
-        '  waterColor = mix( waterColor, uCoastColor, clamp( coastBand, 0.0, 1.0 ) * 0.55 );',
-        '',
-        '  // Treatment-3 graphic accent (stylized-leaning verdict): ONE thin',
-        '  // hard-edged posterized band just seaward of the coast glow (glow',
-        '  // fades out by vDepth ~0.14) -- a graphic shelf-line ring, not a',
-        '  // smooth gradient. Edge wobbles subtly so it never reads as a',
-        '  // perfectly static ring.',
-        '  float shoreWobble = sin( vWaterPos.x * 6.0 + uTime * 0.12 ) * sin( vWaterPos.z * 5.1 - uTime * 0.09 ) * 0.012;',
-        '  float shoreBandT = step( 0.16 + shoreWobble, vDepth ) * ( 1.0 - step( 0.2 + shoreWobble, vDepth ) );',
-        '  waterColor = mix( waterColor, uShoreBand, shoreBandT * 0.6 );',
-        '',
-        '  diffuseColor.rgb = waterColor;',
-        '}',
-      ])
-      shader.fragmentShader = fs
-
-      waterUniforms = shader.uniforms
-    } catch (err) {
-      waterUniforms = null // fall back to the pre-M-LD static, vertex-tinted water
-      if (!warnedOceanShader) {
-        warnedOceanShader = true
-        console.warn(
-          '[planet] planet.js: ocean fresnel/depth-band/swell styling degraded — onBeforeCompile shader injection failed, water renders as flat vertex-tinted color with no swell: ' +
-            err,
-        )
-      }
-    }
-  }
 
   const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat)
 
@@ -933,9 +869,20 @@ export function createPlanet(seed) {
   group.add(terrainMesh)
   group.add(oceanMesh)
 
+  // Frame update: animate ONLY uniform()/texture() values (the node graphs are
+  // static — a structural change costs a ~187ms recompile, spike §6). Ocean
+  // clock advances uTime; the cloud-shadow handles are copied from sky.js's
+  // own per-frame uniform objects (allocation-free: scalar writes, an in-place
+  // Matrix3.copy, and a reference-equality-guarded texture swap).
   function update(dt) {
     waterElapsed += dt
-    if (waterUniforms) waterUniforms.uTime.value = waterElapsed
+    uTime.value = waterElapsed
+    if (cloudShadowSource) {
+      uCloudShadowOn.value = cloudShadowSource.uCloudShadowOn.value
+      uCloudMat.value.copy(cloudShadowSource.uCloudMat.value)
+      const cloudTex = cloudShadowSource.uCloudTex.value
+      if (cloudTex && cloudTexNode.value !== cloudTex) cloudTexNode.value = cloudTex
+    }
   }
 
   return { group, sampleHeight, isLand, biomeAt, update }

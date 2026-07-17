@@ -25,7 +25,7 @@
 // look at center" already reads as the look-at easing across that same
 // sweep. Same reasoning is why there's no banking/roll here (ART.md is
 // explicit that free-orbit roll would fight OrbitControls' own lookAt).
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { SEA_LEVEL, clamp, lerp, smoothstep } from './util.js'
 
 const BASE_FOV = 45 // app baseline (main.js's PerspectiveCamera(45, ...)) -- every flight returns to exactly this

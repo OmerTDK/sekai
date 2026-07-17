@@ -12,7 +12,7 @@
 // camera flight (delegated to cameraFeel when wired in, with a small
 // built-in tween as a fallback), city lights, agent contact-shadow blobs,
 // and the hammer-spark particle pool.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { hash01, rngFromString, clamp, lerp, smoothstep } from './util.js'
 import {
   RACE_KEYS,

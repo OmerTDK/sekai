@@ -3,7 +3,8 @@
 // dark eye ringed by a bright eyewall, ragged log-spiral feeder bands).
 // Everything is derived from `seed` + a per-storm spawn counter, so a given
 // seed always produces the same sequence of storms (origin, track, texture).
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import { uniform, texture, uv, vec2, vec3, mix, min, oneMinus, smoothstep as smoothstepNode } from 'three/tsl'
 import { SEA_LEVEL, rngFromString, makeNoise3D, fbm, clamp, lerp, smoothstep } from './util.js'
 
 // ---------------------------------------------------------------------------
@@ -207,45 +208,40 @@ function localDirToPatchUV(dir, patch, out) {
  * offset-toward-the-sun alphaMap trick sky.js's cloud shells use (see
  * sky.js's applyStormClearing doc comment for the full rationale), just
  * without the periodic U-wrap (this patch is a small bounded sweep, not a
- * full sphere -- see localDirToPatchUV above). Returns this material's own
- * {uSunUV} uniform (per-storm-slot, not shared -- see updateStorm()). */
+ * full sphere -- see localDirToPatchUV above). TSL node graph, built once;
+ * animated purely by writing the returned uniform()/texture() handles'
+ * `.value` (per-storm-slot, not shared -- see spawn()/updateStorm()).
+ * alphaMap density lives in the texture's GREEN channel (see
+ * makeHurricaneTexture's CRITICAL comment), so every sample below reads
+ * `.g`, matching three.js's own classic alphamap_fragment convention. */
 function applySunShading(mat) {
-  const sunShadeUniforms = { uSunUV: { value: new THREE.Vector2(0, 0) } }
-  mat.customProgramCacheKey = () => 'storm-sun-shade-v1'
-  mat.onBeforeCompile = (shader) => {
-    try {
-      Object.assign(shader.uniforms, sunShadeUniforms)
-      const frag = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform vec2 uSunUV;')
-        .replace(
-          '#include <alphamap_fragment>',
-          [
-            '#include <alphamap_fragment>',
-            '{',
-            '  vec2 toSun = uSunUV - vAlphaMapUv;',
-            '  float toSunLen = length(toSun);',
-            '  vec2 sunDirUv = toSunLen > 1e-5 ? toSun / toSunLen : vec2(1.0, 0.0);',
-            '  float ownDensity = texture2D(alphaMap, vAlphaMapUv).g;',
-            '  float sunSample = texture2D(alphaMap, vAlphaMapUv + sunDirUv * 0.015).g;',
-            '  // high density both here AND toward the sun -> shadowed base of a',
-            '  // thicker mass; low density toward the sun but cloud here -> a',
-            '  // sun-facing rim, catches a thin highlight.',
-            '  float shadowT = smoothstep(0.18, 0.7, sunSample) * ownDensity;',
-            '  float edgeT = (1.0 - smoothstep(0.05, 0.4, sunSample)) * ownDensity;',
-            '  vec3 shadeTint = vec3(0.7255, 0.7686, 0.8314);', // #b9c4d4
-            '  diffuseColor.rgb *= mix(vec3(1.0), shadeTint, shadowT * 0.6);',
-            '  diffuseColor.rgb *= 1.0 + edgeT * 0.08;',
-            '  diffuseColor.rgb = min(diffuseColor.rgb, vec3(1.0));', // stay white-dominant, never glow (ART.md 2.5/8)
-            '}',
-          ].join('\n'),
-        )
-      if (frag === shader.fragmentShader) throw new Error('storms.js: sun-shading injection point not found')
-      shader.fragmentShader = frag
-    } catch (err) {
-      /* hurricane cloud material simply ignores sun-shading on failure */
-    }
-  }
-  return sunShadeUniforms
+  const uSunUV = uniform(new THREE.Vector2(0, 0))
+  const uOpacity = uniform(0)
+  const ownUV = uv()
+  const alphaTex = texture(undefined, ownUV) // .value synced in spawn()
+
+  const toSun = uSunUV.sub(ownUV)
+  const toSunLen = toSun.length()
+  const sunDirUv = toSunLen.greaterThan(1e-5).select(toSun.div(toSunLen), vec2(1.0, 0.0))
+  const sunTex = alphaTex.sample(ownUV.add(sunDirUv.mul(0.015))) // separate node -- .value ALSO synced in spawn()
+
+  const ownDensity = alphaTex.g
+  const sunSample = sunTex.g
+  // high density both here AND toward the sun -> shadowed base of a
+  // thicker mass; low density toward the sun but cloud here -> a
+  // sun-facing rim, catches a thin highlight.
+  const shadowT = smoothstepNode(0.18, 0.7, sunSample).mul(ownDensity)
+  const edgeT = oneMinus(smoothstepNode(0.05, 0.4, sunSample)).mul(ownDensity)
+  const shadeTint = vec3(0.7255, 0.7686, 0.8314) // #b9c4d4
+
+  let rgb = mix(vec3(1.0, 1.0, 1.0), shadeTint, shadowT.mul(0.6))
+  rgb = rgb.mul(edgeT.mul(0.08).add(1.0))
+  rgb = min(rgb, vec3(1.0, 1.0, 1.0)) // stay white-dominant, never glow (ART.md 2.5/8)
+
+  mat.colorNode = rgb
+  mat.opacityNode = uOpacity.mul(ownDensity) // coverage (density) x lifecycle/cam-fade opacity
+
+  return { uSunUV, uOpacity, alphaTex, sunTex }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,22 +325,27 @@ function pickStormOrigin(rng, planet, out) {
 // material -- a shadow is an absence of light, not a lit surface.
 function createShadowSlot(sizeScale) {
   const patch = sizeScale === 1 ? PRIMARY_SHADOW_PATCH : SECONDARY_SHADOW_PATCH
-  const material = new THREE.MeshBasicMaterial({
+  const uOpacity = uniform(0)
+  const alphaTex = texture() // .value synced in spawn() -- same texture as the cloud patch
+  const material = new THREE.MeshBasicNodeMaterial({
     color: SHADOW_COLOR,
     transparent: true,
     depthWrite: false,
     blending: THREE.NormalBlending, // "multiply-style" via a dark, low-opacity color -- true MultiplyBlending is order-fragile with other transparents
     opacity: 0,
   })
+  // alphaMap density lives in the GREEN channel (see makeHurricaneTexture);
+  // colorNode is left to the material default (flat SHADOW_COLOR, untinted).
+  material.opacityNode = uOpacity.mul(alphaTex.g)
   const mesh = new THREE.Mesh(patch.geo, material)
   mesh.renderOrder = SHADOW_RENDER_ORDER
   mesh.visible = false
-  return { mesh, material, patch }
+  return { mesh, material, patch, uOpacity, alphaTex }
 }
 
 function createStormSlot(sizeScale) {
   const patch = sizeScale === 1 ? PRIMARY_PATCH : SECONDARY_PATCH
-  const material = new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshStandardNodeMaterial({
     color: 0xffffff,
     transparent: true,
     depthWrite: false,
@@ -406,12 +407,13 @@ export function createStorms(planet, camera, seed) {
 
     storm.texture?.dispose()
     storm.texture = makeHurricaneTexture(rng, spawnSeed + ':tex', storm.spinSign)
-    storm.material.alphaMap = storm.texture
-    storm.material.opacity = 0
+    storm.sunShadeUniforms.alphaTex.value = storm.texture
+    storm.sunShadeUniforms.sunTex.value = storm.texture
+    storm.sunShadeUniforms.uOpacity.value = 0
     // Ocean shadow reuses the SAME texture -- its silhouette always matches
     // the cloud patch actually rendered overhead.
-    storm.shadow.material.alphaMap = storm.texture
-    storm.shadow.material.opacity = 0
+    storm.shadow.alphaTex.value = storm.texture
+    storm.shadow.uOpacity.value = 0
 
     storm.mesh.scale.setScalar(MIN_SPAWN_SCALE)
     storm.active = true
@@ -516,7 +518,7 @@ export function createStorms(planet, camera, seed) {
     // views aren't blocked.
     const camDist = camera.position.length()
     const camFade = smoothstep(CAM_FADE_NEAR, CAM_FADE_FAR, camDist)
-    storm.material.opacity = lifecycleOpacity * camFade
+    storm.sunShadeUniforms.uOpacity.value = lifecycleOpacity * camFade
 
     // M-SKY 2.5D shading: project the sun into this patch's own local UV
     // space (mesh.quaternion was just set above) — see applySunShading.
@@ -538,7 +540,7 @@ export function createStorms(planet, camera, seed) {
     storm.shadow.mesh.quaternion.copy(orientQuat).multiply(spinQuat)
     storm.shadow.mesh.position.copy(_shadowDirStorm).multiplyScalar(SHADOW_RADIUS)
     storm.shadow.mesh.scale.copy(storm.mesh.scale)
-    storm.shadow.material.opacity = lifecycleOpacity * camFade * SHADOW_OPACITY
+    storm.shadow.uOpacity.value = lifecycleOpacity * camFade * SHADOW_OPACITY
   }
 
   let sunPrimed = false

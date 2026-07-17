@@ -9,7 +9,7 @@
 // match) + a world.group traversal for the matching userData.settlement
 // record (anchorDir/groundR) — this module never edits world.js state and
 // owns its meshes in its own `group`, added alongside (not inside) world's.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { rngFromString } from './util.js'
 import { tangentBasis, yawedTangent, orientOnSurface } from './placement.js'
 import { RACE_PALETTES, sphereGeo } from './buildings.js'

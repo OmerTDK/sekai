@@ -51,7 +51,7 @@
 // baseline (grand=1.12, humble=0.94, see buildings.js's MODEL_TIER_BUCKET) —
 // this still composes cleanly with the caller's KIT_UNIT_SIZE*TIER_MULT
 // scale because boundingRadius is read back per-variant, not assumed fixed.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { hash01, rngFromString } from './util.js'
@@ -617,7 +617,10 @@ function modelTierBucket(seedStr) {
 
 export async function loadBuildingAssets(renderer, sky = null) {
   try {
-    if (!renderer.extensions.has('WEBGL_multi_draw')) {
+    // WebGLRenderer exposes .extensions; WebGPURenderer (M3 host) does not —
+    // BatchedMesh multi-draw is handled by the backend there, so only probe
+    // when the classic extensions API is present.
+    if (renderer.extensions && !renderer.extensions.has('WEBGL_multi_draw')) {
       console.warn(
         '[planet] assets: WEBGL_multi_draw not supported — BatchedMesh falls back to one draw call per unique geometry (higher draw-call count, same visuals)',
       )

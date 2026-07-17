@@ -19,7 +19,8 @@ no unshippable gaps.
 `~/.claude/projects` transcripts (no database — the transcripts are the
 persistence); deterministic world from (seed, project, session-id) hashes.
 Engine path: minimal Electron shell → beauty + dragons/airships → TSL
-material port on the WebGL bridge → WebGPURenderer flip → visual flagships.
+material port on the WebGPURenderer(forceWebGL) host → WebGPU-backend flip →
+visual flagships.
 **Program-complete line: end of M5c.** Everything after is an opt-in epilogue.
 
 ---
@@ -184,6 +185,25 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
 - The fast-joy detour (b) is rejected; do not build WebGL2 throwaway
   versions of scattering/ocean.
 
+- **MECHANISM CORRECTED 2026-07-17 (context7-verified, after M-WX):** the
+  original notes assumed `WebGLRenderer.setNodesHandler(WebGLNodesHandler)`
+  as the incremental host. **That bridge is a dead end for us** — its
+  documented limitations forbid SHARED INSTANCED-MESH GEOMETRY and the
+  `compile()` path, but the whole app is BatchedMesh (250 buildings / 2–4
+  draw calls) + InstancedMesh with per-instance custom attributes (flora
+  sway, birds flap, trails, contact-blobs). The real clean path is
+  **`WebGPURenderer({ forceWebGL: true })`** (from `three/webgpu`) as the
+  incremental host: it runs TSL NodeMaterials on a WebGL2 backend today, and
+  the M4 "flip" becomes deleting `forceWebGL`. Consequences that move work
+  earlier than the old M3/M4 split implied: (1) `WebGPURenderer` does NOT run
+  `EffectComposer`/`UnrealBloomPass`, so the post-stack rebuild (node
+  `PostProcessing` + TSL `bloom()`) happens AT renderer-swap time, not as a
+  separable later step; (2) `WebGPURenderer` ignores `onBeforeCompile`, so
+  every one of the ~31 `onBeforeCompile` + ~5 `ShaderMaterial` sites across 9
+  files (planet 11, seaice 5, flora 5, birds 4, sky 2+2, trails 2, storms 1,
+  weather 1+1, flood 0+2) must become a NodeMaterial before the swap can go
+  live. S1 (below) is the GO/NO-GO gate on this whole path.
+
 ### M-LD — Look Development (added 2026-07-17, Omer's call: the aesthetic
 ### layer was complaint-driven, never designed; fix that before the engine work)
 - **Why:** every user frustration to date was in the vibed visual layer
@@ -251,34 +271,65 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
 - **Est:** 4 builder-runs. Runs parallel-safe with M2 integration
   (spikes/ + docs/ only).
 
-### M3 — TSL port (kill the shader hacks) [gate S1]
-- **S1 spike (retargeted):** port the TREE-SWAY material first — it is the
-  live InstancedMesh + custom-attribute case (18k instances), not the
-  dormant grass. GO criteria: pixel parity, fps within 10%, coexists with
-  legacy materials, AND a forced `material.needsUpdate` mid-session does not
-  produce a visible hitch (the bridge rebuilds instanced geometry buffers on
-  recompile — measure the frame-time spike).
-- **Port list (one PR each):** tree-sway → terrain splat → ocean swell →
-  cloud/storm materials → **atmosphere rim (raw ShaderMaterial — the site
-  the old exit-grep missed)** → aurora (ShaderMaterial) → grass-wind
-  (dormant, port or delete).
+### M3 — TSL material port on the forceWebGL host [gate S1]
+- **Host correction (see CHOICE-1, 2026-07-17):** the incremental host is
+  `WebGPURenderer({ forceWebGL: true })`, NOT the WebGLNodesHandler bridge.
+  Because that renderer ignores `onBeforeCompile` and cannot run
+  EffectComposer, M3 and the old M4 partially MERGE: the renderer swap +
+  node post-stack rebuild happen together, and the app can only go live on
+  the new renderer once ALL materials are NodeMaterials. Interim strategy is
+  therefore branch-local (spike page + progressively-ported modules verified
+  off-main) rather than shipping a half-ported main.
+- **S1 spike — GO (architect-confirmed live in Chrome, 2026-07-17).** All
+  mechanism gates passed on `window.__S1`: forceWebGL→`WebGLBackend`;
+  per-instance attribute sway proven by a zero-phase discriminator
+  (`zeroingChangedImage:true, restoreReverted:true`); BatchedMesh+NodeMaterial
+  renders no-error; the true-WebGPU flip even boots on this machine. Two
+  watch-items, both bounded: (1) fps deltas are a submit-bound micro-benchmark
+  artifact (0.04→0.11ms on empty scenes) — advisory, profile the real app;
+  (2) a **187ms node-recompile hitch** on structural graph changes → M3 law:
+  build every node graph once, pre-warm at load, animate via `uniform()`
+  writes only. Full design in `docs/spikes/2026-07-17-s1-tsl-webgpu.md`.
+- **Original spike framing (retargeted to the forceWebGL host):**
+  a standalone page renders a representative scene (customized sphere +
+  InstancedMesh-with-per-instance-attribute sway + BatchedMesh) under both
+  WebGLRenderer/onBeforeCompile (baseline) and WebGPURenderer(forceWebGL)/TSL
+  NodeMaterials. GO criteria: candidate fps within 10% of baseline; **per-
+  instance attributes animate correctly on InstancedMesh** (the crux the
+  rejected bridge failed); **BatchedMesh renders under the node path** (or a
+  documented workaround); forced material rebuild mid-run has no unacceptable
+  hitch; forceWebGL→WebGPU flip boots (or is documented as env-limited).
+  Measure fps by timing back-to-back renders, NOT rAF (backgrounded-tab
+  suspension gotcha).
+- **Port list (grouped, one PR each — ~36 sites total):** representative
+  first (tree-sway/birds instanced sway) → terrain splat/normal/macro chain
+  (planet.js, 11 sites — the biggest) → ocean → cloud/storm/weather →
+  sea-ice → flood/trails → atmosphere rim + aurora (the ShaderMaterials) →
+  grass-wind (dormant, port or delete).
 - **Exit:** `grep -rE "onBeforeCompile|new THREE\.(Raw)?ShaderMaterial" src/`
-  → zero hits; visual parity via verify kit; fps within 10% of baseline.
-- **Fallback if S1 NO-GO:** documented A″ (stay WebGL2; flagships as
-  fragment-shader implementations; revisit bridge next three.js version).
-- **Est:** 1 spike + 6–7 builder-runs. 2 sessions.
+  → zero hits; app runs on `WebGPURenderer({forceWebGL:true})`; node post-
+  stack (bloom) rebuilt; visual parity via verify kit; fps within 10% of the
+  WebGLRenderer baseline.
+- **Fallback if S1 NO-GO:** documented A″ (stay on WebGLRenderer + onBefore-
+  Compile; build M5 flagships as WebGL2 fragment-shader implementations;
+  revisit the node path on a later three.js). E-SIM rung 1 becomes the more
+  attractive next arc in that world.
+- **Est:** 1 spike + ~8–10 builder-runs (grew with M-WX's added materials).
 
-### M4 — Renderer flip + post stack [gate S2]
-- **S2 spike:** WebGPURenderer boots the full TSL scene; fps parity check.
-- **Scope:** flip renderer; REBUILD postprocessing on the WebGPU node stack
-  (bloom via TSL `pass()`/`bloom()` — EffectComposer has no bridge); verify
-  the >1.0-color bloom-headroom trick against TSL bloom's threshold
-  semantics (sky sun/stars depend on it); AgX regrade; `?renderer=webgl`
-  escape hatch retained ONE milestone, scoped to MATERIALS ONLY (no dual
-  post-fx maintenance — WebGL mode runs without bloom).
-- **Exit:** WebGPU default; verify-kit sweep + bloom-parity screenshots;
-  fps ≥ baseline −10%; escape hatch renders (unbloomed) without errors.
-- **Est:** 1 spike + 4–5 builder-runs. 2 sessions.
+### M4 — WebGPU flip [gate S2]
+- **Now a thin milestone** (most of its old scope moved into M3 with the host
+  correction): with the app already on `WebGPURenderer({forceWebGL:true})`
+  and the node post-stack live, M4 is deleting `forceWebGL` and validating
+  the true WebGPU backend.
+- **S2 spike:** `WebGPURenderer()` (no forceWebGL) boots the full ported
+  scene on the WebGPU backend; fps parity vs the forceWebGL baseline.
+- **Scope:** drop `forceWebGL`; verify the >1.0-color bloom-headroom trick
+  against TSL `bloom()` threshold semantics (sky sun/stars depend on it);
+  AgX regrade; retain a `?renderer=webgl` (forceWebGL) escape hatch ONE
+  milestone for machines without WebGPU.
+- **Exit:** WebGPU backend default; verify-kit sweep + bloom-parity shots;
+  fps ≥ forceWebGL baseline −10%; escape hatch still renders.
+- **Est:** 1 spike + 2–3 builder-runs.
 
 ### M5a — Atmospheric scattering
 - **Exit:** before/after approved by Omer; sunset limb + aerial perspective
@@ -384,8 +435,8 @@ Epilogue: E1(erosion) ─→ E2(LOD, needs E1's sampler if E1 landed)
 
 | Spike | Question | GO criteria | When |
 |---|---|---|---|
-| S1 | TSL bridge on LIVE instanced custom-attr material (tree-sway)? | parity, fps −≤10%, coexists, no recompile hitch | M3 start |
-| S2 | WebGPURenderer full-scene parity? | fps ≥ baseline−10%, nothing missing | M4 start |
+| S1 | WebGPURenderer(forceWebGL) + TSL on instanced custom-attr + BatchedMesh? | parity, fps −≤10%, instanced attrs correct, BatchedMesh works, no rebuild hitch | M3 start |
+| S2 | true WebGPU backend (drop forceWebGL) full-scene parity? | fps ≥ forceWebGL baseline−10%, nothing missing | M4 flip |
 | S4 | BatchedMesh @ 20k GLTF instances? | ≥55fps, ≤~30 civ draw calls | M2 start |
 | S5 | RESOLVED 2026-07-17 (GO — mix): Kenney base for all standard buildings, Quaternius reserved for grand tier-3 landmarks. Constraints from the spike: drop/downsize Quaternius PBR textures (17MB → tint-or-512px, fix dark faces), chunkier gear mounts (gears illegible oblique), tame pipe glow, scoped env-map for metals, everything batched per S4. | — | done |
 | S6 | Cheap terrain close-up fixes beat LOD? | Omer's eye at street level | E2 start |
@@ -442,3 +493,101 @@ Epilogue (all optional): E1 4–5 · E2 1–13 · E3 2–3 · E4 8–10 · E5 pa
 16. Standing rule recorded: no AI attribution in commits/PRs (user).
 
 **Sign-off required from Omer before M0 execution begins.**
+
+---
+
+## Delight, UX & deep-simulation backlog (added 2026-07-17, live brainstorm with Omer)
+
+Captured mid-M3 so nothing evaporates. Sequenced AFTER the migration frees the
+modules, except the pure-UI items which ship independently off `main`.
+
+### UX / controls (wave `ui-controls`, ships off main — no renderer dependency)
+- [ ] Zoom in/out buttons, bottom-right (dispatch wheel events to OrbitControls).
+- [ ] Make the sidebar hide/unhide toggle obvious (the `‹` exists but is too subtle).
+- [ ] **Feature-toggle panel** — live show/hide of birds, flora, hurricane
+      (storms), sea life, weather, sea ice, trails, dragon, airships via
+      `.group.visible` on the exposed `__planet` handles (no module changes).
+
+### God-controls / spectacle wave (post-migration; needs module trigger methods)
+- [ ] **Meteor strike on click** — streak + impact flash + crater that heals
+      (covenant). Stretch: a real force-push / reverted commit auto-summons one.
+- [ ] Summon-weather: conjure a hurricane, call an aurora, trigger an eclipse,
+      drag the sun to set time-of-day. (Modules exist; expose triggers post-port.)
+- [ ] Clouds on/off (needs a sky.js sub-group setter — deferred past the sky port).
+
+### "Soul" features — make Aemunis reflect real work (the app's whole point)
+- [ ] **The Aemunis Herald** — a fantasy news ticker narrating REAL git/session
+      activity as chronicle ("Clooverforge raised 12 halls overnight"; "a merge
+      bridged Omertdkdeep and Dataplatformstead").
+- [ ] **Living construction + session health** — active session = building under
+      construction (scaffolds/cranes/sparks); errored session = smoke/scorch;
+      big clean session = banners. The world becomes a work dashboard.
+- [ ] **Roads & bridges** — co-edited projects grow roads between settlements; a
+      PR merge builds a bridge; a monorepo becomes a megacity.
+- [ ] Soundscape (wind/ocean/forge swelling near activity); ride-along camera
+      (follow dragon/airship; walk a worker first-person-ish).
+
+### Deep world-simulation ladder (extends E-SIM; covenant-bound, data-driven)
+Everything deterministic from session/git history + a seeded sim clock;
+simulation is ADDITIVE and always heals — never destroys session structures.
+- **Economy layer:** settlement prosperity from recent session activity; trade
+  caravans/airships between frequently-co-edited projects; "industry" from
+  tokens spent, "materials" from lines changed, "fortifications" from test
+  coverage. Dormant projects overgrow into (weathered, intact) ruins that
+  revive when you return.
+- **Population/demographics:** population = cumulative session count; cities grow
+  a historic old-town (early sessions) + new suburbs (recent); citizen roles by
+  work type (tests→inspectors, refactor→masons, feature→builders, bugfix→
+  firefighters); work moving between projects = visible migration caravans.
+- **Politics/diplomacy (deepens E-SIM raids):** factions = project clusters
+  (Cloover kingdom vs tmp/experiment wildlands); merges = treaties/bridges,
+  reverts = broken pacts, long branches = breakaway colonies; territory shading
+  shifts with activity; merge conflicts = border skirmishes; big rebase =
+  invasion; resolution = peace.
+- **Data-driven live events:** CI failure = fire/plague until fixed; feature
+  merge = festival + new landmark; security fix = walls raised; late-night real
+  work = lanterns burning late; commit streak = flourishing, long absence =
+  quiet.
+- **Emergent/ambitious ceiling:** agent needs + day/night schedules (work by day,
+  taverns by night); light wildlife food-web (herds/predators/seasonal
+  migration); a true tick-based sim that evolves between visits but stays
+  deterministically replayable from the data — "fast-forward the civilization."
+- Recommended first cut once appetite allows: **Herald + living-construction/
+  health + prosperity/ruins** (highest soul-per-effort), THEN the E-SIM rung-1
+  skirmish theater for spectacle.
+
+### World-sim expansion (Omer, 2026-07-17 — "more focused on world sim now")
+- **DESIGN SHIFT — NPC civilizations independent of sessions.** Omer: "create
+  civilizations even if no related sessions." The world gains a SECOND layer:
+  seeded, autonomous NPC civs that exist for the world's own richness, coexisting
+  with the session-settlements. Covenant still holds for session structures; NPC
+  civs are fully seed-deterministic and sim-owned (born, grow, war, fall, resettle
+  — all replayable from world seed + sim clock). This is the backbone the rest of
+  the world-sim hangs off.
+- **Distinct civ archetypes** (Omer: "diff types of civilizations across the
+  world"): desert nomad caravans, seafaring port cities, mountain/dwarven holds,
+  elven forest communes, steampunk industrial metropolises, cliff monasteries —
+  each unique architecture/palette/units/behavior. Session-settlements can align
+  to an archetype from project traits; NPC civs fill the rest of the map.
+- **Geology/disasters** (Omer: volcanoes, earthquakes): active volcanoes (eruption
+  plume + lava glow + ash; can birth new land, additively); earthquakes (screen
+  shake + terrain ripple + structures wobble, never break); + tsunamis, wildfires
+  (burn scars regrow), blizzards/sandstorms/tornadoes by region. Disaster-triggers
+  can fire on real events (deploy→eruption, force-push→quake).
+- **Active trade routes** (Omer): animated caravans + ships continuously plying
+  sea-lanes/roads between related civs; goods flow; trade-hub cities grow rich;
+  piracy + navy escorts on the lanes. Ties to the roads/bridges + economy layer.
+- **Fast-rotating sun / time controls** (Omer: "fast rotating sun so I can see the
+  dark side light up"): a sun-speed control (and pause/fast-forward/rewind of the
+  whole sim) so the terminator sweeps and the night side lights up (city lights,
+  aurora, forge-glow). Trivial to prototype (sun already orbits); a headline of the
+  god-controls wave. Also: moon phases + tides.
+- **Further:** resource nodes (ore/fish/timber) driving where civs settle and fight;
+  per-civ **wonders** (great library/colossus/lighthouse/sky-fortress) rising over
+  sim-time; **technology eras** (medieval→steampunk→beyond, airships/factories
+  appear as civs advance); pilgrimages/festivals; plagues+recovery; refugee
+  migration after wars/disasters; a **"chronicle of ages"** time machine that
+  fast-forwards centuries of history (extends the existing time-lapse).
+- **Sequencing note:** built on the MIGRATED engine (post-M3) so new visual work is
+  TSL from the start — no second port, per CHOICE-1. World-sim is a large arc;
+  scope a dedicated program (its own milestones) when it's promoted from backlog.

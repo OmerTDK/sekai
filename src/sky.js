@@ -1,7 +1,24 @@
 // Stars, atmosphere, clouds, moons and all scene lighting for the stylized
 // planet. Everything here is deterministic from the seed string — same seed,
 // same sky, every launch. This module owns every light in the scene.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  uniform,
+  texture,
+  attribute,
+  uv,
+  positionWorld,
+  normalWorld,
+  cameraPosition,
+  vec2,
+  vec3,
+  float,
+  mix,
+  smoothstep as tslSmoothstep,
+  select,
+  materialReference,
+  Fn,
+} from 'three/tsl'
 import { makeNoise3D, fbm, rngFromString, clamp, lerp, smoothstep } from './util.js'
 
 const Y_AXIS = new THREE.Vector3(0, 1, 0)
@@ -719,40 +736,25 @@ function createNebulae(seed) {
 
 function createAtmosphere() {
   const geo = new THREE.SphereGeometry(1.11, 64, 48)
-  const mat = new THREE.ShaderMaterial({
-    uniforms: {
-      glowColor: { value: new THREE.Color('#7db8ff') },
-      power: { value: 3.2 },
-      intensity: { value: 0.75 }, // faint overall — do not overdrive this
-    },
-    vertexShader: `
-      varying vec3 vWorldPosition;
-      varying vec3 vWorldNormal;
-      void main() {
-        vec4 worldPos = modelMatrix * vec4(position, 1.0);
-        vWorldPosition = worldPos.xyz;
-        vWorldNormal = normalize(mat3(modelMatrix) * normal);
-        gl_Position = projectionMatrix * viewMatrix * worldPos;
-      }
-    `,
-    fragmentShader: `
-      uniform vec3 glowColor;
-      uniform float power;
-      uniform float intensity;
-      varying vec3 vWorldPosition;
-      varying vec3 vWorldNormal;
-      void main() {
-        vec3 viewDir = normalize(cameraPosition - vWorldPosition);
-        vec3 n = normalize(vWorldNormal);
-        float rim = pow(clamp(1.0 - abs(dot(viewDir, n)), 0.0, 1.0), power);
-        gl_FragColor = vec4(glowColor, rim * intensity);
-      }
-    `,
+  // View-angle fresnel rim glow, ported from the original raw GLSL shader to a
+  // TSL node material (raw string-shader materials error under WebGPURenderer).
+  // glowColor/power/intensity were uniforms but are never written in update();
+  // kept as uniform() handles to mirror the original's uniform surface. The
+  // rim uses world-space view direction and normal — abs() makes the BackSide
+  // normal's sign irrelevant, exactly as the GLSL abs(dot(...)) did.
+  const glowColor = uniform(new THREE.Color('#7db8ff'))
+  const power = uniform(3.2)
+  const intensity = uniform(0.75) // faint overall — do not overdrive this
+  const viewDir = cameraPosition.sub(positionWorld).normalize()
+  const rim = viewDir.dot(normalWorld.normalize()).abs().oneMinus().clamp(0, 1).pow(power)
+  const mat = new THREE.MeshBasicNodeMaterial({
     side: THREE.BackSide,
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   })
+  mat.colorNode = glowColor
+  mat.opacityNode = rim.mul(intensity)
   return new THREE.Mesh(geo, mat)
 }
 
@@ -949,14 +951,18 @@ function makeCloudTexture(noise3, cfg) {
 // Shared by both cloud shells: the hurricane clears a moat in the ambient
 // deck around itself (subsidence ring), driven every frame from main.js.
 const stormClearUniforms = {
-  uStormDir: { value: new THREE.Vector3(1, 0, 0) },
-  uStormOn: { value: 0 },
+  uStormDir: uniform(new THREE.Vector3(1, 0, 0)),
+  uStormOn: uniform(0),
 }
 
 // M-SKY cloud-shadows-on-terrain contract (architect-pinned): planet.js's
-// terrain-splat shader imports getCloudShadowUniforms() (lazily/guarded —
+// terrain-splat node graph imports getCloudShadowUniforms() (lazily/guarded —
 // see planet.js) and samples the LOWER cloud deck's own alpha texture along
-// each fragment's world direction to darken the ground beneath it.
+// each fragment's world direction to darken the ground beneath it. The
+// returned object keeps its keys but the values are now TSL nodes (M3 port):
+// uCloudTex is a texture() node (its .value is the alphaMap), uCloudMat and
+// uCloudShadowOn are uniform() nodes (Matrix3 / float). planet.js's own TSL
+// port consumes them as nodes; their .value is written each frame in update().
 //   - uCloudTex: the lower shell's own alphaMap (same texture that's
 //     actually rendered overhead — coverage/shape never drifts from what's
 //     visible in the sky).
@@ -982,80 +988,72 @@ const stormClearUniforms = {
 // this app only ever builds one sky, and planet.js imports the getter
 // directly rather than reaching through the createSky() instance.
 const cloudShadowUniforms = {
-  uCloudTex: { value: null },
-  uCloudMat: { value: new THREE.Matrix3() },
-  uCloudShadowOn: { value: 0 },
+  uCloudTex: texture(null),
+  uCloudMat: uniform(new THREE.Matrix3()),
+  uCloudShadowOn: uniform(0),
 }
 
 export function getCloudShadowUniforms() {
   return cloudShadowUniforms
 }
 
-/** Applies BOTH cloud-shell shader extensions in one onBeforeCompile (a
- * material only gets one, so anything touching this shader has to live
- * here): the existing storm-moat clearing (untouched) plus the new M-SKY
- * 2.5D sun shading. Returns this MATERIAL's own {uSunUV} uniform object —
- * needed per-material, not shared, since the two shells rotate on
- * independent axes/rates and so have different sun directions in their own
- * local UV space at any given moment (see update()). */
+/** Applies BOTH cloud-shell shader extensions as TSL node composition on the
+ * shell's MeshStandardNodeMaterial (ported from the old single string-injection
+ * hook, which WebGPURenderer ignores): the storm-moat clearing plus M-SKY 2.5D
+ * sun shading. Returns this MATERIAL's own {uSunUV} uniform() handle — needed
+ * per-material, not shared, since the two shells rotate on independent
+ * axes/rates and so have different sun directions in their own local UV space
+ * at any given moment (see update()).
+ *
+ * Node mapping of the old GLSL injections:
+ *  - vCloudWorld (world position varying)  -> positionWorld
+ *  - vAlphaMapUv (alphaMap UV)             -> uv() (alphaMap has no transform)
+ *  - texture2D(alphaMap, uv).g             -> texture(alphaMap, uv).g
+ *  - diffuseColor.a *= ...                 -> opacityNode
+ *  - diffuseColor.rgb *= ...               -> colorNode (albedo, then lit)
+ * The green-channel read (project gotcha) is reproduced explicitly with .g;
+ * the built-in alphaMap alpha path (materialOpacity) is bypassed because
+ * opacityNode is set, so coverage is applied exactly once. */
 function applyStormClearing(mat) {
-  const sunShadeUniforms = { uSunUV: { value: new THREE.Vector2(0, 0) } }
-  mat.customProgramCacheKey = () => 'cloud-storm-moat-sun-shade-v1'
-  mat.onBeforeCompile = (shader) => {
-    try {
-      Object.assign(shader.uniforms, stormClearUniforms)
-      Object.assign(shader.uniforms, sunShadeUniforms)
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vCloudWorld;')
-        .replace(
-          '#include <begin_vertex>',
-          '#include <begin_vertex>\nvCloudWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
-        )
-      const frag = shader.fragmentShader
-        .replace(
-          '#include <common>',
-          '#include <common>\nuniform vec3 uStormDir;\nuniform float uStormOn;\nuniform vec2 uSunUV;\nvarying vec3 vCloudWorld;',
-        )
-        .replace(
-          '#include <alphamap_fragment>',
-          [
-            '#include <alphamap_fragment>',
-            '{',
-            '  float cosAng = dot(normalize(vCloudWorld), uStormDir);',
-            '  // full clear inside ~0.3 rad of the eye, feathering out to ~0.55 rad',
-            '  float clearT = smoothstep(0.85, 0.955, cosAng);',
-            '  diffuseColor.a *= 1.0 - clearT * uStormOn;',
-            '}',
-            '{',
-            '  // M-SKY 2.5D shading: a second alphaMap sample offset TOWARD the',
-            "  // sun (in this shell's own UV space, uSunUV - see update()) fakes",
-            '  // a bit of cloud thickness without a real raymarch. High density',
-            '  // both here AND toward the sun -> this fragment sits on the',
-            '  // shadowed base of a thicker mass; low density toward the sun but',
-            '  // cloud here -> a sun-facing rim, catches a thin highlight.',
-            '  float du = uSunUV.x - vAlphaMapUv.x;',
-            '  du -= floor(du + 0.5);', // shortest wrap around the circular U seam
-            '  vec2 toSun = vec2(du, uSunUV.y - vAlphaMapUv.y);',
-            '  float toSunLen = length(toSun);',
-            '  vec2 sunDirUv = toSunLen > 1e-5 ? toSun / toSunLen : vec2(1.0, 0.0);',
-            '  float ownDensity = texture2D(alphaMap, vAlphaMapUv).g;',
-            '  float sunSample = texture2D(alphaMap, vAlphaMapUv + sunDirUv * 0.018).g;',
-            '  float shadowT = smoothstep(0.18, 0.7, sunSample) * ownDensity;',
-            '  float edgeT = (1.0 - smoothstep(0.05, 0.4, sunSample)) * ownDensity;',
-            '  vec3 shadeTint = vec3(0.7255, 0.7686, 0.8314);', // #b9c4d4
-            '  diffuseColor.rgb *= mix(vec3(1.0), shadeTint, shadowT * 0.6);',
-            '  diffuseColor.rgb *= 1.0 + edgeT * 0.08;',
-            '  diffuseColor.rgb = min(diffuseColor.rgb, vec3(1.0));', // stay white-dominant, never glow (ART.md 2.5/8)
-            '}',
-          ].join('\n'),
-        )
-      if (frag === shader.fragmentShader) throw new Error('sky.js: cloud moat injection point not found')
-      shader.fragmentShader = frag
-    } catch (err) {
-      /* clouds simply ignore the storm/sun-shading on failure */
-    }
-  }
-  return sunShadeUniforms
+  const uSunUV = uniform(new THREE.Vector2(0, 0))
+  const alphaTex = mat.alphaMap
+  const vUv = uv()
+  const ownDensity = texture(alphaTex, vUv).g // alphaMap coverage lives in the GREEN channel
+
+  // Storm-moat clearing: the hurricane clears a moat in the ambient deck
+  // around itself. Full clear inside ~0.3 rad of the eye, feathering out to
+  // ~0.55 rad. cosAng uses the fragment's world position.
+  const cosAng = positionWorld.normalize().dot(stormClearUniforms.uStormDir)
+  const clearT = tslSmoothstep(0.85, 0.955, cosAng)
+  const stormFactor = clearT.mul(stormClearUniforms.uStormOn).oneMinus()
+
+  // M-SKY 2.5D shading: a second alphaMap sample offset TOWARD the sun (in
+  // this shell's own UV space, uSunUV — see update()) fakes a bit of cloud
+  // thickness without a real raymarch. High density both here AND toward the
+  // sun -> this fragment sits on the shadowed base of a thicker mass; low
+  // density toward the sun but cloud here -> a sun-facing rim highlight.
+  const du0 = uSunUV.x.sub(vUv.x)
+  const du = du0.sub(du0.add(0.5).floor()) // shortest wrap around the circular U seam
+  const toSun = vec2(du, uSunUV.y.sub(vUv.y))
+  const toSunLen = toSun.length()
+  const sunDirUv = select(toSunLen.greaterThan(1e-5), toSun.div(toSunLen), vec2(1, 0))
+  const sunSample = texture(alphaTex, vUv.add(sunDirUv.mul(0.018))).g
+  const shadowT = tslSmoothstep(0.18, 0.7, sunSample).mul(ownDensity)
+  const edgeT = tslSmoothstep(0.05, 0.4, sunSample).oneMinus().mul(ownDensity)
+  const shadeTint = vec3(0.7255, 0.7686, 0.8314) // #b9c4d4
+
+  // Base albedo is white (material color); tint toward shade under self-shadow,
+  // lift slightly on sun-facing rims, then clamp white-dominant so clouds never
+  // glow (ART.md 2.5/8). Lighting is applied on top by the standard material.
+  mat.colorNode = mix(vec3(1, 1, 1), shadeTint, shadowT.mul(0.6))
+    .mul(edgeT.mul(0.08).add(1))
+    .min(vec3(1, 1, 1))
+
+  // Final alpha = live deck opacity (materialReference tracks material.opacity,
+  // faded per frame in update()) * green-channel coverage * storm moat.
+  mat.opacityNode = materialReference('opacity', 'float', mat).mul(ownDensity).mul(stormFactor)
+
+  return { uSunUV }
 }
 
 function createClouds(seed) {
@@ -1086,9 +1084,14 @@ function createClouds(seed) {
     targetCoverage: 0.2,
   })
   const lowerTex = lowerBake.tex
+  // Publish the lower deck's alpha texture to the cloud-shadow contract now,
+  // before any warm-up render, so planet.js's node graph never binds a null
+  // sampler when it consumes getCloudShadowUniforms().uCloudTex. update()
+  // re-points .value each frame per the contract documented above.
+  cloudShadowUniforms.uCloudTex.value = lowerTex
   const lowerMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.075, 64, 32),
-    new THREE.MeshStandardMaterial({
+    new THREE.MeshStandardNodeMaterial({
       color: 0xffffff,
       alphaMap: lowerTex,
       transparent: true,
@@ -1125,7 +1128,7 @@ function createClouds(seed) {
   const upperTex = upperBake.tex
   const upperMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.09, 64, 32),
-    new THREE.MeshStandardMaterial({
+    new THREE.MeshStandardNodeMaterial({
       color: 0xffffff,
       alphaMap: upperTex,
       transparent: true,
@@ -1301,6 +1304,26 @@ const AURORA_SHELL_R0 = 1.12
 const AURORA_SHELL_R1 = AURORA_SHELL_R0 + 0.05
 const AURORA_BASE_ANG_RADIUS = 0.35 // radians from the pole
 
+// TSL ports of the aurora fragment's GLSL helpers (built once, reused by all
+// four curtain graphs). hash1/noise1 are the original 1D value-noise pair;
+// auroraSmoothstepSafe reproduces the manual smoothstep that stays defined for
+// reversed edges (a > b) — the night-side gate calls it with a=0.1, b=-0.25,
+// a case GLSL's (and TSL's) built-in smoothstep leaves undefined.
+const auroraHash1 = Fn(([n]) => n.sin().mul(43758.5453123).fract())
+const auroraNoise1 = Fn(([x]) => {
+  const i = x.floor().toVar()
+  const f = x.fract().toVar()
+  const u = f.mul(f).mul(float(3).sub(f.mul(2)))
+  return mix(auroraHash1(i), auroraHash1(i.add(1)), u)
+})
+function auroraSmoothstepSafe(a, b, x) {
+  const t = x
+    .sub(a)
+    .div(b - a)
+    .clamp(0, 1)
+  return t.mul(t).mul(float(3).sub(t.mul(2)))
+}
+
 /** One wavy curtain ribbon: a 129x2-vertex parametric strip circling the
  * pole at ~AURORA_BASE_ANG_RADIUS, radius perturbed per-column by a seeded
  * fbm sampled at (cos theta, sin theta) so the wobble closes seamlessly at
@@ -1360,67 +1383,38 @@ function buildAuroraCurtain(seed, poleSign, ringIndex, uniforms) {
   geo.setAttribute('along', new THREE.BufferAttribute(alongs, 1))
   geo.setIndex(indices)
 
-  const mat = new THREE.ShaderMaterial({
-    uniforms,
+  // Shape is baked above; the node graph animates only color flow + night-side
+  // visibility, driven by the shared uniform() handles (uTime, uSunDir). Ported
+  // from the original raw GLSL shader (which errors under WebGPURenderer).
+  // grad/along are read as per-vertex attributes (auto-varying to the fragment);
+  // the old vWorldPos varying (modelMatrix * position) becomes positionWorld.
+  const vGrad = attribute('grad', 'float')
+  const vAlong = attribute('along', 'float')
+  const gradC = vGrad.clamp(0, 1)
+  const col = mix(vec3(0.302, 1.0, 0.651), vec3(0.69, 0.486, 1.0), gradC) // #4dffa6 -> #b07cff
+
+  const w1 = auroraNoise1(vAlong.mul(9).add(uniforms.uTime.mul(0.55)))
+  const w2 = auroraNoise1(vAlong.mul(3.5).sub(uniforms.uTime.mul(0.22)).add(11.3))
+  const waves = w1.mul(0.6).add(w2.mul(0.4))
+
+  // Soft fade at the ribbon's top/bottom edges instead of a hard cut.
+  const edgeFade = gradC.mul(Math.PI).sin()
+  // Night-side only: fades out approaching the sunlit terminator.
+  const nightFade = auroraSmoothstepSafe(0.1, -0.25, positionWorld.normalize().dot(uniforms.uSunDir))
+
+  const alpha = float(0.35)
+    .mul(mix(float(0.25), float(1.0), waves))
+    .mul(edgeFade)
+    .mul(nightFade)
+
+  const mat = new THREE.MeshBasicNodeMaterial({
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
-    vertexShader: `
-      attribute float grad;
-      attribute float along;
-      varying float vGrad;
-      varying float vAlong;
-      varying vec3 vWorldPos;
-      void main() {
-        vGrad = grad;
-        vAlong = along;
-        vec4 worldPos = modelMatrix * vec4(position, 1.0);
-        vWorldPos = worldPos.xyz;
-        gl_Position = projectionMatrix * viewMatrix * worldPos;
-      }
-    `,
-    fragmentShader: `
-      uniform float uTime;
-      uniform vec3 uSunDir;
-      varying float vGrad;
-      varying float vAlong;
-      varying vec3 vWorldPos;
-
-      float hash1(float n) { return fract(sin(n) * 43758.5453123); }
-      float noise1(float x) {
-        float i = floor(x);
-        float f = fract(x);
-        float u = f * f * (3.0 - 2.0 * f);
-        return mix(hash1(i), hash1(i + 1.0), u);
-      }
-      // Manual smoothstep so reversed edges (a > b) behave the same
-      // predictable way the JS util.js one does — GLSL's built-in leaves
-      // that case undefined.
-      float smoothstepSafe(float a, float b, float x) {
-        float t = clamp((x - a) / (b - a), 0.0, 1.0);
-        return t * t * (3.0 - 2.0 * t);
-      }
-
-      void main() {
-        vec3 baseColor = vec3(0.302, 1.0, 0.651); // #4dffa6
-        vec3 topColor = vec3(0.690, 0.486, 1.0);  // #b07cff
-        vec3 col = mix(baseColor, topColor, clamp(vGrad, 0.0, 1.0));
-
-        float w1 = noise1(vAlong * 9.0 + uTime * 0.55);
-        float w2 = noise1(vAlong * 3.5 - uTime * 0.22 + 11.3);
-        float waves = w1 * 0.6 + w2 * 0.4;
-
-        // Soft fade at the ribbon's top/bottom edges instead of a hard cut.
-        float edgeFade = sin(clamp(vGrad, 0.0, 1.0) * 3.14159265);
-        // Night-side only: fades out approaching the sunlit terminator.
-        float nightFade = smoothstepSafe(0.1, -0.25, dot(normalize(vWorldPos), uSunDir));
-
-        float alpha = 0.35 * mix(0.25, 1.0, waves) * edgeFade * nightFade;
-        gl_FragColor = vec4(col, alpha);
-      }
-    `,
   })
+  mat.colorNode = col
+  mat.opacityNode = alpha
 
   return new THREE.Mesh(geo, mat)
 }
@@ -1429,8 +1423,8 @@ function buildAuroraCurtain(seed, poleSign, ringIndex, uniforms) {
  * {uTime, uSunDir} uniform pair updated once per frame in update(). */
 function createAurora(seed) {
   const uniforms = {
-    uTime: { value: 0 },
-    uSunDir: { value: new THREE.Vector3(1, 0, 0) },
+    uTime: uniform(0),
+    uSunDir: uniform(new THREE.Vector3(1, 0, 0)),
   }
   const group = new THREE.Group()
   for (const poleSign of [1, -1]) {

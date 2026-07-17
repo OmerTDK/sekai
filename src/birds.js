@@ -8,19 +8,20 @@
 //
 // Wings flap in the VERTEX SHADER: a per-vertex `wingSide` attribute
 // (-1/0/+1) marks which hinge group a vertex belongs to, and two per-instance
-// attributes (`flapWave`, `flapCycle`) drive a shared onBeforeCompile
-// injection that rotates wing vertices about the shoulder hinge (HINGE_X) —
-// the exact instanced-attribute + onBeforeCompile recipe flora.js's grass
-// wind / tree sway shaders use, extended from a bend to a hinge rotation.
+// attributes (`flapWave`, `flapCycle`) drive a TSL `positionNode` graph on a
+// MeshStandardNodeMaterial (built once) that rotates wing vertices about the
+// shoulder hinge (HINGE_X) — the same instanced-attribute recipe flora.js's
+// grass wind / tree sway shaders use, extended from a bend to a hinge
+// rotation (see docs/spikes/2026-07-17-s1-tsl-webgpu.md §5/§8.1).
 // Flap-vs-glide alternation is computed ENTIRELY from a shared `uTime`
 // uniform plus each bird's own static per-instance phase/cycle attributes
 // (set once at creation) — no per-frame CPU work beyond advancing the clock
 // and moving each bird's flight path, matching flora's "one uniform update,
 // zero per-instance JS" wind pattern. flatShading:true means the fragment
 // shader derives its normal from screen-space position derivatives (three.js
-// FLAT_SHADED path), so the flap shader only needs to rotate `transformed`
-// (position) in `begin_vertex` — no normal-shader injection needed (same
-// simplification flora.js's tree-sway shader already relies on).
+// FLAT_SHADED path), so the flap graph only needs to rotate the vertex
+// position (`positionGeometry`) — no normalNode needed (same simplification
+// flora.js's tree-sway shader already relies on).
 //
 // Three habits, each deterministic from `seed` (rngFromString + makeNoise3D,
 // no Math.random/Date.now anywhere):
@@ -38,7 +39,20 @@
 //      terrain+0.006-0.012, with a noise-driven organic loop-radius wobble.
 //
 // Contract (pinned): createBirds(planet, seed) -> { group, update(dt, camera) }.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  attribute,
+  cos,
+  Fn,
+  min,
+  mod,
+  positionGeometry,
+  positionLocal,
+  sin,
+  smoothstep,
+  uniform,
+  vec3,
+} from 'three/tsl'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { rngFromString, makeNoise3D, clamp, lerp } from './util.js'
 import { tangentBasis } from './placement.js'
@@ -425,59 +439,83 @@ export function createBirds(planet, seed) {
   const { geo, hingeX } = buildBirdGeometry()
   geo.setAttribute('flapWave', new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY * 3), 3)) // phase, rate, amp
   geo.setAttribute('flapCycle', new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY * 3), 3)) // offset, len, flapFrac
+  // Per-instance orientation basis: columns 0 and 1 (right·scale, up·scale) of
+  // each bird's LIVE instance matrix. flora bakes its analogous swayRight/swayFwd
+  // ONCE at scatter time because its props never move; birds re-orient every
+  // frame, so these are rewritten each frame in the flight loop (writeBasis, called
+  // from stepVFlock/stepCircleFlock alongside setMatrixAt). positionNode uses them
+  // to rotate the geometry-space wing-flap displacement into each bird's current
+  // world frame. DynamicDrawUsage: rewritten every frame, exactly like instanceMatrix.
+  const birdRightBuf = new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY * 3), 3)
+  const birdUpBuf = new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY * 3), 3)
+  birdRightBuf.setUsage(THREE.DynamicDrawUsage)
+  birdUpBuf.setUsage(THREE.DynamicDrawUsage)
+  geo.setAttribute('birdRight', birdRightBuf)
+  geo.setAttribute('birdUp', birdUpBuf)
 
-  const material = new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshStandardNodeMaterial({
     vertexColors: true,
     flatShading: true,
     roughness: 0.92,
     metalness: 0,
     side: THREE.DoubleSide,
   })
-  let flapUniforms = null
-  let warnedFlapShader = false
-  material.customProgramCacheKey = () => 'birds-flap-v1'
-  material.onBeforeCompile = (shader) => {
-    try {
-      shader.uniforms.uTime = { value: 0 }
-      shader.vertexShader =
-        'uniform float uTime;\n' +
-        'attribute float wingSide;\n' +
-        'attribute vec3 flapWave;\n' +
-        'attribute vec3 flapCycle;\n' +
-        'float birdFlapAngle() {\n' +
-        '  float cyclePos = mod(uTime + flapCycle.x, flapCycle.y);\n' +
-        '  float flapWindow = flapCycle.y * flapCycle.z;\n' +
-        '  float edge = min(flapCycle.y * 0.12, 0.35);\n' +
-        '  float env = smoothstep(0.0, edge, cyclePos) * (1.0 - smoothstep(flapWindow, flapWindow + edge, cyclePos));\n' +
-        '  return sin(uTime * flapWave.y + flapWave.x) * flapWave.z * env;\n' +
-        '}\n' +
-        'vec3 birdFlapRotate(vec3 p, float angle) {\n' +
-        `  float hx = ${hingeX.toFixed(6)} * wingSide;\n` +
-        '  float dx = p.x - hx;\n' +
-        '  float a = angle * wingSide;\n' +
-        '  float ca = cos(a);\n' +
-        '  float sa = sin(a);\n' +
-        '  return vec3(hx + dx * ca - p.y * sa, dx * sa + p.y * ca, p.z);\n' +
-        '}\n' +
-        shader.vertexShader
-      const patched = shader.vertexShader.replace(
-        '#include <begin_vertex>',
-        ['#include <begin_vertex>', 'transformed = birdFlapRotate(transformed, birdFlapAngle());'].join('\n'),
-      )
-      if (patched === shader.vertexShader) throw new Error('birds.js: begin_vertex injection point not found')
-      shader.vertexShader = patched
-      flapUniforms = shader.uniforms
-    } catch (err) {
-      flapUniforms = null // fall back to static (unflapping, flat) wings
-      if (!warnedFlapShader) {
-        warnedFlapShader = true
-        console.warn(
-          '[planet] birds.js: wing-flap animation degraded — onBeforeCompile shader injection failed, wings render static: ' +
-            err,
-        )
-      }
-    }
-  }
+
+  // Wing-flap hinge as a TSL node graph, built ONCE (S1 build-once/uniforms-only law,
+  // docs/spikes/2026-07-17-s1-tsl-webgpu.md §6/§8) — ports the old string-injected
+  // begin_vertex shader hook this material used under WebGLRenderer. uTime is the only
+  // piece written per frame (in update(), below); the graph itself never changes.
+  const uTime = uniform(0)
+  const wingSideAttr = attribute('wingSide', 'float') // per-vertex: -1/0/+1, welds hinge root
+  const flapWaveAttr = attribute('flapWave', 'vec3') // per-instance: x=phase, y=rate, z=amp
+  const flapCycleAttr = attribute('flapCycle', 'vec3') // per-instance: x=offset, y=len, z=flapFraction
+  const birdRightAttr = attribute('birdRight', 'vec3') // per-instance: right·scale column of the live instance matrix
+  const birdUpAttr = attribute('birdUp', 'vec3') // per-instance: up·scale column of the live instance matrix
+
+  // Flap-angle envelope: cyclePos walks 0..cycleLen (flapCycle.y); env ramps up/down
+  // (smoothstep edges) across the flapFraction-sized flap window and sits at 0 — wings
+  // flat — for the remainder of the cycle, i.e. the glide hold.
+  const birdFlapAngle = Fn(() => {
+    const cyclePos = mod(uTime.add(flapCycleAttr.x), flapCycleAttr.y)
+    const flapWindow = flapCycleAttr.y.mul(flapCycleAttr.z)
+    const edge = min(flapCycleAttr.y.mul(0.12), 0.35)
+    const env = smoothstep(0, edge, cyclePos).mul(
+      smoothstep(flapWindow, flapWindow.add(edge), cyclePos).oneMinus(),
+    )
+    return sin(uTime.mul(flapWaveAttr.y).add(flapWaveAttr.x)).mul(flapWaveAttr.z).mul(env)
+  })
+
+  // Hinge rotation about HINGE_X * wingSide — wing-root verts sit exactly at x=HINGE_X
+  // (WING_POS_R/L) so they stay welded to the shoulder while the tip sweeps the flap arc;
+  // wingSide 0 (body/head/tail) rotates by angle*0 and passes through unchanged.
+  const birdFlapRotate = Fn(
+    ([p, angle]) => {
+      const hx = wingSideAttr.mul(hingeX)
+      const dx = p.x.sub(hx)
+      const a = angle.mul(wingSideAttr)
+      const ca = cos(a)
+      const sa = sin(a)
+      return vec3(hx.add(dx.mul(ca)).sub(p.y.mul(sa)), dx.mul(sa).add(p.y.mul(ca)), p.z)
+    },
+    { p: 'vec3', angle: 'float', return: 'vec3' },
+  )
+
+  // positionNode FULLY REPLACES positionLocal, and by the time it is evaluated the
+  // renderer has ALREADY baked the per-instance transform INTO positionLocal
+  // (positionLocal = instanceMatrix * positionGeometry — see three's Instance.js
+  // `instance()` then NodeMaterial.setupPosition). Building the flap from raw
+  // `positionGeometry` (as the first port did) therefore discarded every bird's
+  // placement + orientation and collapsed the whole flock onto the origin. Correct
+  // composition, matching the classic GLSL `instanceMatrix * flapRotate(position)`:
+  // since flapRotate(g) = g + flapDelta,
+  //   instanceMatrix * (g + flapDelta) = positionLocal + (rotation·scale)·flapDelta.
+  // flapDelta is the wing sweep in geometry space; birdFlapRotate is an in-plane
+  // (x,y) hinge rotation about z (it returns the input z untouched), so flapDelta.z
+  // is identically 0 — only the instance's right (col0) and up (col1) basis vectors
+  // are needed to carry it into world space. Those columns are refreshed each frame
+  // by writeBasis(), so this stays correct as birds fly and bank.
+  const flapDelta = birdFlapRotate(positionGeometry, birdFlapAngle()).sub(positionGeometry)
+  material.positionNode = positionLocal.add(birdRightAttr.mul(flapDelta.x)).add(birdUpAttr.mul(flapDelta.y))
 
   const mesh = new THREE.InstancedMesh(geo, material, CAPACITY)
   mesh.count = 0
@@ -488,6 +526,8 @@ export function createBirds(planet, seed) {
   const sizes = new Float32Array(CAPACITY)
   const flapWaveArr = geo.attributes.flapWave.array
   const flapCycleArr = geo.attributes.flapCycle.array
+  const birdRightArr = geo.attributes.birdRight.array
+  const birdUpArr = geo.attributes.birdUp.array
   const _tintColor = new THREE.Color()
   let count = 0
   let warnedCapacity = false
@@ -539,6 +579,21 @@ export function createBirds(planet, seed) {
   const _zAxis = new THREE.Vector3(0, 0, 1)
   let simTime = 0
 
+  // Bakes columns 0 (right·scale) and 1 (up·scale) of the bird's just-composed
+  // instance matrix into the per-instance basis attributes — the live-frame
+  // equivalent of flora's scatter-time swayRight/swayFwd bake, refreshed every
+  // frame because birds re-orient constantly. Reading from the composed _instMat
+  // (not the raw makeBasis vectors) captures the roll/bank and scale exactly.
+  function writeBasis(idx) {
+    const b = idx * 3
+    birdRightArr[b] = _instMat.elements[0]
+    birdRightArr[b + 1] = _instMat.elements[1]
+    birdRightArr[b + 2] = _instMat.elements[2]
+    birdUpArr[b] = _instMat.elements[4]
+    birdUpArr[b + 1] = _instMat.elements[5]
+    birdUpArr[b + 2] = _instMat.elements[6]
+  }
+
   function stepVFlock(fl, dt) {
     fl.angle += fl.speed * dt
     _leaderDir.copy(fl.start).applyAxisAngle(fl.axis, fl.angle)
@@ -566,6 +621,7 @@ export function createBirds(planet, seed) {
       _scaleVec.setScalar(sizes[m.instanceIndex])
       _instMat.compose(_instPos, _instQuat, _scaleVec)
       mesh.setMatrixAt(m.instanceIndex, _instMat)
+      writeBasis(m.instanceIndex)
     }
   }
 
@@ -600,6 +656,7 @@ export function createBirds(planet, seed) {
       _scaleVec.setScalar(sizes[m.instanceIndex])
       _instMat.compose(_instPos, _instQuat, _scaleVec)
       mesh.setMatrixAt(m.instanceIndex, _instMat)
+      writeBasis(m.instanceIndex)
     }
   }
 
@@ -611,11 +668,13 @@ export function createBirds(planet, seed) {
     }
     mesh.visible = true
     simTime += dt
-    if (flapUniforms) flapUniforms.uTime.value = simTime
+    uTime.value = simTime
     for (const fl of migratoryFlocks) stepVFlock(fl, dt)
     for (const fl of gullFlocks) stepCircleFlock(fl, dt)
     for (const fl of forestFlocks) stepCircleFlock(fl, dt)
     mesh.instanceMatrix.needsUpdate = true
+    geo.attributes.birdRight.needsUpdate = true
+    geo.attributes.birdUp.needsUpdate = true
   }
 
   return { group, update }

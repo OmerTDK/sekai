@@ -6,7 +6,8 @@
 // shows), and a larger, fainter wet-ground ring that lingers after the
 // flood drains. Fully reactive to storms' own state + planet terrain -- no
 // randomness anywhere, so `seed` is accepted (API contract) but unused.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import { attribute, color, length, smoothstep as smoothstepNode, uniform, uv } from 'three/tsl'
 import { SEA_LEVEL, clamp, smoothstep } from './util.js'
 
 const LANDFALL_STRENGTH_MIN = 0.35 // storms.getPrimary() strength floor for "landfall"
@@ -25,7 +26,15 @@ const FLOOD_RISE_MAX = 0.0035 // peak waterline rise above SEA_LEVEL
 const FLOOD_RADIUS = SEA_LEVEL + FLOOD_RISE_MAX
 const FLOOD_GROW_TIME = 10 // seconds to ease in once landfall starts
 const FLOOD_DRAIN_TIME = 30 // seconds to ease out once the storm leaves land
-const FLOOD_SHORE_SOFT = 0.0008 // shoreline fade band width, same units as terrain height
+const FLOOD_SHORE_SOFT = 0.0008 // upper shoreline fade band width, same units as terrain height
+// Lower bound of the flood band: seaward of FLOOD_DEPTH_BAND below SEA_LEVEL
+// the sheet fades to nothing, so it only shows on shallowly-submerged COASTAL
+// land -- a temporary waterline rise -- and never washes the open sea. Ocean-
+// floor terrainH sits ~0.02 below SEA_LEVEL, well past this band, so deep
+// water reads clear. (Without this, shoreFade alone is 1 over the whole ocean
+// floor, painting an opaque slab across the open sea -- the reported bug.)
+const FLOOD_DEPTH_BAND = 0.004 // how far below SEA_LEVEL the flood sheet still shows
+const FLOOD_PEAK_ALPHA = 0.6 // peak sheet opacity inside the band (subtle landfall touch)
 const FLOOD_COLOR = 0x3d6a5e // planet.js shallow #2f8fa8 family, shifted darker/greener + desaturated
 
 const RING_ANGULAR_RADIUS = 0.2 // rad -- larger than the flood sheet, "wet shores" extend past the water
@@ -61,83 +70,70 @@ const floodVertexCount = FLOOD_PATCH.geo.attributes.position.count
 const terrainHArray = new Float32Array(floodVertexCount)
 FLOOD_PATCH.geo.setAttribute('terrainH', new THREE.BufferAttribute(terrainHArray, 1))
 
-// position/uv are auto-declared by THREE.ShaderMaterial whenever the
-// geometry has them -- only the custom `terrainH` attribute needs a manual
-// declaration here.
-const FLOOD_VERT = `
-attribute float terrainH;
-varying float vTerrainH;
-varying vec2 vFUv;
-void main() {
-  vTerrainH = terrainH;
-  vFUv = uv;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
-`
-
-const FLOOD_FRAG = `
-varying float vTerrainH;
-varying vec2 vFUv;
-uniform float uFloodLevel;
-uniform float uOpacity;
-uniform vec3 uColor;
-void main() {
-  float wet = uFloodLevel - vTerrainH;
-  float shoreFade = smoothstep(0.0, ${FLOOD_SHORE_SOFT}, wet);
-  vec2 c = vFUv - 0.5;
-  float edgeFade = 1.0 - smoothstep(0.72, 1.0, length(c) * 2.0);
-  float alpha = shoreFade * edgeFade * uOpacity * 0.78;
-  if (alpha < 0.004) discard;
-  gl_FragColor = vec4(uColor, alpha);
-}
-`
-
-const RING_VERT = `
-varying vec2 vRUv;
-void main() {
-  vRUv = uv;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
-`
-
-const RING_FRAG = `
-varying vec2 vRUv;
-uniform float uOpacity;
-uniform vec3 uColor;
-void main() {
-  vec2 c = vRUv - 0.5;
-  float f = 1.0 - smoothstep(0.0, 1.0, clamp(length(c) * 2.0, 0.0, 1.0));
-  float alpha = f * f * uOpacity;
-  if (alpha < 0.003) discard;
-  gl_FragColor = vec4(uColor, alpha);
-}
-`
-
+// TSL node graphs, built ONCE here (S1 law: structural node changes cost a
+// ~140ms recompile, so the graph shape never changes after this). The only
+// per-frame writes are `.value` on the uFloodLevel/uOpacity uniform handles
+// (see update() below). No positionNode -- both patches sit at a fixed
+// shell radius, so the default vertex transform (position -> MVP) already
+// matches the old vertex shaders exactly.
+//
+// terrainH is the same preallocated-and-resampled BufferAttribute as
+// before; attribute('terrainH', 'float') reads it and TSL interpolates it
+// to the fragment stage automatically -- no manual varying declaration
+// needed. uv() likewise reads the geometry's default uv attribute in place
+// of the old `varying vec2 vFUv/vRUv`.
 function makeFloodMaterial() {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uFloodLevel: { value: SEA_LEVEL },
-      uOpacity: { value: 0 },
-      uColor: { value: new THREE.Color(FLOOD_COLOR) },
-    },
-    vertexShader: FLOOD_VERT,
-    fragmentShader: FLOOD_FRAG,
+  // depthTest TRUE (explicit -- the original ShaderMaterial relied on the
+  // default): the sheet is depth-tested against the opaque terrain/ocean, so a
+  // coastal mountain in front of it occludes it instead of the sheet drawing
+  // through. depthWrite FALSE: a transparent overlay must not write depth.
+  const material = new THREE.MeshBasicNodeMaterial({
     transparent: true,
+    depthTest: true,
     depthWrite: false,
   })
+  material.uFloodLevel = uniform(SEA_LEVEL)
+  material.uOpacity = uniform(0)
+  const terrainH = attribute('terrainH', 'float')
+
+  // Upper fade: nothing above the risen waterline -- dry land stays dry.
+  const wet = material.uFloodLevel.sub(terrainH)
+  const shoreFade = smoothstepNode(0, FLOOD_SHORE_SOFT, wet)
+  // Lower fade: nothing over deep/open water. The sheet only shows where land
+  // is shallowly submerged -- terrainH within FLOOD_DEPTH_BAND below SEA_LEVEL
+  // up to the waterline -- so the flood hugs the coast rather than washing the
+  // whole sea. This is the band restriction that kills the open-sea slab.
+  const deepFade = smoothstepNode(SEA_LEVEL - FLOOD_DEPTH_BAND, SEA_LEVEL, terrainH)
+  const c = uv().sub(0.5)
+  const edgeFade = smoothstepNode(0.72, 1.0, length(c).mul(2)).oneMinus()
+
+  material.colorNode = color(FLOOD_COLOR)
+  material.opacityNode = shoreFade.mul(deepFade).mul(edgeFade).mul(material.uOpacity).mul(FLOOD_PEAK_ALPHA)
+  // material.colorNode is vec3 -> promoted to vec4 with alpha 1, so final
+  // alpha is exactly opacityNode; alphaTest reproduces `if (alpha < 0.004)
+  // discard;` (discards on <=, a no-op difference for a continuous alpha).
+  material.alphaTest = 0.004
+  return material
 }
 
 function makeRingMaterial() {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uOpacity: { value: 0 },
-      uColor: { value: new THREE.Color(RING_COLOR) },
-    },
-    vertexShader: RING_VERT,
-    fragmentShader: RING_FRAG,
+  // Same depth contract as the flood sheet: depth-test against the terrain
+  // (so higher dry land occludes the wet-ground ring, as the comment on
+  // RING_RADIUS notes) but never write depth.
+  const material = new THREE.MeshBasicNodeMaterial({
     transparent: true,
+    depthTest: true,
     depthWrite: false,
   })
+  material.uOpacity = uniform(0)
+
+  const c = uv().sub(0.5)
+  const f = smoothstepNode(0, 1, length(c).mul(2).clamp(0, 1)).oneMinus()
+
+  material.colorNode = color(RING_COLOR)
+  material.opacityNode = f.mul(f).mul(material.uOpacity)
+  material.alphaTest = 0.003 // matches `if (alpha < 0.003) discard;`
+  return material
 }
 
 // Silent-fallback rule: warns exactly once, module-level flag (mirrors
@@ -273,12 +269,12 @@ export function createFloods(planet, storms, _seed) {
     ringT = clamp(ringT + ringRate * dt, 0, 1)
 
     const easedRise = smoothstep(0, 1, riseT)
-    floodMat.uniforms.uFloodLevel.value = SEA_LEVEL + easedRise * FLOOD_RISE_MAX
-    floodMat.uniforms.uOpacity.value = easedRise
+    floodMat.uFloodLevel.value = SEA_LEVEL + easedRise * FLOOD_RISE_MAX
+    floodMat.uOpacity.value = easedRise
     floodMesh.visible = easedRise > 0.001
 
     const easedRing = smoothstep(0, 1, ringT)
-    ringMat.uniforms.uOpacity.value = easedRing * RING_PEAK_ALPHA
+    ringMat.uOpacity.value = easedRing * RING_PEAK_ALPHA
     ringMesh.visible = easedRing > 0.001
   }
 

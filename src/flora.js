@@ -8,7 +8,8 @@
 // quality (see createSpacingGrid below): a candidate within a minimum
 // angular distance of an already-accepted point of the SAME layer is
 // rejected too, so growth stays dense without clumping.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import { attribute, dot, modelWorldMatrix, positionGeometry, positionLocal, uniform, vec4 } from 'three/tsl'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { rngFromString, clamp, lerp, smoothstep } from './util.js'
 
@@ -241,10 +242,8 @@ const PATCH_OFFSETS = buildPatchOffsets()
 
 // ---------------------------------------------------------------------------
 // Silent-fallback rule: every graceful-degradation path warns exactly once
-// (module-level flags, since onBeforeCompile can re-run on shader recompile).
+// (a module-level flag, so a rebuild doesn't spam the console).
 // ---------------------------------------------------------------------------
-let warnedGrassWind = false
-let warnedTreeSway = false
 let warnedTreeMerge = false
 
 // ---------------------------------------------------------------------------
@@ -322,8 +321,30 @@ function buildGrass(planet, camera, seed) {
   const bladeGeo = buildBladeGeometry()
   bladeGeo.setAttribute('phase', new THREE.InstancedBufferAttribute(new Float32Array(GRASS_CAPACITY), 1))
   const phaseAttr = bladeGeo.attributes.phase
+  // TSL positionNode fully REPLACES positionLocal -- the renderer's automatic
+  // per-instance transform already ran before positionNode is consulted, so
+  // building from raw positionGeometry (as the old shader patch's `position`
+  // did) would silently discard every blade's instanceMatrix (collapses the
+  // whole patch onto one shared, unrotated blade). Fix: build from
+  // positionLocal (already instance-transformed) and recompose what the old
+  // GLSL got for free from modelMatrix * instanceMatrix by baking it at
+  // scatter time: instBase = this blade's planted origin (local,
+  // pre-modelMatrix), used below via modelWorldMatrix to reconstruct true
+  // world position for the gust phase; swayRight = this blade's local +X
+  // axis (rotated + scaled), used to rotate the bend into the blade's own
+  // frame.
+  bladeGeo.setAttribute(
+    'instBase',
+    new THREE.InstancedBufferAttribute(new Float32Array(GRASS_CAPACITY * 3), 3),
+  )
+  bladeGeo.setAttribute(
+    'swayRight',
+    new THREE.InstancedBufferAttribute(new Float32Array(GRASS_CAPACITY * 3), 3),
+  )
+  const instBaseAttr = bladeGeo.attributes.instBase
+  const swayRightAttr = bladeGeo.attributes.swayRight
 
-  const grassMat = new THREE.MeshStandardMaterial({
+  const grassMat = new THREE.MeshStandardNodeMaterial({
     vertexColors: true,
     roughness: 1,
     metalness: 0,
@@ -344,43 +365,22 @@ function buildGrass(planet, camera, seed) {
   randUnit3(windRng, gustDir)
   randUnit3(windRng, gustDir2)
 
-  let grassUniforms = null
-  grassMat.customProgramCacheKey = () => 'flora-grass-wind-v1'
-  grassMat.onBeforeCompile = (shader) => {
-    try {
-      shader.uniforms.uTime = { value: 0 }
-      shader.uniforms.uWindStrength = { value: 1 }
-      shader.uniforms.uGustDir = { value: gustDir }
-      shader.uniforms.uGustDir2 = { value: gustDir2 }
-      shader.vertexShader =
-        'uniform float uTime;\nuniform float uWindStrength;\nuniform vec3 uGustDir;\nuniform vec3 uGustDir2;\nattribute float phase;\n' +
-        shader.vertexShader
-      const patched = shader.vertexShader.replace(
-        '#include <begin_vertex>',
-        [
-          '#include <begin_vertex>',
-          `float bladeH = clamp(position.y / ${BLADE_HEIGHT.toFixed(6)}, 0.0, 1.0);`,
-          'float bend = bladeH * bladeH;', // bases stay planted, tips move most
-          'vec3 worldBase = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;',
-          'float gust = 0.6 + 0.4 * sin(dot(worldBase, uGustDir) * 180.0 + uTime * 2.2 + phase * 0.5);',
-          'gust += 0.25 * sin(dot(worldBase, uGustDir2) * 55.0 + uTime * 0.7 + phase * 0.3);', // slower, broader layer
-          `transformed.x += bend * gust * uWindStrength * ${BLADE_BEND_AMOUNT.toFixed(6)};`,
-        ].join('\n'),
-      )
-      if (patched === shader.vertexShader) throw new Error('flora.js: grass shader injection point not found')
-      shader.vertexShader = patched
-      grassUniforms = shader.uniforms
-    } catch (err) {
-      grassUniforms = null // fall back to static grass
-      if (!warnedGrassWind) {
-        warnedGrassWind = true
-        console.warn(
-          '[planet] flora.js: grass wind animation degraded — onBeforeCompile shader injection failed, blades render static: ' +
-            err,
-        )
-      }
-    }
-  }
+  const uTime = uniform(0)
+  const uWindStrength = uniform(1)
+  const uGustDir = uniform(gustDir)
+  const uGustDir2 = uniform(gustDir2)
+  const phase = attribute('phase', 'float')
+  const instBase = attribute('instBase', 'vec3')
+  const swayRight = attribute('swayRight', 'vec3')
+
+  const worldBase = modelWorldMatrix.mul(vec4(instBase, 1.0)).xyz
+  const bladeH = positionGeometry.y.div(BLADE_HEIGHT).clamp(0, 1)
+  const bend = bladeH.mul(bladeH) // bases stay planted, tips move most
+  const wave1 = dot(worldBase, uGustDir).mul(180.0).add(uTime.mul(2.2)).add(phase.mul(0.5)).sin()
+  const wave2 = dot(worldBase, uGustDir2).mul(55.0).add(uTime.mul(0.7)).add(phase.mul(0.3)).sin() // slower, broader layer
+  const gust = wave1.mul(0.4).add(0.6).add(wave2.mul(0.25))
+  const bendAmount = bend.mul(gust).mul(uWindStrength).mul(BLADE_BEND_AMOUNT)
+  grassMat.positionNode = positionLocal.add(swayRight.mul(bendAmount))
 
   const grassMesh = new THREE.InstancedMesh(bladeGeo, grassMat, GRASS_CAPACITY)
   grassMesh.count = 0
@@ -447,6 +447,15 @@ function buildGrass(planet, camera, seed) {
       const h = planet.sampleHeight(dir)
       plantedMatrix(_mat4, dir, h, yaw, tiltX, tiltZ, scale, scale, scale)
       grassMesh.setMatrixAt(count, _mat4)
+      // instBase = translation column, swayRight = rotated+scaled local +X
+      // column -- see the positionNode comment above for why these are
+      // baked here instead of read from instanceMatrix in-shader.
+      instBaseAttr.array[count * 3] = _mat4.elements[12]
+      instBaseAttr.array[count * 3 + 1] = _mat4.elements[13]
+      instBaseAttr.array[count * 3 + 2] = _mat4.elements[14]
+      swayRightAttr.array[count * 3] = _mat4.elements[0]
+      swayRightAttr.array[count * 3 + 1] = _mat4.elements[1]
+      swayRightAttr.array[count * 3 + 2] = _mat4.elements[2]
 
       const valueJitter = 0.9 + rng() * 0.2 // +/-10%
       const dryT = clamp((0.55 - biome.moisture) / 0.55, 0, 1) * 0.4 // "slight" -> capped blend
@@ -465,6 +474,8 @@ function buildGrass(planet, camera, seed) {
     grassMesh.instanceMatrix.needsUpdate = true
     if (grassMesh.instanceColor) grassMesh.instanceColor.needsUpdate = true
     phaseAttr.needsUpdate = true
+    instBaseAttr.needsUpdate = true
+    swayRightAttr.needsUpdate = true
     grassMesh.computeBoundingSphere()
   }
 
@@ -493,10 +504,8 @@ function buildGrass(planet, camera, seed) {
     }
     grassMesh.visible = true
     elapsed += dt
-    if (grassUniforms) {
-      grassUniforms.uTime.value = elapsed
-      grassUniforms.uWindStrength.value = 0.85 + 0.15 * Math.sin(elapsed * 0.15) // slow "breathing" gust strength
-    }
+    uTime.value = elapsed
+    uWindStrength.value = 0.85 + 0.15 * Math.sin(elapsed * 0.15) // slow "breathing" gust strength
     const fadeT = smoothstep(GRASS_FADE_DIST, GRASS_VISIBLE_DIST, camDist)
     grassMat.opacity = 1 - fadeT
     maybeRescatter()
@@ -548,8 +557,25 @@ function buildTrees(planet, camera, seed) {
   const { geo: treeGeo, unitHeight } = buildTreeGeometry()
   treeGeo.setAttribute('treePhase', new THREE.InstancedBufferAttribute(new Float32Array(TREE_CAPACITY), 1))
   const phaseAttr = treeGeo.attributes.treePhase
+  // TSL positionNode fully REPLACES positionLocal -- the renderer's automatic
+  // per-instance transform already ran before positionNode is consulted, so
+  // building from raw positionGeometry (as the old shader patch's `position`
+  // did) would silently discard every tree's instanceMatrix (collapses the
+  // whole forest onto one shared, unrotated tree -- verified empirically
+  // against this exact three.js build before writing this). Fix: build from
+  // positionLocal (already instance-transformed) and recompose what the old
+  // GLSL got for free from instanceMatrix by baking this tree's local
+  // +X/+Z axes (rotated + scaled) at scatter time, then using them to
+  // rotate the sway into the tree's own frame.
+  treeGeo.setAttribute(
+    'swayRight',
+    new THREE.InstancedBufferAttribute(new Float32Array(TREE_CAPACITY * 3), 3),
+  )
+  treeGeo.setAttribute('swayFwd', new THREE.InstancedBufferAttribute(new Float32Array(TREE_CAPACITY * 3), 3))
+  const swayRightAttr = treeGeo.attributes.swayRight
+  const swayFwdAttr = treeGeo.attributes.swayFwd
 
-  const treeMat = new THREE.MeshStandardMaterial({
+  const treeMat = new THREE.MeshStandardNodeMaterial({
     vertexColors: true,
     flatShading: true,
     roughness: 0.92,
@@ -557,39 +583,16 @@ function buildTrees(planet, camera, seed) {
   })
 
   // Subtle canopy+trunk wobble, proportional to height above the base so the
-  // planted foot never moves; OPTIONAL per spec, guarded the same way as the
-  // grass wind shader so a failed injection just leaves trees static.
-  let treeUniforms = null
-  treeMat.customProgramCacheKey = () => 'flora-tree-sway-v1'
-  treeMat.onBeforeCompile = (shader) => {
-    try {
-      shader.uniforms.uTime = { value: 0 }
-      shader.vertexShader = 'uniform float uTime;\nattribute float treePhase;\n' + shader.vertexShader
-      const patched = shader.vertexShader.replace(
-        '#include <begin_vertex>',
-        [
-          '#include <begin_vertex>',
-          `float swayT = clamp(position.y / ${unitHeight.toFixed(6)}, 0.0, 1.0);`,
-          'float sway = swayT * swayT;',
-          'float wob = sin(uTime * 1.1 + treePhase) * 0.045;', // treePhase is already in radians ([0, 2pi))
-          'transformed.x += sway * wob;',
-          'transformed.z += sway * wob * 0.7;',
-        ].join('\n'),
-      )
-      if (patched === shader.vertexShader) throw new Error('flora.js: tree shader injection point not found')
-      shader.vertexShader = patched
-      treeUniforms = shader.uniforms
-    } catch (err) {
-      treeUniforms = null // fall back to static trees
-      if (!warnedTreeSway) {
-        warnedTreeSway = true
-        console.warn(
-          '[planet] flora.js: tree sway animation degraded — onBeforeCompile shader injection failed, trees render static: ' +
-            err,
-        )
-      }
-    }
-  }
+  // planted foot never moves.
+  const uTime = uniform(0)
+  const treePhase = attribute('treePhase', 'float')
+  const swayRight = attribute('swayRight', 'vec3')
+  const swayFwd = attribute('swayFwd', 'vec3')
+  const swayT = positionGeometry.y.div(unitHeight).clamp(0, 1)
+  const sway = swayT.mul(swayT)
+  const wob = uTime.mul(1.1).add(treePhase).sin().mul(0.045) // treePhase is already in radians ([0, 2pi))
+  const wobSway = sway.mul(wob)
+  treeMat.positionNode = positionLocal.add(swayRight.mul(wobSway)).add(swayFwd.mul(wobSway.mul(0.7)))
 
   const treeMesh = new THREE.InstancedMesh(treeGeo, treeMat, TREE_CAPACITY)
   treeMesh.count = 0
@@ -627,6 +630,15 @@ function buildTrees(planet, camera, seed) {
     plantedMatrix(_mat4, dir, h, yaw, 0, 0, scale, scale, scale)
     treeMesh.setMatrixAt(count, _mat4)
     phaseAttr.array[count] = rng() * Math.PI * 2
+    // swayRight/swayFwd = rotated+scaled local +X/+Z columns -- see the
+    // positionNode comment above for why these are baked here instead of
+    // read from instanceMatrix in-shader.
+    swayRightAttr.array[count * 3] = _mat4.elements[0]
+    swayRightAttr.array[count * 3 + 1] = _mat4.elements[1]
+    swayRightAttr.array[count * 3 + 2] = _mat4.elements[2]
+    swayFwdAttr.array[count * 3] = _mat4.elements[8]
+    swayFwdAttr.array[count * 3 + 1] = _mat4.elements[9]
+    swayFwdAttr.array[count * 3 + 2] = _mat4.elements[10]
 
     spacing.insert(dir.x, dir.y, dir.z)
     blobDirX[count] = dir.x
@@ -638,6 +650,8 @@ function buildTrees(planet, camera, seed) {
   treeMesh.count = count
   treeMesh.instanceMatrix.needsUpdate = true
   phaseAttr.needsUpdate = true
+  swayRightAttr.needsUpdate = true
+  swayFwdAttr.needsUpdate = true
   if (count > 0) treeMesh.computeBoundingSphere()
 
   let elapsed = 0
@@ -646,7 +660,7 @@ function buildTrees(planet, camera, seed) {
     treeMesh.visible = camDist < PROP_VISIBLE_DIST
     if (!treeMesh.visible) return
     elapsed += dt
-    if (treeUniforms) treeUniforms.uTime.value = elapsed
+    uTime.value = elapsed
   }
 
   return {
@@ -675,7 +689,7 @@ export function buildRockGeometry() {
 function buildRocks(planet, camera, seed) {
   const rockGeo = buildRockGeometry()
 
-  const rockMat = new THREE.MeshStandardMaterial({
+  const rockMat = new THREE.MeshStandardNodeMaterial({
     vertexColors: true,
     flatShading: true,
     roughness: 1,
@@ -774,7 +788,7 @@ export function buildBlobGeometry() {
 function buildContactBlobs(treesResult, rocksResult, camera) {
   const blobGeo = buildBlobGeometry()
 
-  const blobMat = new THREE.MeshBasicMaterial({
+  const blobMat = new THREE.MeshBasicNodeMaterial({
     color: COLOR_BLOB,
     transparent: true,
     opacity: 0.28,

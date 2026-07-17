@@ -8,7 +8,18 @@
 // of drizzle. WHAT falls (rain vs snow) comes from planet.biomeAt at the
 // camera's own footprint: polar or high-altitude ground gets snow, sea level
 // elsewhere gets rain, blended continuously across the transition.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import {
+  attribute,
+  uniform,
+  uv,
+  vec2,
+  mix,
+  smoothstep as nodeSmoothstep,
+  length as nodeLength,
+  max as nodeMax,
+  abs as nodeAbs,
+} from 'three/tsl'
 import { SEA_LEVEL, rngFromString, makeNoise3D, fbm, clamp, lerp, smoothstep } from './util.js'
 
 const TWO_PI = Math.PI * 2
@@ -76,78 +87,58 @@ const MAX_ALPHA_SNOW = 0.65
 const RAIN_COLOR_HEX = '#a7b7c8' // cool pale grey-blue, never saturated
 const SNOW_COLOR_HEX = '#edf2f6' // matches planet.js's own COLOR_SNOW exactly
 
-// One hand-rolled ShaderMaterial (this app's other custom-shader work all
-// extends an existing standard material via onBeforeCompile -- there's no
-// existing material to extend here, so this is the one raw ShaderMaterial in
-// the codebase; flagged for the M3 TSL port list per the M-WX brief).
+// The original raw vertex shader set gl_PointSize directly in framebuffer
+// pixels (no DPR factor). PointsNodeMaterial's sprite path multiplies the
+// sizeNode by screenDPR (= renderer.getPixelRatio(); see three's
+// setupVertexSprite -> `pointSize = pointSize.mul(screenDPR)`), which on a
+// retina display would render precipitation ~DPR-times too large vs the
+// pre-port build. This app's renderer pins its ratio to
+// Math.min(devicePixelRatio, 2) (main.js setPixelRatio) but createWeather
+// isn't handed the renderer, so mirror that exact expression here and divide
+// sizeNode by it, cancelling the sprite path's multiply so on-screen size
+// matches the original 1:1 (on DPR=1 this is a no-op).
+const DPR = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2)
+
+// M3 TSL port (was one hand-rolled raw-GLSL material -- this app's other
+// custom-shader work all extends an existing standard material via a GLSL
+// injection hook, which WebGPURenderer silently ignores rather than
+// erroring; a raw custom-shader material errors outright -- see
+// docs/spikes/2026-07-17-s1-tsl-webgpu.md).
 //
-// Rain streaks are a classic point-sprite fake: gl_PointCoord is rotated in
-// the fragment shader by uDownAngle (the on-screen projection of the local
-// "down" direction, computed once per frame in update() from the camera's
-// own live quaternion -- see the comment there) and shaped into a thin
-// capsule; snow is the same point sprite shaped into a soft round flake
-// instead. aSnowT blends shape AND color continuously per-particle, so a
-// rain/snow boundary (e.g. a mountain snowline) transitions smoothly rather
-// than popping between two pools.
-const VERTEX_SHADER = /* glsl */ `
-attribute float aAlpha;
-attribute float aSnowT;
-attribute float aSeed;
-
-uniform float uRainSize;
-uniform float uSnowSize;
-
-varying float vAlpha;
-varying float vSnowT;
-varying float vSizeJitter;
-
-void main() {
-  vAlpha = aAlpha;
-  vSnowT = aSnowT;
-  vSizeJitter = fract(sin(aSeed * 78.233) * 43758.5453);
-
-  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * mvPosition;
-  gl_PointSize = mix(uRainSize, uSnowSize, aSnowT) * (0.75 + 0.5 * vSizeJitter);
-}
-`
-
-const FRAGMENT_SHADER = /* glsl */ `
-precision mediump float;
-
-uniform float uDownAngle;
-uniform vec3 uRainColor;
-uniform vec3 uSnowColor;
-
-varying float vAlpha;
-varying float vSnowT;
-varying float vSizeJitter;
-
-void main() {
-  if (vAlpha <= 0.003) discard;
-
-  vec2 uv = gl_PointCoord - 0.5;
-  float ca = cos(uDownAngle);
-  float sa = sin(uDownAngle);
-  vec2 ruv = vec2(ca * uv.x + sa * uv.y, -sa * uv.x + ca * uv.y);
-
-  // Rain: soft capsule stretched along the rotated axis (aligned to the
-  // on-screen projection of the local down direction -- see uDownAngle).
-  float capLen = length(vec2(ruv.x, max(abs(ruv.y) - 0.32, 0.0))) / 0.15;
-  float streakA = 1.0 - smoothstep(0.65, 1.0, capLen);
-
-  // Snow: soft round flake, slightly larger falloff so it reads as fluffier.
-  float roundD = length(uv) / (0.4 + 0.06 * vSizeJitter);
-  float roundA = 1.0 - smoothstep(0.55, 1.0, roundD);
-
-  float shape = mix(streakA, roundA, vSnowT);
-  float alpha = shape * vAlpha;
-  if (alpha <= 0.003) discard;
-
-  vec3 color = mix(uRainColor, uSnowColor, vSnowT);
-  gl_FragColor = vec4(color, alpha);
-}
-`
+// Can't port straight to `THREE.Points` + `PointsNodeMaterial`: under this
+// app's exact host (WebGPURenderer({forceWebGL:true}), whose WebGL2 fallback
+// runs on GLSLNodeBuilder), every vertex shader generated for that builder
+// unconditionally ends with `gl_PointSize = 1.0;` (see
+// node_modules/three/src/renderers/webgl-fallback/nodes/GLSLNodeBuilder.js,
+// `_getGLSLVertexCode`) -- sizeNode has no effect on a real Points primitive.
+// PointsNodeMaterial's own class doc confirms this is by design (WebGPU point
+// primitives are hardware-fixed at 1px) and names the sanctioned workaround:
+// drive the material from an instanced quad instead of a Points primitive.
+// The gate is `object.isPoints` (see PointsNodeMaterial.setupVertex) -- an
+// InstancedMesh of a 1x1 quad takes the *sprite* billboard path instead
+// (setupVertexSprite), where sizeNode is fully honored. Translation drives
+// through the iPosition attribute below rather than instanceMatrix/
+// setMatrixAt, matching the class doc's own instanced-sprite recipe.
+//
+// Rain streaks are a classic point-sprite fake, ported 1:1: the quad's own
+// uv() (this material's gl_PointCoord equivalent) is rotated per-fragment by
+// uDownAngle (the on-screen projection of the local "down" direction,
+// computed once per frame in update() from the camera's own live
+// quaternion -- see the comment there) and shaped into a thin capsule; snow
+// is the same quad shaped into a soft round flake instead. aSnowT blends
+// shape AND color continuously per-particle, so a rain/snow boundary (e.g. a
+// mountain snowline) transitions smoothly rather than popping between two
+// pools.
+//
+// NOTE: uv()'s v axis is a plain, non-flipped geometry uv (0 at the quad's
+// -Y edge, 1 at +Y) -- unlike gl_PointCoord, whose v is flipped (0 at the
+// top on screen, per the WebGL/GLSL spec). The original formula was written
+// against gl_PointCoord's flipped v, so the local y is negated once below
+// (see uvC) to reproduce the exact same rotated shape the original fragment
+// shader computed.
+const QUAD_POSITIONS = new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0])
+const QUAD_UVS = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])
+const QUAD_INDEX = [0, 1, 2, 0, 2, 3]
 
 export function createWeather(planet, sky, seed) {
   const group = new THREE.Group()
@@ -182,32 +173,87 @@ export function createWeather(planet, sky, seed) {
   const snowTArr = new Float32Array(POOL_SIZE)
   const seedArr = new Float32Array(POOL_SIZE)
 
+  // Shared 1x1 quad, instanced once per pool slot -- see the port comment
+  // above for why this replaces a THREE.Points primitive under this app's
+  // TSL host. `position`/`uv` are the quad's own per-vertex shape (shared by
+  // every instance); `iPosition`/`aAlpha`/`aSnowT`/`aSeed` are per-instance.
   const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(posArr, 3))
-  geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphaArr, 1))
-  geometry.setAttribute('aSnowT', new THREE.BufferAttribute(snowTArr, 1))
-  geometry.setAttribute('aSeed', new THREE.BufferAttribute(seedArr, 1))
+  geometry.setAttribute('position', new THREE.BufferAttribute(QUAD_POSITIONS, 3))
+  geometry.setAttribute('uv', new THREE.BufferAttribute(QUAD_UVS, 2))
+  geometry.setIndex(QUAD_INDEX)
+  geometry.setAttribute('iPosition', new THREE.InstancedBufferAttribute(posArr, 3))
+  geometry.setAttribute('aAlpha', new THREE.InstancedBufferAttribute(alphaArr, 1))
+  geometry.setAttribute('aSnowT', new THREE.InstancedBufferAttribute(snowTArr, 1))
+  geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seedArr, 1))
 
-  const uniforms = {
-    uDownAngle: { value: 0 },
-    uRainSize: { value: RAIN_SIZE_PX },
-    uSnowSize: { value: SNOW_SIZE_PX },
-    uRainColor: { value: new THREE.Color(RAIN_COLOR_HEX) },
-    uSnowColor: { value: new THREE.Color(SNOW_COLOR_HEX) },
-  }
+  // uDownAngle is the only uniform written after creation (every active
+  // frame, from the camera's live quaternion -- see update() below); the
+  // rest are fixed for this pool's lifetime, kept as uniform() handles
+  // (rather than baked-in constants) to mirror the original shader's own
+  // uniform set 1:1.
+  const uDownAngle = uniform(0)
+  const uRainSize = uniform(RAIN_SIZE_PX)
+  const uSnowSize = uniform(SNOW_SIZE_PX)
+  const uRainColor = uniform(new THREE.Color(RAIN_COLOR_HEX))
+  const uSnowColor = uniform(new THREE.Color(SNOW_COLOR_HEX))
+
+  const aAlphaNode = attribute('aAlpha', 'float')
+  const aSnowTNode = attribute('aSnowT', 'float')
+  const aSeedNode = attribute('aSeed', 'float')
+  const iPositionNode = attribute('iPosition', 'vec3')
+
+  // fract(sin(seed*78.233)*43758.5453) -- same cheap per-particle
+  // pseudo-random hash the original vertex shader used for vSizeJitter.
+  // Referenced from both the vertex-stage sizeNode and the fragment-stage
+  // opacityNode below; TSL auto-inserts the vertex->fragment varying.
+  const sizeJitter = aSeedNode.mul(78.233).sin().mul(43758.5453).fract()
+
   // ONE draw call for all precipitation -- rain and snow both live in this
   // same pool/material, blended per-particle via aSnowT rather than split
   // into two pools/materials.
-  const material = new THREE.ShaderMaterial({
-    uniforms,
-    vertexShader: VERTEX_SHADER,
-    fragmentShader: FRAGMENT_SHADER,
+  const material = new THREE.PointsNodeMaterial({
     transparent: true,
     depthWrite: false,
     blending: THREE.NormalBlending, // never additive -- ART.md: snow/rain must never glow
+    sizeAttenuation: false, // PointsMaterial-style screen-space size, no distance falloff (matches original)
+    alphaToCoverage: false, // keep this material on plain alpha blending, not MSAA coverage dithering
   })
-  const points = new THREE.Points(geometry, material)
+  material.positionNode = iPositionNode
+  // .div(DPR) cancels the sprite path's `pointSize.mul(screenDPR)` so the
+  // on-screen size matches the original raw-shader gl_PointSize -- see DPR above.
+  material.sizeNode = mix(uRainSize, uSnowSize, aSnowTNode).mul(sizeJitter.mul(0.5).add(0.75)).div(DPR)
+
+  // uvC: gl_PointCoord-equivalent local coordinate, y-negated -- see the
+  // port comment above for why.
+  const uvC = vec2(uv().x.sub(0.5), uv().y.sub(0.5).negate())
+  const ca = uDownAngle.cos()
+  const sa = uDownAngle.sin()
+  const rx = uvC.x.mul(ca).add(uvC.y.mul(sa))
+  const ry = uvC.x.mul(sa).negate().add(uvC.y.mul(ca))
+
+  // Rain: soft capsule stretched along the rotated axis (aligned to the
+  // on-screen projection of the local down direction -- see uDownAngle).
+  const capLen = nodeLength(vec2(rx, nodeMax(nodeAbs(ry).sub(0.32), 0))).div(0.15)
+  const streakA = nodeSmoothstep(0.65, 1.0, capLen).oneMinus()
+
+  // Snow: soft round flake, slightly larger falloff so it reads as fluffier.
+  const roundD = nodeLength(uvC).div(sizeJitter.mul(0.06).add(0.4))
+  const roundA = nodeSmoothstep(0.55, 1.0, roundD).oneMinus()
+
+  const shape = mix(streakA, roundA, aSnowTNode)
+
+  material.colorNode = mix(uRainColor, uSnowColor, aSnowTNode)
+  material.opacityNode = shape.mul(aAlphaNode)
+
+  const points = new THREE.InstancedMesh(geometry, material, POOL_SIZE)
   points.frustumCulled = false // the pool's bounding sphere is never recomputed; it moves with the camera every frame
+  // instanceMatrix itself is unused -- translation comes from the iPosition
+  // attribute above (positionNode), per PointsNodeMaterial's own instanced-
+  // sprite recipe -- seeded to identity once so it's never a degenerate/zero
+  // transform (defensive; not per-frame, so free under the build-once law).
+  const _identityMatrix = new THREE.Matrix4()
+  for (let i = 0; i < POOL_SIZE; i++) points.setMatrixAt(i, _identityMatrix)
+  points.instanceMatrix.needsUpdate = true
   group.add(points)
 
   let spawnCounter = 0
@@ -374,7 +420,7 @@ export function createWeather(planet, sky, seed) {
     _downVec.copy(_camDir).multiplyScalar(-1)
     const sx = _downVec.dot(_camRight)
     const sy = _downVec.dot(_camUp)
-    uniforms.uDownAngle.value = Math.atan2(sy, sx) - Math.PI / 2
+    uDownAngle.value = Math.atan2(sy, sx) - Math.PI / 2
 
     for (let i = 0; i < POOL_SIZE; i++) {
       // Recycle on reaching ground OR on drifting too far from the (moving)
@@ -406,7 +452,7 @@ export function createWeather(planet, sky, seed) {
       seedArr[i] = pSeed[i]
     }
 
-    geometry.attributes.position.needsUpdate = true
+    geometry.attributes.iPosition.needsUpdate = true
     geometry.attributes.aAlpha.needsUpdate = true
     geometry.attributes.aSnowT.needsUpdate = true
     geometry.attributes.aSeed.needsUpdate = true

@@ -1,9 +1,7 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import { pass } from 'three/tsl'
+import { bloom } from 'three/addons/tsl/display/BloomNode.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js'
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { createPlanet } from './planet.js'
 import { createSky } from './sky.js'
 import { createWorld } from './world.js'
@@ -26,11 +24,15 @@ import { clamp, fantasyName } from './util.js'
 
 const SEED = new URLSearchParams(location.search).get('seed') ?? 'aetherion-1'
 
-const renderer = new THREE.WebGLRenderer({ antialias: true })
+// M3: WebGPURenderer on the forceWebGL host (WebGL2 backend today; the M4
+// flip is deleting forceWebGL). Init is async — everything downstream that
+// touches the renderer (asset PMREM capture, first render) waits on it.
+const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: true })
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.setSize(innerWidth, innerHeight)
 renderer.toneMapping = THREE.ACESFilmicToneMapping
 document.body.appendChild(renderer.domElement)
+await renderer.init()
 
 const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.005, 300)
@@ -105,10 +107,14 @@ pollEvents()
 setInterval(pollEvents, 60_000)
 
 // Cinematic pass: subtle bloom lifts the sun, atmosphere rim and emissives.
-const composer = new EffectComposer(renderer)
-composer.addPass(new RenderPass(scene, camera))
-composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.3, 0.7, 1.0))
-composer.addPass(new OutputPass())
+// M3: node PostProcessing replaces EffectComposer (which WebGPURenderer can't
+// run). Same UnrealBloom params (strength 0.3, radius 0.7, threshold 1.0);
+// the >1.0-color bloom-headroom trick the sky relies on is preserved by
+// bloom's threshold. Tone mapping still applies via renderer.toneMapping.
+const post = new THREE.PostProcessing(renderer)
+const scenePass = pass(scene, camera)
+const bloomPass = bloom(scenePass, 0.3, 0.7, 1.0)
+post.outputNode = scenePass.add(bloomPass)
 
 document.querySelector('#title .planet-name').textContent = fantasyName(SEED)
 const statsEl = document.getElementById('stats')
@@ -117,7 +123,6 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight
   camera.updateProjectionMatrix()
   renderer.setSize(innerWidth, innerHeight)
-  composer.setSize(innerWidth, innerHeight)
 })
 
 // Dev handle for poking the live scene from the console.
@@ -155,13 +160,13 @@ window.__planet = {
   cameraFeel,
   ui,
   renderer,
-  composer,
+  post,
   controls,
 }
 window.__planet.verify = createVerifyKit({
   scene,
   camera,
-  composer,
+  post,
   renderer,
   controls,
   planet,
@@ -218,5 +223,5 @@ renderer.setAnimationLoop(() => {
     statsEl.textContent = `${s.settlements} settlements · ${s.structures} structures\n${s.agents} agent${s.agents === 1 ? '' : 's'} at work`
   }
 
-  composer.render()
+  post.renderAsync()
 })

@@ -3,7 +3,7 @@
 // group hides itself once the camera pulls back from the planet. Every
 // streak's path and timing derives from `seed`, so a given seed + spawn
 // order always produces the same sequence of streaks.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { SEA_LEVEL, rngFromString, makeNoise3D, fbm, clamp, lerp, smoothstep } from './util.js'
 
 const STREAK_COUNT = 7

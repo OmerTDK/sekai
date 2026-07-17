@@ -32,7 +32,7 @@
 // counts) + a world.group traversal for the matching userData.settlement
 // record's anchorDir/groundR — the same pattern events.js already documents
 // and uses; this module never mutates anything on `world` or `planet`.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { rngFromString, clamp, lerp, smoothstep } from './util.js'
 import { tangentBasis, orientOnSurface, yawedTangent, stepToward } from './placement.js'

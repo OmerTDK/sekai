@@ -4,7 +4,7 @@
 // verified without a human clicking through the scene by hand. Wired by
 // main.js as `window.__planet.verify` -- see docs/superpowers/plans/
 // 2026-07-16-m0-execution-plan.md (Task A) for the contract this implements.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 
 // ---------------------------------------------------------------------------
 // Viewpoints (names fixed by the M0 execution plan)
@@ -52,7 +52,8 @@ const NIGHT_CITY_SEEK_STEP = 50
 const NIGHT_CITY_SEEK_CAP = 1000
 
 const SEEK_DT = 1 / 30
-const FPS_SAMPLE_MS = 3000
+const FPS_SAMPLE_FRAMES = 120 // sampleFps: back-to-back direct renders timed for the fps figure
+const FPS_WARMUP_FRAMES = 10 // sampleFps: untimed renders first, to absorb pipeline/shader warmup
 
 // Deterministic sphere-scan resolution for the coast/grass searches.
 // planet.biomeAt is documented "load-time use only -- not tuned for
@@ -222,21 +223,44 @@ function determinismHash(scene, worldGroup) {
   return fnv1a(str)
 }
 
-/** Counts real animation frames over `durationMs` of wall-clock time via
- * requestAnimationFrame, running alongside (not instead of) the normal
- * renderer.setAnimationLoop app loop already driving main.js. */
-function sampleFps(durationMs) {
-  return new Promise((resolve) => {
-    let frames = 0
-    const start = performance.now()
-    function tick() {
-      frames++
-      const elapsed = performance.now() - start
-      if (elapsed >= durationMs) resolve((frames * 1000) / elapsed)
-      else requestAnimationFrame(tick)
+/** Synchronous frame-cost measurement: fires `frameCount` back-to-back direct
+ * renders and times them with performance.now(). Deliberately NOT
+ * requestAnimationFrame-based -- rAF suspends in a backgrounded tab (a known
+ * project gotcha) and would hang the sweep forever there. A `warmupFrames`
+ * batch runs first and is excluded from the timing, so shader/pipeline
+ * warmup doesn't skew the measured fps. */
+function sampleFps(scene, camera, renderer, frameCount, warmupFrames) {
+  for (let i = 0; i < warmupFrames; i++) {
+    renderer.render(scene, camera)
+  }
+  const start = performance.now()
+  for (let i = 0; i < frameCount; i++) {
+    renderer.render(scene, camera)
+  }
+  const elapsed = performance.now() - start
+  return (frameCount * 1000) / elapsed
+}
+
+/** Best-effort canvas screenshot. Under WebGPURenderer, toDataURL readback
+ * of the canvas can throw or come back blank depending on backend/compositing
+ * -- it is not load-bearing for verification (draw calls + determinism hash +
+ * fps are), so failures are swallowed rather than allowed to break the sweep.
+ * Warns once per session, not once per viewpoint, to avoid log spam. */
+let _screenshotWarned = false
+function captureScreenshot(renderer) {
+  try {
+    return renderer.domElement.toDataURL('image/jpeg', 0.7)
+  } catch (err) {
+    if (!_screenshotWarned) {
+      _screenshotWarned = true
+      console.warn(
+        '[planet] verifykit: screenshot capture unavailable under this renderer (' +
+          String(err) +
+          '); shots will be null for this sweep',
+      )
     }
-    requestAnimationFrame(tick)
-  })
+    return null
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -247,7 +271,7 @@ export function createVerifyKit(handles) {
   // gotoViewpoint drives camera.position/lookAt directly and must never
   // touch controls.target (see requirement below), so there is nothing to
   // read or write on it here.
-  const { scene, camera, composer, renderer, planet, sky, world, birds, flora, wind, storms } = handles
+  const { scene, camera, post, renderer, planet, sky, world, birds, flora, wind, storms } = handles
   // M-WX modules — optional so an older embed of the kit still works; each is
   // pumped in seekTime only if present, matching the real render loop.
   const { seaIce, weather, seaLife, trails, floods } = handles
@@ -280,9 +304,12 @@ export function createVerifyKit(handles) {
       if (seaLife) seaLife.update(SEEK_DT, camera)
       if (trails) trails.update(SEEK_DT)
     }
-    composer.render()
-    composer.render()
-    composer.render()
+    // FLUSH renders: these just need the jumped-to state to land in whatever
+    // buffers/state the caller inspects next -- a plain sync direct render is
+    // fine here (no tone-mapped/bloomed output needed, unlike the sweep shot).
+    renderer.render(scene, camera)
+    renderer.render(scene, camera)
+    renderer.render(scene, camera)
   }
 
   // -- viewpoint resolvers, one per fixed name --------------------------
@@ -452,13 +479,14 @@ export function createVerifyKit(handles) {
       try {
         const res = gotoViewpoint(name)
         if (res && res.fallback) fallbacks.push(name)
-        // renderer.info resets per render pass, and the composer's last pass
-        // is a 1-call fullscreen quad — read scene stats from a direct render
-        // FIRST, then composer.render() for the tone-mapped shot.
+        // renderer.info resets per render pass, and post's final pass is a
+        // 1-call fullscreen quad — read scene stats from a direct render
+        // FIRST, then post.renderAsync() for the tone-mapped shot.
         renderer.render(scene, camera)
-        drawCalls[name] = renderer.info.render.calls
-        composer.render()
-        shots[name] = renderer.domElement.toDataURL('image/jpeg', 0.7)
+        const renderInfo = renderer.info.render
+        drawCalls[name] = renderInfo.drawCalls ?? renderInfo.calls
+        await post.renderAsync()
+        shots[name] = captureScreenshot(renderer)
       } catch (err) {
         console.warn('[planet] verifykit: viewpoint "' + name + '" failed: ' + String(err) + '; shot omitted')
         shots[name] = null
@@ -467,7 +495,7 @@ export function createVerifyKit(handles) {
       }
     }
 
-    const fps = await sampleFps(FPS_SAMPLE_MS)
+    const fps = sampleFps(scene, camera, renderer, FPS_SAMPLE_FRAMES, FPS_WARMUP_FRAMES)
     const hash = determinismHash(scene, world.group)
 
     return { shots, drawCalls, fps, determinismHash: hash, fallbacks }

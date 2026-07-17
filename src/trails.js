@@ -20,7 +20,8 @@
 // circle, non-uniformly scaled per instance, lifted off the terrain along
 // its own placement direction) -- this file reuses that same geometry/
 // placement idea for the footprint ovals themselves.
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import { attribute, color, uniform } from 'three/tsl'
 import { rngFromString, hash01, smoothstep } from './util.js'
 
 // ---------------------------------------------------------------------------
@@ -157,7 +158,6 @@ function buildPrintGeometry() {
 // ---------------------------------------------------------------------------
 // Silent-fallback rule: every graceful-degradation path warns exactly once.
 // ---------------------------------------------------------------------------
-let warnedFootFade = false
 let warnedWalkerProcessing = false
 let warnedForEachWalker = false
 
@@ -172,65 +172,37 @@ export function createTrails(planet, world, seed) {
   )
   const stampTimeAttr = geo.attributes.stampTime
 
-  const mat = new THREE.MeshBasicMaterial({
-    color: COLOR_PRINT,
+  const mat = new THREE.MeshBasicNodeMaterial({
     transparent: true,
-    opacity: PRINT_ALPHA,
     depthWrite: false,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   })
 
-  // Per-instance age fade: a stampTime attribute + a small vertex/fragment
-  // shader tweak (uTime uniform ticks every frame, no buffer re-upload
-  // needed for the fade itself -- only a fresh stamp touches the instance
-  // buffers). Guarded exactly like flora.js's grass-wind/tree-sway shaders:
-  // a failed injection falls back to constant alpha (prints still stamp,
-  // place, and recycle correctly; they just don't fade until their ring
-  // slot gets overwritten by a later stamp).
-  let fadeUniforms = null
-  mat.customProgramCacheKey = () => 'trails-footprint-fade-v1'
-  mat.onBeforeCompile = (shader) => {
-    try {
-      shader.uniforms.uTime = { value: 0 }
-      shader.uniforms.uFadeDuration = { value: FADE_DURATION }
-      shader.vertexShader =
-        'uniform float uTime;\nuniform float uFadeDuration;\nattribute float stampTime;\nvarying float vFootAlpha;\n' +
-        shader.vertexShader
-      const patchedVert = shader.vertexShader.replace(
-        '#include <begin_vertex>',
-        [
-          '#include <begin_vertex>',
-          'float footAge = uTime - stampTime;',
-          'vFootAlpha = 1.0 - clamp(footAge / uFadeDuration, 0.0, 1.0);',
-        ].join('\n'),
-      )
-      if (patchedVert === shader.vertexShader)
-        throw new Error('trails.js: footprint vertex injection point not found')
-      shader.vertexShader = patchedVert
-
-      shader.fragmentShader = 'varying float vFootAlpha;\n' + shader.fragmentShader
-      const patchedFrag = shader.fragmentShader.replace(
-        '#include <color_fragment>',
-        ['#include <color_fragment>', 'diffuseColor.a *= vFootAlpha;'].join('\n'),
-      )
-      if (patchedFrag === shader.fragmentShader)
-        throw new Error('trails.js: footprint fragment injection point not found')
-      shader.fragmentShader = patchedFrag
-
-      fadeUniforms = shader.uniforms
-    } catch (err) {
-      fadeUniforms = null
-      if (!warnedFootFade) {
-        warnedFootFade = true
-        console.warn(
-          '[planet] trails.js: footprint fade degraded — onBeforeCompile shader injection failed, prints render at constant alpha and only disappear when their ring slot recycles: ' +
-            err,
-        )
-      }
-    }
-  }
+  // Per-instance age fade, ported straight from the old GLSL
+  // begin_vertex/color_fragment string-injection patch to a TSL node graph
+  // (S1 recipe, docs/spikes/2026-07-17-s1-tsl-webgpu.md §5/§8): stampTime reads the
+  // InstancedBufferAttribute set up above via attribute(), uTime is a
+  // uniform ticked once per frame in update() below (no buffer re-upload
+  // for the fade itself -- only a fresh stamp touches the instance
+  // buffers). Graph is built exactly once here, per the build-once/
+  // uniforms-only law (§6): only uTime.value ever changes after this
+  // point. footFade reproduces the original's
+  // `1.0 - clamp(footAge / uFadeDuration, 0, 1)` curve exactly -- a linear
+  // fade, not smoothstep -- and STAMP_TIME_UNSET's huge footAge still
+  // clamps to fade 0 on frame one, so never-stamped slots stay invisible
+  // exactly as before. There's no string-injection-style "injection point
+  // not found" failure mode to guard here: node-graph construction either
+  // builds or throws deterministically at module load, so the old
+  // warn-once try/catch is moot and dropped (matches flood.js's port
+  // earlier in this same wave).
+  const uTime = uniform(0)
+  const stampAge = uTime.sub(attribute('stampTime', 'float'))
+  const footFade = stampAge.div(FADE_DURATION).clamp(0, 1).oneMinus()
+  mat.colorNode = color(COLOR_PRINT)
+  mat.opacityNode = footFade.mul(PRINT_ALPHA)
+  mat.uTime = uTime // update() writes .value each frame; not a THREE.Material builtin
 
   const mesh = new THREE.InstancedMesh(geo, mat, POOL_SIZE)
   mesh.frustumCulled = false // global, sparse decals scattered planet-wide -- no single bounding sphere fits well; 600 tiny instances is cheap regardless
@@ -366,7 +338,7 @@ export function createTrails(planet, world, seed) {
 
   function update(dt) {
     simTime += dt
-    if (fadeUniforms) fadeUniforms.uTime.value = simTime
+    mat.uTime.value = simTime
 
     try {
       world.forEachWalker(processWalker)
