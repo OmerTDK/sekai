@@ -101,5 +101,26 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
   broad TILE_MACRO=7 tint breaking up the flat interpolated-vertex-color
   "gradient" look reads more clearly at this crop size, especially over the
   desert/grass transition on the right.
+- `flora-poisson-01-before-clumping-wide.jpg` / `flora-poisson-02-after-spread-wide.jpg`
+  — M-POLISH flora pass (`flora.js`), Poisson-disk-quality scattering:
+  identical camera position/viewpoint (same forest patch, an isolated
+  git-worktree build used to isolate this comparison from other builders'
+  concurrent in-flight changes on the shared checkout) — before is the
+  original pure-rejection stream (12365 trees), after is the same seeded
+  stream with a minimum-spacing rejection layered on top via a grid-hashed
+  accepted-point lookup (8069 trees, min spacing 0.006 rad, independently
+  verified by a brute-force O(n^2) nearest-neighbor check over the actual
+  output). The tight clumps + bare gaps in "before" (top-left and
+  top-right tree bunches) give way to a more even, breathing-room spread
+  in "after" at comparable overall density. Rocks stayed capacity-bound at
+  6000/6000 in both (spacing = 0.01 rad had headroom under the existing
+  tries budget on this seed).
+- `flora-poisson-03-before-close.jpg` / `flora-poisson-04-after-close-blobs.jpg`
+  — same pass, close-up on grounded trees: "after" shows the new soft dark
+  contact-shadow blobs (one shared InstancedMesh across both trees' and
+  rocks' footprints — 14069 instances, ONE draw call; MeshBasicMaterial
+  black, opacity 0.28, depthWrite off, polygonOffset, planted +0.0002 along
+  the surface normal to dodge z-fighting) grounding each tree/rock instead
+  of them looking like they're floating on the terrain.
 
 
