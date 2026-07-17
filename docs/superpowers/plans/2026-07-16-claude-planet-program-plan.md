@@ -239,7 +239,7 @@ Epilogue: E1(erosion) ─→ E2(LOD, needs E1's sampler if E1 landed)
 | S1 | TSL bridge on LIVE instanced custom-attr material (tree-sway)? | parity, fps −≤10%, coexists, no recompile hitch | M3 start |
 | S2 | WebGPURenderer full-scene parity? | fps ≥ baseline−10%, nothing missing | M4 start |
 | S4 | BatchedMesh @ 20k GLTF instances? | ≥55fps, ≤~30 civ draw calls | M2 start |
-| S5 | Medieval GLTF + steampunk bolt-ons look intentional? Kenney vs Quaternius clash? | Omer approves 1-house screenshot | M2 first hour |
+| S5 | RESOLVED 2026-07-17 (GO — mix): Kenney base for all standard buildings, Quaternius reserved for grand tier-3 landmarks. Constraints from the spike: drop/downsize Quaternius PBR textures (17MB → tint-or-512px, fix dark faces), chunkier gear mounts (gears illegible oblique), tame pipe glow, scoped env-map for metals, everything batched per S4. | — | done |
 | S6 | Cheap terrain close-up fixes beat LOD? | Omer's eye at street level | E2 start |
 
 ## 5. Risk register
