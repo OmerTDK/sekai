@@ -7,6 +7,8 @@ import {
   texture,
   attribute,
   uv,
+  pointUV,
+  vertexColor,
   positionWorld,
   normalWorld,
   cameraPosition,
@@ -675,15 +677,28 @@ function createBrightStars(seed) {
     ],
     64,
   )
-  const mat = new THREE.PointsMaterial({
+  // Node-material port of the classic PointsMaterial recipe above. The old
+  // fixed-function pipeline sampled `map` at the WebGL point-sprite's own
+  // gl_PointCoord (see three.js's map_particle_fragment chunk: `vec2 uv = (
+  // uvTransform * vec3( gl_PointCoord.x, 1.0 - gl_PointCoord.y, 1 ) ).xy`),
+  // never a geometry UV attribute -- this Points geometry only carries
+  // position/color. NodeMaterial's default `map` wiring instead defaults to
+  // the generic uv() attribute node, which doesn't exist here and fires
+  // "THREE.AttributeNode: Vertex attribute uv not found on geometry." pointUV
+  // is TSL's dedicated accessor for that same gl_PointCoord-derived
+  // coordinate (WebGL-backend only, which this renderer always uses --
+  // forceWebGL: true) -- the direct replacement for the old per-sprite uv.
+  const mat = new THREE.PointsNodeMaterial({
     size: 3,
-    map,
     sizeAttenuation: false,
     vertexColors: true,
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   })
+  const mapSample = texture(map, pointUV)
+  mat.colorNode = vertexColor().mul(mapSample.rgb)
+  mat.opacityNode = mapSample.a
   return new THREE.Points(geo, mat)
 }
 
