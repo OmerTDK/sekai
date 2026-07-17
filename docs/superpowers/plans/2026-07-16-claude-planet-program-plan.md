@@ -165,9 +165,15 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
      archipelagos, silhouettes), water feel, cloud feel, camera feel.
      Sources: BotW, Sable, Monument Valley, Outer Wilds, Bad North, ISS
      photography. Owner-approved before it becomes binding.
-  2. Terrain recipe comparison — 4-5 seeded height-function variants
-     (baseline / fjord-warped coasts / archipelago-rich / dramatic-relief /
-     mesa-plateau) screenshotted at matched viewpoints → owner verdict.
+  2. Terrain recipe comparison — VERDICT RECORDED (Omer, 2026-07-17):
+     **B+C+D — fjord-warped coasts + archipelago arcs + dramatic relief.**
+     Integration consequences (bind the implementation): HEIGHT_MAX
+     1.045→1.06 with LAND_COLOR_RANGE recomputed; cloud shells 1.055/1.07 →
+     ~1.075/1.09; storm patch 1.062 → ~1.08; atmosphere 1.09 → ~1.11; bird
+     altitude band raised above new peaks; settlement layout WILL reshuffle
+     (isLand changes at coasts — accepted, pre-1.0 world). Mesa (E) rejected
+     as underdelivering. Implementation ships in the single M-LD wave after
+     the water + camera verdicts, so the look upgrades land coherently.
   3. Water treatment comparison — 3 variants → owner verdict.
   4. Camera-feel prototypes — 2-3 near-surface behaviors captured as GIFs
      (terrain-following floor, zoom curve + FOV shift, cinematic visit
