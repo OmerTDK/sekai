@@ -538,7 +538,13 @@ export function createPlanet(seed) {
   // map via `.value` in the loader callbacks; uDetailOn/uNormalOn are
   // uniform() gates flipped to 1 once each group's four maps land.
   const texLoader = new THREE.TextureLoader()
-  const colorPlaceholder = makePlaceholderTexture(THREE.SRGBColorSpace, [128, 128, 128, 255])
+  // NoColorSpace (raw): the pre-port GLSL read these detail albedo maps via a
+  // hand-written texture2D().rgb sampler, which does NOT sRGB-decode. The
+  // near/macro detail constants (det/0.45, clamp 0.35..1.9 / 0.94..1.06) are
+  // calibrated to those RAW ~sRGB mid-gray texels; TSL texture() auto-decodes
+  // an SRGBColorSpace map, halving mid-zoom albedo. Reading raw keeps the
+  // original calibration. (Normal maps below are separately NoColorSpace.)
+  const colorPlaceholder = makePlaceholderTexture(THREE.NoColorSpace, [128, 128, 128, 255])
   const uDetailOn = uniform(0)
   const grassTexNode = texture(colorPlaceholder)
   const rockTexNode = texture(colorPlaceholder)
@@ -557,7 +563,7 @@ export function createPlanet(seed) {
       texLoader.load(url, (tex) => {
         tex.wrapS = THREE.RepeatWrapping
         tex.wrapT = THREE.RepeatWrapping
-        tex.colorSpace = THREE.SRGBColorSpace
+        tex.colorSpace = THREE.NoColorSpace // read raw ~sRGB texels (no decode) to match the pre-port GLSL sampler the detail constants were tuned for
         tex.anisotropy = 8 // keeps ground texture crisp at grazing angles
         node.value = tex
         if (++loaded === total) uDetailOn.value = 1
