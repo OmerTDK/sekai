@@ -87,6 +87,18 @@ const MAX_ALPHA_SNOW = 0.65
 const RAIN_COLOR_HEX = '#a7b7c8' // cool pale grey-blue, never saturated
 const SNOW_COLOR_HEX = '#edf2f6' // matches planet.js's own COLOR_SNOW exactly
 
+// The original raw vertex shader set gl_PointSize directly in framebuffer
+// pixels (no DPR factor). PointsNodeMaterial's sprite path multiplies the
+// sizeNode by screenDPR (= renderer.getPixelRatio(); see three's
+// setupVertexSprite -> `pointSize = pointSize.mul(screenDPR)`), which on a
+// retina display would render precipitation ~DPR-times too large vs the
+// pre-port build. This app's renderer pins its ratio to
+// Math.min(devicePixelRatio, 2) (main.js setPixelRatio) but createWeather
+// isn't handed the renderer, so mirror that exact expression here and divide
+// sizeNode by it, cancelling the sprite path's multiply so on-screen size
+// matches the original 1:1 (on DPR=1 this is a no-op).
+const DPR = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2)
+
 // M3 TSL port (was one hand-rolled raw-GLSL material -- this app's other
 // custom-shader work all extends an existing standard material via a GLSL
 // injection hook, which WebGPURenderer silently ignores rather than
@@ -207,7 +219,9 @@ export function createWeather(planet, sky, seed) {
     alphaToCoverage: false, // keep this material on plain alpha blending, not MSAA coverage dithering
   })
   material.positionNode = iPositionNode
-  material.sizeNode = mix(uRainSize, uSnowSize, aSnowTNode).mul(sizeJitter.mul(0.5).add(0.75))
+  // .div(DPR) cancels the sprite path's `pointSize.mul(screenDPR)` so the
+  // on-screen size matches the original raw-shader gl_PointSize -- see DPR above.
+  material.sizeNode = mix(uRainSize, uSnowSize, aSnowTNode).mul(sizeJitter.mul(0.5).add(0.75)).div(DPR)
 
   // uvC: gl_PointCoord-equivalent local coordinate, y-negated -- see the
   // port comment above for why.
