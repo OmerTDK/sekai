@@ -15,14 +15,20 @@
 // thetaLength=CAP_THETA) is enough -- no per-frame re-centering, no
 // orientation quaternion for the sheets themselves.
 //
-// Shading is a MeshStandardMaterial + onBeforeCompile (matching planet.js's
-// own terrain/ocean pattern, not a raw ShaderMaterial) so the ice picks up
-// the scene's real lights (sun/hemi/moon, sky.js) automatically -- this
-// module never needs a sun direction of its own.
+// Shading is a THREE.MeshStandardNodeMaterial with a small TSL node graph
+// (colorNode for the crack/tint mix, opacityNode for the alphaMap-green
+// torn edge x coastline land mask, alphaTestNode for the breathing
+// threshold) so the ice still picks up the scene's real lights (sun/hemi/
+// moon, sky.js) automatically -- this module never needs a sun direction of
+// its own. Ported off the material's old GLSL-chunk-injection shader hook:
+// WebGPURenderer silently ignores that hook (renders the base, uncustomized
+// material with no error -- see docs/spikes/2026-07-17-s1-tsl-webgpu.md
+// S2/S8).
 //
 // Three draw calls total: north sheet, south sheet, one shared InstancedMesh
 // of drifting floes.
 import * as THREE from 'three/webgpu'
+import { attribute, color, mix, texture, uniform, uv } from 'three/tsl'
 import { SEA_LEVEL, rngFromString, makeNoise3D, fbm, ridged, clamp, lerp, smoothstep } from './util.js'
 
 // ---------------------------------------------------------------------------
@@ -81,10 +87,10 @@ const ICE_BASE_COLOR = 0xdbe7ec
 const ICE_TINT_COLOR = 0xb8d6d2
 const CRACK_COLOR = 0x566b76
 
-// -- "breathing" extent drift: alphaTest itself wobbles slowly within the
-// texture's own soft edge band -- no shader recompile (alphaTest is a plain
-// uniform refresh once HAS_ALPHATEST is compiled in, see three's
-// WebGLMaterials.js), just a per-frame material property nudge. --
+// -- "breathing" extent drift: the alphaTestNode threshold wobbles slowly
+// within the texture's own soft edge band -- a TSL uniform().value write
+// each frame, no node-graph rebuild (S1 spike §6: structural node changes
+// cost a ~140ms recompile; plain uniform writes don't). --
 const ICE_ALPHATEST_BASE = 0.5
 const BREATHE_PERIOD = 260 // seconds -- "over minutes", per spec
 const BREATHE_AMPLITUDE = 0.035
@@ -99,9 +105,10 @@ const FLOE_MAX_SCALE = 0.013
 const FLOE_RADIUS = SEA_LEVEL + 0.0012 // above the sheets -- never z-fights them
 const FLOE_THETA_LO = CAP_THETA * 0.45
 const FLOE_THETA_HI = CAP_THETA * 1.05
-// Sheet visibility is gated by alphaTest around ICE_ALPHATEST_BASE (0.5,
-// breathing +/-BREATHE_AMPLITUDE) against this SAME density field -- so a
-// floe accepted above ~0.465 could occasionally sit UNDER the opaque sheet
+// Sheet visibility is gated by the alphaTestNode threshold around
+// ICE_ALPHATEST_BASE (0.5, breathing +/-BREATHE_AMPLITUDE) against this
+// SAME density field -- so a floe accepted above ~0.465 could occasionally
+// sit UNDER the opaque sheet
 // (visually swallowed, since floe and sheet read almost the same pale
 // color). Keeping FLOE_EDGE_HI safely below that floor means every floe
 // lands in water the sheet itself never covers, reading as a distinct chip
@@ -117,22 +124,6 @@ const FLOE_WOBBLE_RATE_MIN = 0.02
 const FLOE_WOBBLE_RATE_MAX = 0.05
 const FLOE_SPIN_RATE_MAX = 0.03 // rad/s, slow own-axis tumble
 const FLOE_COLOR_JITTER = 0.12
-
-// ---------------------------------------------------------------------------
-// Silent-fallback rule: every degradation warns exactly once (shared across
-// both hemispheres -- a shader-chunk mismatch would hit both identically,
-// since they run the exact same onBeforeCompile function).
-// ---------------------------------------------------------------------------
-let warnedIceShader = false
-
-// Guarded shader-chunk injection -- throws if the anchor wasn't found (three
-// version drift). Same idea as planet.js's own injectShaderChunk, ported
-// locally since that one isn't exported.
-function injectChunk(src, marker, code) {
-  const out = src.replace(marker, marker + '\n' + code)
-  if (out === src) throw new Error('seaice.js: injection point "' + marker + '" not found')
-  return out
-}
 
 // ---------------------------------------------------------------------------
 // Per-hemisphere noise fields -- shared by the texture bake AND floe
@@ -257,76 +248,50 @@ function buildCapGeometry(planet, thetaStart, thetaLength) {
 }
 
 // ---------------------------------------------------------------------------
-// Material: matte MeshStandardMaterial (roughness 1, no specular glint --
-// same recipe as terrain/rocks) with an onBeforeCompile extension for the
-// crack/tint color mix and the land-mask discard. `alphaMap` (three's
-// built-in mechanism) already carries the edge density in its green channel
-// and drives `alphaTest` discard for the torn edge -- see bakeIceTexture and
-// storms.js's own "alphaMap samples the GREEN channel" comment. Guarded:
-// falls back to a flat ICE_BASE_COLOR sheet (still land-masked, since the
-// base alphaMap/alphaTest discard keeps working either way -- only the
-// cracks/tint/coastline-softening extras are lost) if shader-chunk
-// injection ever fails.
+// Material: matte MeshStandardNodeMaterial (roughness 1, no specular glint
+// -- same recipe as terrain/rocks) with a small TSL node graph standing in
+// for the old GLSL-chunk-injection extension. `alphaMap` still carries R=crack,
+// G=edge density, B=tint (see bakeIceTexture); a manual `texture(alphaMap,
+// uv())` node reads it once here so colorNode/opacityNode can pick channels
+// apart explicitly -- opacityNode fully replaces the material's own default
+// alphaMap-opacity wiring (three's NodeMaterial.setupDiffuseColor only uses
+// that default when opacityNode is null), so there is no double application
+// of the green channel. No injection guard needed anymore: unlike
+// string-based shader-chunk injection, this graph is built once from typed
+// node calls that either compose correctly or throw immediately at build
+// time -- there is no "silently ignored" failure mode left to guard against
+// (that WAS the bug this port fixes; WebGPURenderer silently drops that old
+// shader hook with no error, see docs/spikes/2026-07-17-s1-tsl-webgpu.md
+// S2/S8-9).
 // ---------------------------------------------------------------------------
-function buildIceMaterial(texture) {
-  const material = new THREE.MeshStandardMaterial({
+function buildIceMaterial(bakedTexture) {
+  const material = new THREE.MeshStandardNodeMaterial({
     color: ICE_BASE_COLOR,
     roughness: 1,
     metalness: 0,
     flatShading: false, // smooth cap, crisp texture-driven edge -- matches terrainMat's own convention
-    alphaMap: texture,
-    alphaTest: ICE_ALPHATEST_BASE,
+    alphaMap: bakedTexture,
   })
 
-  const iceUniforms = {
-    uIceBase: { value: new THREE.Color(ICE_BASE_COLOR) },
-    uIceTint: { value: new THREE.Color(ICE_TINT_COLOR) },
-    uCrackColor: { value: new THREE.Color(CRACK_COLOR) },
-  }
-  material.customProgramCacheKey = () => 'seaice-sheet-v1'
-  material.onBeforeCompile = (shader) => {
-    try {
-      Object.assign(shader.uniforms, iceUniforms)
+  // Breathing extent is the only per-frame-animated quantity here, so it is
+  // the only piece that needs a live uniform() handle -- update() below
+  // writes .value every frame. Everything else (crack/tint colors, the
+  // alphaMap sample, the land mask) is static once built (S1 spike §6:
+  // build the graph once, animate only through uniform().value writes).
+  material.uAlphaThreshold = uniform(ICE_ALPHATEST_BASE)
 
-      let vs = shader.vertexShader
-      vs = injectChunk(vs, '#include <common>', 'attribute float aLand;\nvarying float vLand;')
-      vs = injectChunk(vs, '#include <begin_vertex>', 'vLand = aLand;')
-      shader.vertexShader = vs
+  const iceTex = texture(material.alphaMap, uv()) // r=crack, g=edge density, b=tint
+  const landMask = attribute('aLand', 'float') // per-vertex coastal fade; TSL interpolates vertex->fragment automatically
 
-      let fs = shader.fragmentShader
-      fs = injectChunk(
-        fs,
-        '#include <common>',
-        [
-          'varying float vLand;',
-          'uniform vec3 uIceBase;',
-          'uniform vec3 uIceTint;',
-          'uniform vec3 uCrackColor;',
-        ].join('\n'),
-      )
-      fs = injectChunk(
-        fs,
-        '#include <color_fragment>',
-        [
-          '{',
-          '  vec4 iceTex = texture2D( alphaMap, vAlphaMapUv );',
-          '  vec3 tinted = mix( uIceBase, uIceTint, iceTex.b );',
-          '  diffuseColor.rgb = mix( tinted, uCrackColor, iceTex.r * ' + CRACK_STRENGTH.toFixed(4) + ' );',
-          '}',
-        ].join('\n'),
-      )
-      fs = injectChunk(fs, '#include <alphamap_fragment>', 'diffuseColor.a *= vLand;')
-      shader.fragmentShader = fs
-    } catch (err) {
-      if (!warnedIceShader) {
-        warnedIceShader = true
-        console.warn(
-          '[planet] seaice.js: ice sheet shader degraded — onBeforeCompile injection failed, ice renders as a flat matte color with no cracks, tint variation, or coastline softening: ' +
-            err,
-        )
-      }
-    }
-  }
+  const tinted = mix(color(ICE_BASE_COLOR), color(ICE_TINT_COLOR), iceTex.b)
+  material.colorNode = mix(tinted, color(CRACK_COLOR), iceTex.r.mul(CRACK_STRENGTH))
+  // Torn edge (alphaMap green) x coastline land-mask fade -- the direct
+  // analog of the old built-in alphamap_fragment multiply followed by the
+  // injected `diffuseColor.a *= vLand`. alphaTestNode (below) then discards
+  // below the breathing threshold, same as the old alphaTest discard.
+  material.opacityNode = iceTex.g.mul(landMask)
+  material.alphaTestNode = material.uAlphaThreshold
+
   return material
 }
 
@@ -391,7 +356,12 @@ function buildFloeGeometry(seed) {
 // ---------------------------------------------------------------------------
 function buildFloes(planet, seed, fieldsByHemi) {
   const geometry = buildFloeGeometry(seed)
-  const material = new THREE.MeshStandardMaterial({
+  // Plain material, no custom node graph needed: MeshStandardNodeMaterial's
+  // default colorNode already composes material.color x vertexColor() x
+  // instanceColor (three's NodeMaterial.setupDiffuseColor) -- exactly
+  // reproducing the old fixed-function vertexColors:true behavior with only
+  // a class swap.
+  const material = new THREE.MeshStandardNodeMaterial({
     color: ICE_BASE_COLOR,
     vertexColors: true,
     flatShading: true, // scattered small prop -- deliberate contrast with the sheets' smooth shading (ART.md)
@@ -550,8 +520,9 @@ export function createSeaIce(planet, seed) {
   let elapsed = 0
   function update(dt) {
     elapsed += dt
-    north.material.alphaTest = ICE_ALPHATEST_BASE + Math.sin(elapsed * BREATHE_RATE) * BREATHE_AMPLITUDE
-    south.material.alphaTest =
+    north.material.uAlphaThreshold.value =
+      ICE_ALPHATEST_BASE + Math.sin(elapsed * BREATHE_RATE) * BREATHE_AMPLITUDE
+    south.material.uAlphaThreshold.value =
       ICE_ALPHATEST_BASE + Math.sin(elapsed * BREATHE_RATE + BREATHE_PHASE_SOUTH) * BREATHE_AMPLITUDE
     floes.update(elapsed)
   }
