@@ -142,7 +142,23 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
   commit within 60s; time-lapse replays full history ≤60s smoothly; fps ≥55.
 - **Est:** 7–9 builder-runs. 2 sessions.
 
-### M2.5 — Dragons + airships (pulled forward: joy has no dependency on the migration)
+### M-SKY — sky interim package (added 2026-07-17, user: "skybox/clouds/
+### hurricane feel cheap"; runs PARALLEL with M2.5 — disjoint files; the real
+### fix remains M5a/M5c, this is shell polish, not early flagships)
+- [ ] Baked starfield cubemap: procedural milky way with dust lanes + color
+      grading, generated once + cached (a genuine menu gap the user caught —
+      neither plan nor technique audit had the skybox)
+- [ ] 2.5D cloud shading: sample alphaMap toward the sun → lit tops, shaded
+      bases; applied to cloud shells AND the hurricane patch
+- [ ] Cloud shadows on terrain (sky exposes texture+rotation to the splat
+      shader via an architect-pinned contract)
+- [ ] Ambient coverage cut to ART.md's 15-25% target
+- [ ] Hurricane casts a soft moving shadow on the ocean beneath it
+- Carryovers queued for the NEXT wave (not this one): camera swoop/skim
+  implementation, surface-crispness pass, wonders, model-tier styling,
+  orbit label-soup fix.
+
+### M2.5 — Dragons + airships (IN PROGRESS 2026-07-17, parallel with M-SKY)
 - **Scope:** one resident dragon (lair on the tallest range, patrol flights,
   event appearances on milestones); airship dirigibles on great-circle
   routes between git-related settlements, steam trails, dock masts at
