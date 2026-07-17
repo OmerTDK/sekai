@@ -26,6 +26,9 @@ import { createCaravans } from './caravans.js'
 import { createMeteors } from './meteor.js'
 import { createCivSim } from './civsim.js'
 import { createCivRender } from './civrender.js'
+import { createEarthquakes } from './earthquake.js'
+import { createHerald } from './herald.js'
+import { createRoads } from './roads.js'
 import { createUI } from './ui.js'
 import { clamp, fantasyName } from './util.js'
 
@@ -126,6 +129,15 @@ scene.add(caravans.group)
 const meteors = createMeteors(planet, SEED)
 scene.add(meteors.group)
 
+const earthquakes = createEarthquakes(planet, camera, SEED)
+scene.add(earthquakes.group)
+
+const roads = createRoads(planet, world, SEED)
+scene.add(roads.group)
+
+// The Aemunis Herald — a DOM chronicle ticker (no scene object).
+const herald = createHerald(world, SEED)
+
 // NPC civilizations must not overlap session settlements (the covenant), whose
 // anchors world populates asynchronously — snapshot after the same settle delay
 // airships/caravans use, then build the seeded civ layer.
@@ -211,6 +223,9 @@ window.__planet = {
   wildlife,
   caravans,
   meteors,
+  earthquake: earthquakes,
+  roads,
+  herald,
   cameraFeel,
   ui,
   renderer,
@@ -272,9 +287,14 @@ renderer.setAnimationLoop(() => {
   caravans.update(dt)
   meteors.update(dt)
   if (civRender) civRender.update(dt, camera)
+  roads.update(dt)
+  herald.update(dt)
   ui.update(dt)
   cameraFeel.update(dt)
   controls.update()
+  // Earthquake camera shake is an additive offset that controls.update()
+  // clears next frame, so it must run AFTER controls.update().
+  earthquakes.update(dt)
 
   hudTimer -= dt
   if (hudTimer <= 0) {
