@@ -390,11 +390,16 @@ export function createStorms(planet, camera, seed) {
   // Deterministic sequence: rngFromString(seed + ':storm:' + counter). One
   // rng draws the whole storm -- origin, track, lifetime, and texture -- so
   // a given seed always reproduces the same sequence of storms.
-  function spawn(storm) {
+  // `originOverride` (a unit direction) forces the storm's spawn point instead
+  // of seed-picking an ocean origin -- used by the spawnStorm() god-control.
+  // Everything else (track, lifetime, texture) still derives deterministically
+  // from this spawn's rng, so a commanded storm is fully reproducible too.
+  function spawn(storm, originOverride) {
     const spawnSeed = seed + ':storm:' + spawnCounter++
     const rng = rngFromString(spawnSeed)
 
-    pickStormOrigin(rng, planet, storm.dir)
+    if (originOverride) storm.dir.copy(originOverride)
+    else pickStormOrigin(rng, planet, storm.dir)
     storm.spinSign = storm.dir.y >= 0 ? 1 : -1
     perpendicular(rng, storm.dir, storm.axis)
     storm.nx = rng() * 1000
@@ -567,5 +572,22 @@ export function createStorms(planet, camera, seed) {
     return slotA.strength
   }
 
-  return { group, update, getPrimary }
+  // God-control: immediately (re)spawn the single primary hurricane centered
+  // on `dir` (a surface direction; need not be pre-normalized) and let it ramp
+  // in through the normal lifecycle -- it grows over GROW_TIME, then drifts,
+  // matures, and dissipates exactly like a seed-spawned storm. Reuses spawn()
+  // wholesale (single-storm model preserved); only the origin is forced.
+  const _summonDir = new THREE.Vector3()
+  function spawnStorm(dir) {
+    if (!dir) return
+    _summonDir.copy(dir)
+    if (_summonDir.lengthSq() < 1e-8) return
+    _summonDir.normalize()
+    // A commanded spawn is authoritative -- suppress the first-sun-handshake
+    // auto-redo so it can't clobber the storm the user just summoned.
+    sunPrimed = true
+    spawn(slotA, _summonDir)
+  }
+
+  return { group, update, getPrimary, spawnStorm }
 }

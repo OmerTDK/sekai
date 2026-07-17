@@ -36,6 +36,15 @@ const SUN_DIR = new THREE.Vector3(1, 0.45, 0.9).normalize()
 const ECLIPSE_ALIGN_LOW = 0.9975
 const ECLIPSE_ALIGN_HIGH = 0.9997
 
+// SUMMON-WEATHER (god-controls): triggerEclipse() re-aims moon 0's orbit so its
+// great circle passes through the CURRENT sun direction, parking the moon this
+// many radians "before" the sun along its own motion so the eclipse begins
+// within a frame or two and then deepens to full as the moon slides onto the
+// sun. 0.07 rad (~4deg) is right at the ECLIPSE_ALIGN_LOW onset edge (acos of
+// 0.9975), so it starts almost immediately without snapping straight to a full
+// corona.
+const ECLIPSE_TRIGGER_LEAD = 0.07
+
 const SUN_BASE_INTENSITY = 2.3
 const SUN_ECLIPSE_INTENSITY = SUN_BASE_INTENSITY * 0.35
 const HEMI_BASE_INTENSITY = 0.62
@@ -123,12 +132,25 @@ export function createSky(seed) {
   // sun's live position each frame, so speeding that up is all it takes.
   let sunSpeed = 1
 
+  // SUMMON-WEATHER aurora burst: seconds remaining on the current triggerAurora()
+  // boost (0 = no burst). Counted down in update() and mapped onto the aurora's
+  // uBoost uniform there. Accumulated from dt only — no Date.now/wall clock.
+  let auroraBoostTimer = 0
+
   // Per-frame scratch vectors (reused every call — no per-frame allocation).
   const _sunDirScratch = new THREE.Vector3()
   const _moonDirScratch = new THREE.Vector3()
   const _invQuatScratch = new THREE.Quaternion()
   const _localDirScratch = new THREE.Vector3()
   const _shadowM4Scratch = new THREE.Matrix4()
+
+  // Scratch for triggerEclipse() (user-triggered, not per-frame — hoisted only
+  // to avoid leaving garbage behind on each god-control click).
+  const _eclSunScratch = new THREE.Vector3()
+  const _eclRefScratch = new THREE.Vector3()
+  const _eclTangentScratch = new THREE.Vector3()
+  const _eclNormalScratch = new THREE.Vector3()
+  const _eclBasisScratch = new THREE.Matrix4()
 
   function update(dt /* sec */, camera /* THREE.PerspectiveCamera */) {
     clouds.lowerMesh.rotateOnWorldAxis(clouds.lowerAxis, clouds.lowerRate * dt)
@@ -187,6 +209,16 @@ export function createSky(seed) {
     if (aurora) {
       aurora.uniforms.uTime.value += dt
       aurora.uniforms.uSunDir.value.copy(_sunDirScratch)
+      // SUMMON-WEATHER burst: decay the boost from AURORA_BOOST_MAX back to 1
+      // over AURORA_BOOST_DURATION. Only a uniform value write — the node graph
+      // never changes (no ~140ms recompile hitch).
+      if (auroraBoostTimer > 0) {
+        auroraBoostTimer = Math.max(0, auroraBoostTimer - dt)
+        const t = auroraBoostTimer / AURORA_BOOST_DURATION
+        aurora.uniforms.uBoost.value = 1 + (AURORA_BOOST_MAX - 1) * t
+      } else if (aurora.uniforms.uBoost.value !== 1) {
+        aurora.uniforms.uBoost.value = 1
+      }
     }
 
     // Fade the cloud deck away as the camera dives toward the surface, so
@@ -302,6 +334,43 @@ export function createSky(seed) {
     return sunSpeed
   }
 
+  // SUMMON-WEATHER (god-controls): force a bright aurora burst. Reuses the
+  // existing aurora curtains — just kicks the shared uBoost uniform to its peak;
+  // update() ramps it back to 1 over AURORA_BOOST_DURATION. Calling again
+  // re-arms (refreshes) the burst. No-op (safely) if the aurora degraded at
+  // build time.
+  function triggerAurora() {
+    if (!aurora) return
+    auroraBoostTimer = AURORA_BOOST_DURATION
+    aurora.uniforms.uBoost.value = AURORA_BOOST_MAX
+  }
+
+  // SUMMON-WEATHER (god-controls): force a solar eclipse to begin soon. Reuses
+  // the existing eclipse system (which just tracks moon<->sun alignment every
+  // frame) by re-aiming moon 0 — the guaranteed-eclipser — so its orbital great
+  // circle passes through the current sun direction, then parking it
+  // ECLIPSE_TRIGGER_LEAD radians "before" the sun along its own motion. The
+  // moon's normal per-frame rotateY then slides it straight onto the sun,
+  // crossing ECLIPSE_ALIGN_LOW within a frame or two and deepening to a full
+  // corona at closest approach. No new state machine — update()'s existing
+  // alignment scan does the rest. Uses only the CURRENT sun direction (no
+  // Date.now/Math.random); scratch is hoisted so this makes no lasting garbage.
+  function triggerEclipse() {
+    if (!moons || moons.length === 0) return
+    const moon = moons[0]
+    const s = _eclSunScratch.copy(lights.sun.position).normalize()
+    // Any unit vector perpendicular to the sun — the moon's approach tangent /
+    // second orbit-basis axis. Avoids the degenerate case near the poles.
+    const ref = Math.abs(s.y) < 0.9 ? Y_AXIS : _eclRefScratch.set(1, 0, 0)
+    const e2 = _eclTangentScratch.copy(ref).addScaledVector(s, -ref.dot(s)).normalize()
+    const c1 = _eclNormalScratch.crossVectors(e2, s) // e2 x s -> proper right-handed basis
+    // Rotation whose columns are (xHat->s, yHat->c1, zHat->e2): moon 0's local
+    // orbit circle in the XZ plane now maps to the great circle through the sun.
+    _eclBasisScratch.makeBasis(s, c1, e2)
+    moon.pivot.quaternion.setFromRotationMatrix(_eclBasisScratch)
+    moon.pivot.rotateY(-ECLIPSE_TRIGGER_LEAD) // back off so it slides INTO the sun, not onto it
+  }
+
   return {
     group,
     update,
@@ -312,6 +381,8 @@ export function createSky(seed) {
     getCloudsVisible,
     setSunSpeed,
     getSunSpeed,
+    triggerAurora,
+    triggerEclipse,
     skyboxBakeMs: skybox.bakeMs,
   }
 }
@@ -1341,6 +1412,14 @@ const AURORA_SHELL_R0 = 1.12
 const AURORA_SHELL_R1 = AURORA_SHELL_R0 + 0.05
 const AURORA_BASE_ANG_RADIUS = 0.35 // radians from the pole
 
+// SUMMON-WEATHER (god-controls): triggerAurora() multiplies every curtain's
+// alpha by uBoost, ramped from AURORA_BOOST_MAX back down to 1 over
+// AURORA_BOOST_DURATION seconds (a bright burst that decays). The night-side
+// gate is left intact — this just over-drives the curtains where they already
+// show, it doesn't paint aurora onto the day side.
+const AURORA_BOOST_DURATION = 20 // seconds
+const AURORA_BOOST_MAX = 3.2 // peak alpha multiplier at the start of a burst
+
 // TSL ports of the aurora fragment's GLSL helpers (built once, reused by all
 // four curtain graphs). hash1/noise1 are the original 1D value-noise pair;
 // auroraSmoothstepSafe reproduces the manual smoothstep that stays defined for
@@ -1443,6 +1522,7 @@ function buildAuroraCurtain(seed, poleSign, ringIndex, uniforms) {
     .mul(mix(float(0.25), float(1.0), waves))
     .mul(edgeFade)
     .mul(nightFade)
+    .mul(uniforms.uBoost) // 1 normally; triggerAurora() ramps this up for a burst
 
   const mat = new THREE.MeshBasicNodeMaterial({
     transparent: true,
@@ -1462,6 +1542,9 @@ function createAurora(seed) {
   const uniforms = {
     uTime: uniform(0),
     uSunDir: uniform(new THREE.Vector3(1, 0, 0)),
+    // Alpha multiplier for the SUMMON-WEATHER aurora burst (see triggerAurora
+    // in createSky()); 1 = the normal, untriggered aurora.
+    uBoost: uniform(1),
   }
   const group = new THREE.Group()
   for (const poleSign of [1, -1]) {
