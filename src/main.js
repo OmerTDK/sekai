@@ -9,6 +9,7 @@ import { createSky } from './sky.js'
 import { createWorld } from './world.js'
 import { createBirds } from './birds.js'
 import { createFlora } from './flora.js'
+import { createEvents } from './events.js'
 import { createVerifyKit } from './verifykit.js'
 import { createWind } from './wind.js'
 import { createStorms } from './storms.js'
@@ -33,7 +34,7 @@ scene.add(planet.group)
 const sky = createSky(SEED)
 scene.add(sky.group)
 
-const world = createWorld(planet, camera, renderer.domElement)
+const world = createWorld(planet, camera, renderer.domElement, renderer)
 scene.add(world.group)
 
 const birds = createBirds(SEED)
@@ -47,6 +48,20 @@ scene.add(wind.group)
 
 const storms = createStorms(planet, camera, SEED)
 scene.add(storms.group)
+
+const events = createEvents(world, camera)
+scene.add(events.group)
+// Git charm: commits become fireworks, merged PRs become monuments.
+async function pollEvents() {
+  try {
+    const res = await fetch('/api/events')
+    if (res.ok) events.ingest(await res.json())
+  } catch {
+    /* server may be mid-restart; next poll catches up */
+  }
+}
+pollEvents()
+setInterval(pollEvents, 60_000)
 
 // Cinematic pass: subtle bloom lifts the sun, atmosphere rim and emissives.
 const composer = new EffectComposer(renderer)
@@ -110,6 +125,7 @@ renderer.setAnimationLoop(() => {
   wind.update(dt)
   storms.update(dt, sky.getSunDir(sunDirScratch))
   sky.setStormClearing(stormDirScratch, storms.getPrimary(stormDirScratch))
+  events.update(dt)
   ui.update(dt)
   controls.update()
 

@@ -38,3 +38,6 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
   → verdict: graded-fresnel × stylized-banded hybrid.
 - `camera-{1..3}-*.gif` — camera-feel packet → verdict: swoop for visits,
   terrain-skim near the ground.
+
+- `screenshot-…-38/39/41.jpg` — **the fjord world arrives**: M-LD terrain B+C+D + hybrid water live (39 = the fjord-and-coast-glow money shot).
+- `screenshot-…-42.jpg` — new Aemunis from orbit, all 250 buildings on the GLTF asset path.

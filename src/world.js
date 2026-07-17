@@ -85,6 +85,21 @@ const MINION_SCALE = 0.5 // half-size vs a normal worker
 
 const STRUCT_HIT_RADIUS = 0.012 // invisible click-target sphere radius per structure
 
+// Steam/smoke plumes: the "alive" signal (art direction §0.5) — every
+// structure whose session is currently WORKING breathes soft gray-white
+// puffs. Pattern-copied from the spark pool above, but additive OFF (normal
+// blending + real per-vertex alpha, see spawnPlumePuff) so it reads as
+// vapor, not glow.
+const PLUME_POOL_SIZE = 200 // shared particle budget for ALL structures' plumes
+const PLUME_EMIT_INTERVAL = 0.8 // seconds between puffs, per active structure
+const PLUME_TTL = 2.5 // seconds a puff lives
+const PLUME_RISE_SPEED = 0.01 // world units/s outward along the structure's surface normal
+const PLUME_DRIFT_SPEED = 0.0015 // world units/s lateral wander, tangent to the surface
+const PLUME_EMIT_OFFSET = 0.012 // world units outward from the anchor along dir — roughly rooftop height
+const PLUME_PEAK_ALPHA = 0.4
+const PLUME_SIZE = 7 // PointsMaterial size, screen-space (sizeAttenuation: false)
+const PLUME_FADE_IN = 0.2 // seconds — avoids a hard pop-in at spawn
+
 // ---------------------------------------------------------------------------
 // Scratch tangent-basis vectors for the tangentBasis() calls made directly
 // from this module (spark bursts, agent/minion forward vectors) — duplicated
@@ -94,6 +109,12 @@ const STRUCT_HIT_RADIUS = 0.012 // invisible click-target sphere radius per stru
 // ---------------------------------------------------------------------------
 const _tb1 = new THREE.Vector3()
 const _tb2 = new THREE.Vector3()
+
+// Scratch for composing a structure anchor's position/quaternion/scale into
+// the Matrix4 pushed to assets.js's setVisualMatrix (see pushVisualMatrix) —
+// same write-before-read scratch convention as _tb1/_tb2 above.
+const _visMat = new THREE.Matrix4()
+const _visScale = new THREE.Vector3()
 
 // ---------------------------------------------------------------------------
 // Silent-fallback rule: every graceful-degradation path warns exactly once
@@ -116,11 +137,32 @@ function warnPoll(reason) {
   console.warn('[planet] world.js: session poll degraded — ' + reason)
 }
 
+// M2 asset-pack integration (see assets.js's pinned contract in the M2 JIT
+// plan): loadBuildingAssets() is imported dynamically and guarded — the
+// pack may not exist yet, may throw on import, or may reject/report
+// not-ready (missing WEBGL features). Either way the world must render
+// identically to before via the procedural buildKit path, so both failure
+// modes get their own single warning (load-time vs. per-structure).
+let warnedAssetsLoad = false
+let warnedAssetsCreate = false
+
+function warnAssetsLoad(reason) {
+  if (warnedAssetsLoad) return
+  warnedAssetsLoad = true
+  console.warn('[planet] world.js: building-asset pack unavailable — using the procedural buildKit fallback for all structures (' + reason + ')')
+}
+
+function warnAssetsCreate(reason) {
+  if (warnedAssetsCreate) return
+  warnedAssetsCreate = true
+  console.warn('[planet] world.js: asset-pack structure visual failed at least once — falling back to procedural buildKit for the affected structure(s) (' + reason + ')')
+}
+
 // ---------------------------------------------------------------------------
 // createWorld
 // ---------------------------------------------------------------------------
 
-export function createWorld(planet, camera, domElement) {
+export function createWorld(planet, camera, domElement, renderer = null) {
   const group = new THREE.Group()
   const settlementsGroup = new THREE.Group()
   const structuresGroup = new THREE.Group()
@@ -142,25 +184,75 @@ export function createWorld(planet, camera, domElement) {
   let townLightCount = -1
   function rebuildTownLights() {
     townLightCount = structures.size
+    townLightsDirty = false
     if (townLights) {
       structuresGroup.remove(townLights)
       townLights.geometry.dispose()
     }
-    const positions = new Float32Array(structures.size * 3)
-    let i = 0
+    // Filtered set: while a time-lapse cutoff is active, only currently-
+    // visible structures twinkle — a plain array first since the visible
+    // count (unlike structures.size) isn't known ahead of time.
+    const coords = []
     for (const st of structures.values()) {
-      positions[i * 3] = st.structureRoot.position.x + st.dir.x * 0.004
-      positions[i * 3 + 1] = st.structureRoot.position.y + st.dir.y * 0.004
-      positions[i * 3 + 2] = st.structureRoot.position.z + st.dir.z * 0.004
-      i++
+      if (!st.timeVisible) continue
+      coords.push(st.structureRoot.position.x + st.dir.x * 0.004, st.structureRoot.position.y + st.dir.y * 0.004, st.structureRoot.position.z + st.dir.z * 0.004)
     }
     const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(coords), 3))
     townLights = new THREE.Points(geo, townLightsMat)
     townLights.renderOrder = 1
     structuresGroup.add(townLights)
   }
   group.add(settlementsGroup, structuresGroup, agentsGroup)
+
+  // ---------------------------------------------------------------------------
+  // M2 asset-pack bootstrap (see the pinned contract in the M2 JIT plan).
+  // renderer isn't available in world.js, so loadBuildingAssets is called
+  // with null; a dynamic import means a missing/half-written assets.js
+  // degrades to the procedural buildKit path instead of breaking the whole
+  // module at import time. Structures created before this resolves keep
+  // their procedural visuals forever — no retro-swap, per the spec.
+  // ---------------------------------------------------------------------------
+  let assetsApi = null
+  let assetsReady = false
+
+  ;(async function initAssets() {
+    let mod
+    try {
+      mod = await import('./assets.js')
+    } catch (e) {
+      warnAssetsLoad('import failed: ' + e)
+      return
+    }
+    try {
+      const api = await mod.loadBuildingAssets(renderer)
+      if (api && api.ready) {
+        assetsApi = api
+        assetsReady = true
+        group.add(api.group)
+      } else {
+        warnAssetsLoad('loadBuildingAssets reported not-ready (missing WebGL features or a load failure)')
+      }
+    } catch (e) {
+      warnAssetsLoad('loadBuildingAssets rejected: ' + e)
+    }
+  })()
+
+  // Composes a structure anchor's current position/quaternion/visualScale
+  // into a Matrix4 and pushes it to the asset pack. Anchor position/
+  // quaternion never change after creation (structures are static), so this
+  // only needs to run at creation and whenever visualScale itself changes
+  // (construction growth, tier change) — never per-frame for settled
+  // structures. assets.js's contract asks for the FULL WORLD matrix; every
+  // ancestor from structureRoot up to the scene (structuresGroup, this
+  // world's own `group`) is identity-transformed, so structureRoot's local
+  // position/quaternion/scale composition already equals its world matrix —
+  // confirmed against assets.js's actual setVisualMatrix contract comment.
+  function pushVisualMatrix(structure) {
+    if (!assetsApi || structure.visualHandle == null) return
+    _visMat.compose(structure.structureRoot.position, structure.structureRoot.quaternion, _visScale.setScalar(structure.visualScale))
+    assetsApi.setVisualMatrix(structure.visualHandle, _visMat)
+  }
 
   // Hammer sparks: one shared additive-particle pool for every agent's
   // hammering animation, round-robin allocated so a burst never allocates.
@@ -244,6 +336,99 @@ export function createWorld(planet, camera, domElement) {
     sparkGeo.attributes.color.needsUpdate = true
   }
 
+  // Steam/smoke plumes: shared particle pool, pattern-copied from the spark
+  // pool above but with a real per-vertex ALPHA channel (color itemSize 4 —
+  // three.js auto-enables USE_COLOR_ALPHA for exactly this shape; see
+  // WebGLRenderer's vertexAlphas check) instead of fading color-to-black,
+  // since color-to-black only reads as "fade out" under additive blending.
+  // Blending stays the THREE default (normal) — "additive OFF" is
+  // deliberate here: vapor, not glow.
+  const plumePositions = new Float32Array(PLUME_POOL_SIZE * 3)
+  const plumeColors = new Float32Array(PLUME_POOL_SIZE * 4) // RGBA — itemSize 4 is what enables true per-vertex alpha
+  const plumeVelocity = new Float32Array(PLUME_POOL_SIZE * 3)
+  const plumeAge = new Float32Array(PLUME_POOL_SIZE)
+  const plumeTtl = new Float32Array(PLUME_POOL_SIZE) // 0 = free/dead slot
+  let plumeCursor = 0
+  const plumeGeo = new THREE.BufferGeometry()
+  plumeGeo.setAttribute('position', new THREE.BufferAttribute(plumePositions, 3))
+  plumeGeo.setAttribute('color', new THREE.BufferAttribute(plumeColors, 4))
+  const plumePointsMat = new THREE.PointsMaterial({
+    size: PLUME_SIZE,
+    sizeAttenuation: false,
+    vertexColors: true,
+    transparent: true,
+    opacity: 1,
+    blending: THREE.NormalBlending,
+    depthWrite: false,
+  })
+  const plumePoints = new THREE.Points(plumeGeo, plumePointsMat)
+  plumePoints.renderOrder = 1
+  plumePoints.frustumCulled = false // pool slots can sit anywhere on the planet
+  structuresGroup.add(plumePoints)
+
+  function spawnPlumePuff(st) {
+    const slot = plumeCursor
+    plumeCursor = (plumeCursor + 1) % PLUME_POOL_SIZE
+    const i3 = slot * 3
+    const i4 = slot * 4
+    plumePositions[i3] = st.structureRoot.position.x + st.dir.x * PLUME_EMIT_OFFSET
+    plumePositions[i3 + 1] = st.structureRoot.position.y + st.dir.y * PLUME_EMIT_OFFSET
+    plumePositions[i3 + 2] = st.structureRoot.position.z + st.dir.z * PLUME_EMIT_OFFSET
+    tangentBasis(st.dir, _tb1, _tb2)
+    const a = Math.random() * Math.PI * 2
+    plumeVelocity[i3] = (_tb1.x * Math.cos(a) + _tb2.x * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.x * PLUME_RISE_SPEED
+    plumeVelocity[i3 + 1] = (_tb1.y * Math.cos(a) + _tb2.y * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.y * PLUME_RISE_SPEED
+    plumeVelocity[i3 + 2] = (_tb1.z * Math.cos(a) + _tb2.z * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.z * PLUME_RISE_SPEED
+    plumeAge[slot] = 0
+    plumeTtl[slot] = PLUME_TTL * (0.85 + Math.random() * 0.3)
+    const g = 0.82 + Math.random() * 0.12
+    plumeColors[i4] = g
+    plumeColors[i4 + 1] = g
+    plumeColors[i4 + 2] = Math.min(1, g + 0.03)
+    plumeColors[i4 + 3] = 0 // starts transparent; updatePlumes fades it in over PLUME_FADE_IN
+  }
+
+  function updatePlumes(dt) {
+    for (let slot = 0; slot < PLUME_POOL_SIZE; slot++) {
+      const t = plumeTtl[slot]
+      if (t <= 0) continue
+      const a = plumeAge[slot] + dt
+      const i3 = slot * 3
+      const i4 = slot * 4
+      if (a >= t) {
+        plumeTtl[slot] = 0
+        plumeColors[i4 + 3] = 0
+        continue
+      }
+      plumeAge[slot] = a
+      plumePositions[i3] += plumeVelocity[i3] * dt
+      plumePositions[i3 + 1] += plumeVelocity[i3 + 1] * dt
+      plumePositions[i3 + 2] += plumeVelocity[i3 + 2] * dt
+      const fadeIn = a < PLUME_FADE_IN ? a / PLUME_FADE_IN : 1
+      plumeColors[i4 + 3] = PLUME_PEAK_ALPHA * fadeIn * (1 - a / t)
+    }
+    plumeGeo.attributes.position.needsUpdate = true
+    plumeGeo.attributes.color.needsUpdate = true
+  }
+
+  // Per-structure emission timer: only structures whose session is
+  // currently WORKING (same threshold an agent uses for its own hammer/work
+  // phase) breathe smoke. New spawns are suppressed while a time-lapse
+  // cutoff is active (nowMs vs. lastActive would be comparing live "now" to
+  // a scrubbed-to timestamp, which is meaningless) — in-flight puffs are
+  // left to fade out naturally rather than snapping off.
+  function updateStructurePlumes(dt, nowMs) {
+    if (timeCutoff != null) return
+    for (const st of structures.values()) {
+      if (nowMs - st.lastActive >= WORKING_MAX_MS) continue
+      st.plumeTimer -= dt
+      if (st.plumeTimer <= 0) {
+        st.plumeTimer = PLUME_EMIT_INTERVAL * (0.85 + Math.random() * 0.3)
+        spawnPlumePuff(st)
+      }
+    }
+  }
+
   const stats = { settlements: 0, structures: 0, agents: 0 }
 
   const settlements = new Map() // project -> settlement record
@@ -259,6 +444,20 @@ export function createWorld(planet, camera, domElement) {
   let simTime = 0
   let pollTimer = 0
   let labelThrottle = 0
+  let townLightsDirty = true // set whenever any structure's timeVisible flips — forces rebuildTownLights beyond just the size-changed check
+
+  // --- time-lapse filter state (setTimeFilter/getTimeRange) -----------------
+  // timeCutoff: null = live (nothing filtered). timeSorted: all structures
+  // ascending by lastActive, rebuilt lazily (see ensureTimeSorted) only when
+  // ingest() has actually touched the data — cheap to leave stale between
+  // polls since setTimeFilter is the ~30x/s hot path and never re-sorts
+  // itself. timeVisibleUpTo: boundary index into timeSorted — [0,
+  // timeVisibleUpTo) are the currently-visible structures — so a scrub that
+  // doesn't cross any structure's timestamp touches nothing at all.
+  let timeCutoff = null
+  let timeSorted = []
+  let timeSortedDirty = true
+  let timeVisibleUpTo = 0
 
   const raycaster = new THREE.Raycaster()
   const ndc = new THREE.Vector2()
@@ -300,7 +499,7 @@ export function createWorld(planet, camera, domElement) {
     hitMesh.scale.setScalar(0.08) // sphereGeo radius 0.5 -> world radius 0.04
     settlementsGroup.add(hitMesh)
 
-    const settlement = { project, anchorDir, groundR, race, name, basenameRaw, labelSprite, hitMesh, structureDirs: [] }
+    const settlement = { project, anchorDir, groundR, race, name, basenameRaw, labelSprite, hitMesh, structureDirs: [], visibleStructureCount: 0 }
     hitMesh.userData.settlement = settlement
     hitSpheres.push(hitMesh)
     return settlement
@@ -308,7 +507,7 @@ export function createWorld(planet, camera, domElement) {
 
   // --- structure --------------------------------------------------------------
 
-  function createStructureRecord(id, settlement, topic, bytes, lastActive, animate) {
+  function createStructureRecord(id, settlement, topic, bytes, lastActive, animate, model) {
     const rng = rngFromString(id)
     const dir = findStructureSpot(planet, settlement.anchorDir, rng, settlement.structureDirs)
     const groundR = planet.sampleHeight(dir)
@@ -323,9 +522,37 @@ export function createWorld(planet, camera, domElement) {
     orientOnSurface(structureRoot, dir, _yawScratch)
     structureRoot.position.copy(dir).multiplyScalar(groundR - 0.0005 * finalScale)
 
-    const kitGroup = buildKit(type, settlement.race, tier, rng)
-    kitGroup.scale.setScalar(animate ? finalScale * 0.05 : finalScale)
-    structureRoot.add(kitGroup)
+    const initialVisualScale = animate ? finalScale * 0.05 : finalScale
+
+    // Asset-pack visual (M2): once assets.js has resolved, new structures
+    // are built from its merged/batched geometry instead of the procedural
+    // buildKit primitives. structureRoot remains the anchor either way —
+    // its position/quaternion are unchanged from before this task, and
+    // topicSprite/scaffold/hitMesh/city-lights all still key off it exactly
+    // as today. Falls back to buildKit per-structure (not just globally) so
+    // one bad (type,tier,race) combo can never take the whole world down.
+    // seedStr folds in the model-tier hint (M2 task 4) so asset selection
+    // can vary by model later without another world.js change.
+    let kitGroup = null
+    let visualHandle = null
+    let boundingRadius = null
+    if (assetsReady) {
+      try {
+        const seedStr = id + ':' + (model || '')
+        const res = assetsApi.createStructureVisual(type, tier, settlement.race, seedStr)
+        if (!res || res.handle == null) throw new Error('no handle returned')
+        visualHandle = res.handle
+        if (Number.isFinite(res.boundingRadius) && res.boundingRadius > 0) boundingRadius = res.boundingRadius
+      } catch (e) {
+        warnAssetsCreate(String(e))
+        visualHandle = null
+      }
+    }
+    if (visualHandle == null) {
+      kitGroup = buildKit(type, settlement.race, tier, rng)
+      kitGroup.scale.setScalar(initialVisualScale)
+      structureRoot.add(kitGroup)
+    }
 
     const topicSprite = makeTopicSprite(truncateText(topic, 44))
     topicSprite.visible = false
@@ -359,25 +586,34 @@ export function createWorld(planet, camera, domElement) {
       bytes,
       topic,
       lastActive,
+      model: model || null,
       settlement,
       finalScale,
       structureRoot,
       kitGroup,
+      visualHandle,
+      visualScale: initialVisualScale,
+      boundingRadius,
       scaffold,
       topicSprite,
       hitMesh,
       constructing: !!animate,
       constructionT: 0,
+      timeVisible: false, // sentinel — setStructureVisible() below establishes the real initial state
+      plumeTimer: Math.random() * PLUME_EMIT_INTERVAL,
     }
     hitMesh.userData.structure = structure
     structureHitSpheres.push(hitMesh)
     settlement.structureDirs.push(dir)
     if (animate) constructingSet.add(structure)
+    if (visualHandle != null) pushVisualMatrix(structure)
+    setStructureVisible(structure, timeCutoff == null || lastActive <= timeCutoff)
     return structure
   }
 
-  function updateStructureData(structure, topic, bytes, lastActive) {
+  function updateStructureData(structure, topic, bytes, lastActive, model) {
     structure.lastActive = lastActive
+    structure.model = model || null
     if (topic !== structure.topic) {
       structure.topic = topic
       refreshTopicSprite(structure.topicSprite, truncateText(topic, 44))
@@ -388,10 +624,106 @@ export function createWorld(planet, camera, domElement) {
       if (tier !== structure.tier) {
         structure.tier = tier
         structure.finalScale = KIT_UNIT_SIZE[structure.type] * TIER_MULT[tier - 1]
-        if (!structure.constructing) structure.kitGroup.scale.setScalar(structure.finalScale)
+        if (!structure.constructing) {
+          if (structure.kitGroup) {
+            structure.kitGroup.scale.setScalar(structure.finalScale)
+          } else if (structure.visualHandle != null) {
+            structure.visualScale = structure.finalScale
+            pushVisualMatrix(structure)
+          }
+        }
         structure.topicSprite.position.set(0, structure.finalScale * 1.3, 0)
       }
     }
+  }
+
+  // --- time-lapse filter (setTimeFilter/getTimeRange) ------------------------
+  //
+  // Single choke point for structure visibility: toggles the anchor itself
+  // (cascades to topicSprite/scaffold/kitGroup, all its children — three.js
+  // never renders into an invisible object's subtree) AND the asset-pack
+  // visual (a separate object living in assets.js's own group, outside
+  // structureRoot's subtree, so it needs its own explicit call), keeps each
+  // settlement's visible-structure count in sync for the "hide empty
+  // settlement labels" rule, and marks city lights dirty. Click-through is
+  // guarded separately in onPointerUp — three.js's Raycaster ignores
+  // Object3D.visible entirely, so hiding the anchor alone would NOT stop a
+  // hidden structure's hitMesh from still being clickable.
+  function setStructureVisible(st, visible) {
+    if (st.timeVisible === visible) return
+    st.timeVisible = visible
+    st.structureRoot.visible = visible
+    if (st.visualHandle != null && assetsApi) assetsApi.setVisualVisible(st.visualHandle, visible)
+    st.settlement.visibleStructureCount += visible ? 1 : -1
+    st.settlement.labelSprite.visible = st.settlement.visibleStructureCount > 0
+    townLightsDirty = true
+  }
+
+  // Binary search: count of timeSorted entries with lastActive <= cutoff
+  // (null cutoff = everything, i.e. live mode).
+  function computeTimeBoundary(cutoff) {
+    if (cutoff == null) return timeSorted.length
+    let lo = 0
+    let hi = timeSorted.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (timeSorted[mid].lastActive <= cutoff) lo = mid + 1
+      else hi = mid
+    }
+    return lo
+  }
+
+  // Full O(n) correctness pass — only runs right after timeSorted was just
+  // rebuilt (i.e. at most once per ingest(), never mid-scrub): a structure's
+  // lastActive can only increase over real time, so a live/active structure
+  // that was visible under a fixed historical cutoff can drift to hidden
+  // between rebuilds; this reconciles any such drift before resuming the
+  // fast incremental path below. setStructureVisible's own early-return
+  // makes the common no-op case (nothing actually changed) cheap.
+  function reconcileTimeVisibility() {
+    for (let i = 0; i < timeSorted.length; i++) {
+      const st = timeSorted[i]
+      setStructureVisible(st, timeCutoff == null || st.lastActive <= timeCutoff)
+    }
+    timeVisibleUpTo = computeTimeBoundary(timeCutoff)
+  }
+
+  function ensureTimeSorted() {
+    if (!timeSortedDirty) return
+    timeSorted = Array.from(structures.values()).sort((a, b) => a.lastActive - b.lastActive)
+    timeSortedDirty = false
+    reconcileTimeVisibility()
+  }
+
+  // setTimeFilter(cutoffMs|null): the ~30x/s scrubber hot path. When
+  // timeSorted is already fresh (the common case — no ingest happened since
+  // the last call) this does zero allocation and zero sorting: a binary
+  // search for the new boundary, then only touches the structures whose
+  // visibility actually flips between the old and new boundary.
+  function setTimeFilter(cutoffMsRaw) {
+    const cutoff = typeof cutoffMsRaw === 'number' && Number.isFinite(cutoffMsRaw) ? cutoffMsRaw : null
+    ensureTimeSorted()
+
+    const wasFiltering = timeCutoff !== null
+    timeCutoff = cutoff
+    const isFiltering = cutoff !== null
+    if (isFiltering !== wasFiltering) agentsGroup.visible = !isFiltering // agents/minions/bubbles/sparks all live under agentsGroup
+
+    const newBoundary = computeTimeBoundary(cutoff)
+    if (newBoundary !== timeVisibleUpTo) {
+      if (newBoundary > timeVisibleUpTo) {
+        for (let i = timeVisibleUpTo; i < newBoundary; i++) setStructureVisible(timeSorted[i], true)
+      } else {
+        for (let i = newBoundary; i < timeVisibleUpTo; i++) setStructureVisible(timeSorted[i], false)
+      }
+      timeVisibleUpTo = newBoundary
+    }
+  }
+
+  function getTimeRange() {
+    ensureTimeSorted()
+    if (timeSorted.length === 0) return { min: 0, max: 0 }
+    return { min: timeSorted[0].lastActive, max: timeSorted[timeSorted.length - 1].lastActive }
   }
 
   // --- agent ------------------------------------------------------------------
@@ -615,6 +947,11 @@ export function createWorld(planet, camera, domElement) {
         const bytes = Number.isFinite(s.bytes) ? s.bytes : 0
         const lastAction = typeof s.lastAction === 'string' && s.lastAction ? s.lastAction : null
         const subagents = Number.isFinite(s.subagents) ? clamp(Math.floor(s.subagents), 0, 20) : 0
+        // Defensive: the scanner is adding `model` (tier string | null) —
+        // read it loosely so both an old and a new server payload shape
+        // work. See createStructureRecord/updateStructureData for the one
+        // place this currently feeds into (the asset-visual seedStr).
+        const model = typeof s.model === 'string' && s.model ? s.model : null
 
         let settlement = settlements.get(project)
         if (!settlement) {
@@ -627,10 +964,10 @@ export function createWorld(planet, camera, domElement) {
           const isNew = !knownIds.has(id)
           knownIds.add(id)
           const animate = isNew && now - lastActive < CONSTRUCTION_NEW_MAX_MS
-          structure = createStructureRecord(id, settlement, topic, bytes, lastActive, animate)
+          structure = createStructureRecord(id, settlement, topic, bytes, lastActive, animate, model)
           structures.set(id, structure)
         } else {
-          updateStructureData(structure, topic, bytes, lastActive)
+          updateStructureData(structure, topic, bytes, lastActive, model)
         }
 
         if (now - lastActive < AGENT_MAX_MS) {
@@ -661,6 +998,7 @@ export function createWorld(planet, camera, domElement) {
         warnIngestSkip('exception: ' + e)
       }
     }
+    timeSortedDirty = true
   }
 
   async function poll() {
@@ -677,7 +1015,17 @@ export function createWorld(planet, camera, domElement) {
       warnPoll('fetch/parse failed: ' + e)
     }
   }
-  poll()
+  // Hold the first ingest briefly for the asset pack (capped at 3s so a
+  // broken pack can never block the world) — otherwise the instant first
+  // poll beats the async GLB loads and nearly every structure is born on
+  // the procedural fallback path ("no retro-swap" design).
+  ;(async () => {
+    const start = performance.now()
+    while (!assetsReady && performance.now() - start < 3000) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    poll()
+  })()
 
   // --- click-to-visit -----------------------------------------------------------
 
@@ -704,7 +1052,18 @@ export function createWorld(planet, camera, domElement) {
     // Structures are tested first: a hit opens the inspector and never
     // triggers the settlement fly-to underneath it.
     const structHits = raycaster.intersectObjects(structureHitSpheres, false)
-    const structure = structHits.length ? structHits[0].object.userData.structure : null
+    let structure = null
+    for (let i = 0; i < structHits.length; i++) {
+      // three.js's Raycaster ignores Object3D.visible entirely (core
+      // behavior, not specific to this codebase), so a hitMesh for a
+      // time-lapse-hidden structure is still geometrically hittable —
+      // timeVisible is the actual gate here.
+      const s = structHits[i].object.userData.structure
+      if (s && s.timeVisible) {
+        structure = s
+        break
+      }
+    }
     if (structure) {
       const st = structure.settlement
       const payload = {
@@ -755,6 +1114,8 @@ export function createWorld(planet, camera, domElement) {
 
   function update(dt) {
     simTime += dt
+    const nowMs = Date.now()
+    if (assetsApi) assetsApi.update(dt)
     pollTimer += dt
     if (pollTimer >= POLL_INTERVAL) {
       pollTimer = 0
@@ -772,7 +1133,13 @@ export function createWorld(planet, camera, domElement) {
       st.constructionT += dt / CONSTRUCTION_DURATION
       const t = Math.min(1, st.constructionT)
       const eased = smoothstep(0, 1, t)
-      st.kitGroup.scale.setScalar(lerp(st.finalScale * 0.05, st.finalScale, eased))
+      const scale = lerp(st.finalScale * 0.05, st.finalScale, eased)
+      if (st.kitGroup) {
+        st.kitGroup.scale.setScalar(scale)
+      } else if (st.visualHandle != null) {
+        st.visualScale = scale
+        pushVisualMatrix(st)
+      }
       if (t >= 1) {
         st.constructing = false
         if (st.scaffold) {
@@ -801,7 +1168,6 @@ export function createWorld(planet, camera, domElement) {
       }
     }
 
-    const nowMs = Date.now()
     for (const [id, agent] of agents) {
       const remove = updateAgent(agent, dt, nowMs)
       if (remove) {
@@ -820,6 +1186,8 @@ export function createWorld(planet, camera, domElement) {
     }
 
     updateSparks(dt)
+    updateStructurePlumes(dt, nowMs)
+    updatePlumes(dt)
 
     if (tween.active) {
       tween.t += dt / TWEEN_DURATION
@@ -832,7 +1200,7 @@ export function createWorld(planet, camera, domElement) {
     stats.structures = structures.size
     stats.agents = agents.size
 
-    if (structures.size !== townLightCount) rebuildTownLights()
+    if (structures.size !== townLightCount || townLightsDirty) rebuildTownLights()
   }
 
   // Read-only settlement summaries for UI (sidebar/legend).
@@ -862,5 +1230,5 @@ export function createWorld(planet, camera, domElement) {
     return true
   }
 
-  return { group, update, stats, list, visit, _tween: tween, onStructureClick }
+  return { group, update, stats, list, visit, _tween: tween, onStructureClick, setTimeFilter, getTimeRange }
 }

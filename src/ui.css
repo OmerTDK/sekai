@@ -75,7 +75,9 @@
         font-size: 12px;
         overflow: hidden;
         z-index: 20;
-        transition: width 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+        transition:
+          width 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+          opacity 0.25s ease;
       }
       #sidebar.collapsed {
         width: 26px;
@@ -610,4 +612,149 @@
       body.photo-mode #stats,
       body.photo-mode #hint {
         display: none;
+      }
+
+      /* --- time-lapse mode (DOM built by src/ui.js) ------------------------- */
+      #timelapse-btn {
+        position: fixed;
+        left: 16px;
+        bottom: 16px;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        box-sizing: border-box;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(8, 12, 20, 0.55);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        color: #cfd8e3;
+        font-size: 15px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        z-index: 21;
+        opacity: 0.55;
+        transition:
+          opacity 0.2s ease,
+          background 0.15s ease;
+      }
+      #timelapse-btn:hover {
+        opacity: 1;
+        background: rgba(255, 255, 255, 0.1);
+      }
+      #timelapse-btn.active {
+        opacity: 1;
+        background: rgba(120, 170, 255, 0.18);
+        border-color: rgba(120, 170, 255, 0.4);
+        color: #bcd4ff;
+      }
+      #timelapse-btn.hidden {
+        display: none;
+      }
+      #timelapse-bar,
+      #timelapse-bar * {
+        box-sizing: border-box;
+      }
+      #timelapse-bar {
+        position: fixed;
+        left: 50%;
+        bottom: 16px;
+        width: 60%;
+        max-width: 900px;
+        min-width: 320px;
+        background: rgba(8, 12, 20, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+        color: #cfd8e3;
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+        font-size: 12px;
+        padding: 12px 16px 14px;
+        z-index: 22;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateX(-50%) translateY(10px);
+        transition:
+          opacity 0.18s ease,
+          transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      #timelapse-bar.open {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateX(-50%) translateY(0);
+      }
+      .timelapse-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .timelapse-play-btn,
+      .timelapse-close-btn {
+        flex: 0 0 auto;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.06);
+        color: #dfe7f0;
+        font-size: 11px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: background 0.15s ease;
+      }
+      .timelapse-play-btn:hover,
+      .timelapse-close-btn:hover {
+        background: rgba(255, 255, 255, 0.13);
+      }
+      .timelapse-range {
+        flex: 1 1 auto;
+        -webkit-appearance: none;
+        appearance: none;
+        height: 4px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.14);
+        outline: none;
+        cursor: pointer;
+      }
+      .timelapse-range::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #eaf2ff;
+        border: 2px solid rgba(120, 170, 255, 0.6);
+        cursor: pointer;
+      }
+      .timelapse-range::-moz-range-track {
+        height: 4px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.14);
+      }
+      .timelapse-range::-moz-range-thumb {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #eaf2ff;
+        border: 2px solid rgba(120, 170, 255, 0.6);
+        cursor: pointer;
+      }
+      .timelapse-label {
+        margin-top: 8px;
+        text-align: center;
+        font-size: 11px;
+        letter-spacing: 0.03em;
+        color: #9fb2c8;
+      }
+      body.time-lapse #sidebar {
+        opacity: 0.35;
       }

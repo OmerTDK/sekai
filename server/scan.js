@@ -21,15 +21,21 @@ const RECENT_WINDOW_MS = 30 * 60 * 1000; // always keep sessions active in the l
 const LAST_ACTION_WINDOW_MS = 10 * 60 * 1000; // lastAction/subagents only computed for sessions active in the last 10min
 
 // Cache keyed by absolute file path: { size, topic, project, resolved,
-// tailSize, lastAction, subagents }
+// tailSize, lastAction, subagents, model }
 // Once topic+project are both found they never change for a given file, so
 // we never re-read its content again (stat only). Otherwise we only re-read
 // when the file's size has changed since the last attempt. The tail-derived
-// fields (tailSize/lastAction/subagents) are a separate cheap layer on top:
-// they're only (re)computed for sessions currently inside the "active"
+// fields (tailSize/lastAction/subagents/model) are a separate cheap layer on
+// top: they're only (re)computed for sessions currently inside the "active"
 // window, and only when the file's size changed since they were last
 // computed — see extractTailActivity and its call site below.
 const fileCache = new Map();
+
+// Model tiers we recognize, checked by substring against the most recent
+// assistant line's message.model id (e.g. "claude-fable-5-20260101"). Order
+// doesn't matter for correctness — none of these four names is a substring
+// of another — but is kept stable for readability.
+const MODEL_TIERS = ['fable', 'opus', 'sonnet', 'haiku'];
 
 function formatTopic(raw) {
   if (typeof raw !== 'string') return null;
@@ -210,21 +216,54 @@ function countSubagents(lines) {
   return count;
 }
 
-// Reads the last TAIL_BYTES of the file once and derives both lastAction and
-// subagents from it. Never throws: unreadable/unparseable content just
-// yields nulls/zero.
+function normalizeModel(raw) {
+  if (typeof raw !== 'string' || !raw) return null;
+  const lower = raw.toLowerCase();
+  for (const tier of MODEL_TIERS) {
+    if (lower.includes(tier)) return tier;
+  }
+  return null;
+}
+
+// Walks the tail lines backward looking for the most recent assistant line
+// that carries a message.model field. Deliberately independent of
+// findLastAction's stricter tool_use/text requirement above (and, like it,
+// doesn't filter on isSidechain) — a thinking-only or subagent turn still
+// reports the model that produced it, and the model in use right now is what
+// this field is for.
+function findModel(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line) continue;
+    let obj;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!obj || typeof obj !== 'object' || obj.type !== 'assistant') continue;
+    const model = obj.message && typeof obj.message === 'object' ? obj.message.model : null;
+    if (typeof model === 'string' && model) return normalizeModel(model);
+  }
+  return null;
+}
+
+// Reads the last TAIL_BYTES of the file once and derives lastAction,
+// subagents, and model from it. Never throws: unreadable/unparseable content
+// just yields nulls/zero.
 function extractTailActivity(filePath) {
   let tail;
   try {
     tail = readTail(filePath, TAIL_BYTES);
   } catch {
-    return { lastAction: null, subagents: 0 };
+    return { lastAction: null, subagents: 0, model: null };
   }
   const lines = tail.text.split('\n');
   if (tail.truncated) lines.shift(); // we started mid-file: first line is a partial line
   return {
     lastAction: findLastAction(lines),
     subagents: countSubagents(lines),
+    model: findModel(lines),
   };
 }
 
@@ -286,15 +325,18 @@ export async function scanSessions(root = path.join(os.homedir(), '.claude', 'pr
 
       let lastAction = null;
       let subagents = 0;
+      let model = null;
       if (isRecentlyActive) {
         if (cached.tailSize !== stat.size) {
           const activity = extractTailActivity(filePath);
           cached.tailSize = stat.size;
           cached.lastAction = activity.lastAction;
           cached.subagents = activity.subagents;
+          cached.model = activity.model;
         }
         lastAction = cached.lastAction;
         subagents = cached.subagents;
+        model = cached.model ?? null;
       }
 
       sessions.push({
@@ -305,6 +347,7 @@ export async function scanSessions(root = path.join(os.homedir(), '.claude', 'pr
         bytes: stat.size,
         lastAction,
         subagents,
+        model,
       });
     }
   }
