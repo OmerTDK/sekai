@@ -1,12 +1,18 @@
 // M2 asset pipeline: loads the Kenney/Quaternius kit parts named in
 // buildings.js's recipe tables, merges each (type, tier) recipe into static
-// geometry, and renders every structure in the world from just TWO
-// THREE.BatchedMesh draw calls (one matte-tinted class, one brass-metal
-// class) instead of one THREE.Mesh per building part. See the M2 program
-// plan (§0.5 art direction, S4/S5 spike results) and spikes/s4, spikes/s5.
+// geometry, and renders every structure in the world from FOUR
+// THREE.BatchedMesh draw calls — one per material CLASS (wood, stone+thatch,
+// cloth+banner, brass) — instead of one THREE.Mesh per building part. The
+// class split is the M-WX "material-distinction" pass (ART.md's owner
+// complaint: every building shared one matte skin, reading as clay/
+// play-dough); each class gets its own roughness/metalness/envMapIntensity
+// and a subtle procedural micro-albedo texture instead of one flat
+// treatment for everything. See the M2 program plan (§0.5 art direction,
+// S4/S5 spike results), spikes/s4, spikes/s5, and ART.md §2/§6.
 //
-// Contract (world.js builds against this exactly):
-//   const assets = await loadBuildingAssets(renderer)
+// Contract (world.js builds against this exactly — UNCHANGED by the M-WX
+// pass, only loadBuildingAssets grew one optional trailing parameter):
+//   const assets = await loadBuildingAssets(renderer, sky)
 //   if (assets.ready) {
 //     const { handle, boundingRadius } = assets.createStructureVisual(type, tier, race, seedStr)
 //     assets.setVisualMatrix(handle, matrix4)   // full world matrix: position * rotation * scale
@@ -15,6 +21,16 @@
 //     scene.add(assets.group)                   // THREE.Group holding the BatchedMesh(es)
 //     assets.update(dt)                         // per-frame env/anim upkeep
 //   }
+// `sky` is OPTIONAL and defaults to null — today's world.js call site still
+// only passes `renderer`, which is fine (see env.js: the PMREM capture it
+// feeds is static/baked-once regardless, so a missing live sky handle just
+// means the bake uses a fixed fallback sun direction instead of the live
+// one). Wiring the real sky object through world.js's loadBuildingAssets
+// call is a nice-to-have left to whoever next touches world.js/main.js
+// (outside this pass's file ownership) — see env.js's own header comment.
+// `handle`'s internal shape is opaque to callers (world.js only ever passes
+// it back into setVisualMatrix/setVisualVisible/removeVisual, confirmed by
+// grep) and changed freely in this pass.
 // If loading fails for any reason, loadBuildingAssets() resolves (never
 // rejects) to { ready: false } and the caller falls back to buildKit() from
 // buildings.js — the procedural kit builders stay fully intact for exactly
@@ -22,7 +38,7 @@
 //
 // SIZING NOTE (the one contract detail that isn't visible in the function
 // signatures, called out per the "flag deviations loudly" instruction):
-// every merged (type, tier) recipe is normalized to the SAME "roughly 1 unit
+// every merged (type,tier) recipe is normalized to the SAME "roughly 1 unit
 // tall" authored-space convention buildTower/buildHall/etc. already use in
 // buildings.js, and boundingRadius is reported in that same authored space —
 // NOT world units. The caller still owns KIT_UNIT_SIZE[type] * TIER_MULT[tier-1]
@@ -30,16 +46,21 @@
 // into the matrix4 passed to setVisualMatrix, exactly as it does today for
 // buildKit()'s output. This keeps sizing tuned in exactly one place for BOTH
 // the asset path and the procedural fallback, rather than baking a second,
-// independent size system into this file.
+// independent size system into this file. The M-WX model-tier pass (task 3)
+// adds a SECOND, SMALLER authored-height multiplier on top of the "=1"
+// baseline (grand=1.12, humble=0.94, see buildings.js's MODEL_TIER_BUCKET) —
+// this still composes cleanly with the caller's KIT_UNIT_SIZE*TIER_MULT
+// scale because boundingRadius is read back per-variant, not assumed fixed.
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
-import { hash01 } from './util.js'
+import { hash01, rngFromString } from './util.js'
+import { createEnvironment } from './env.js'
 import {
   RACE_PALETTES,
   ASSET_BASE,
   ROLE_COLOR,
+  ROLE_CLASS,
   TINTABLE_ROLES,
   KENNEY_PART_ROLES,
   KENNEY_DEFAULT_ROLE,
@@ -48,6 +69,11 @@ import {
   GRAND_RECIPES,
   BOLT_ON_KINDS_BY_RACE,
   BOLT_ON_SECOND_GEAR_RACES,
+  COLOR_THATCH,
+  COLOR_MARBLE,
+  MODEL_TIER_BUCKET,
+  GRAND_HEIGHT_MULT,
+  HUMBLE_HEIGHT_MULT,
 } from './buildings.js'
 
 const STRUCTURE_TYPES = Object.keys(KIT_RECIPES)
@@ -72,6 +98,26 @@ const GEAR_RADIUS = 0.26
 const TANK_RADIUS = 0.07
 const TANK_LENGTH = 0.16
 const PIPE_RADIUS = 0.05
+
+// Model-tier geometry buckets a recipe gets built in — see buildings.js's
+// MODEL_TIER_BUCKET comment for the seedStr-suffix -> bucket mapping and
+// what each variant means.
+const VARIANT_BUCKETS = ['base', 'grand', 'humble']
+
+// The four merged-geometry buckets buildRecipeGeometry produces per recipe,
+// and which micro-albedo/material CLASS each samples (roofTint is the
+// 'roof' role's tintable content, itself class 'stone' per ROLE_CLASS —
+// bannerTint is 'banner', class 'cloth' — derived straight from ROLE_CLASS
+// rather than re-hardcoded, so the two tables can't drift apart).
+const BUCKET_KEYS = ['wood', 'stone', 'roofTint', 'bannerTint']
+const BUCKET_TILE_KEY = { wood: ROLE_CLASS.wood, stone: ROLE_CLASS.stone, roofTint: ROLE_CLASS.roof, bannerTint: ROLE_CLASS.banner }
+
+// Micro-albedo tiling frequency per material class — chosen so the pattern
+// reads as a handful of grain/speckle/weave cycles across a wall face at the
+// authored unit-height scale (every recipe normalizes to height=1 before
+// this is applied, post model-tier variant derivation), not a photo-tiled
+// repeat. Tuned by eye per S5's "stylized, not photoreal" verdict.
+const MICRO_ALBEDO_TILE_SCALE = { wood: 6, stone: 9, cloth: 13 }
 
 // ---------------------------------------------------------------------------
 // Small geometry-authoring helpers
@@ -112,6 +158,46 @@ function unionBox(geoms) {
   }
   if (box.isEmpty()) box.set(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.001, 0.001, 0.001))
   return box
+}
+
+// Synthetic per-vertex UV (dominant-axis planar projection picked from the
+// vertex normal — a cheap triplanar, no shader involved) for sampling the
+// class micro-albedo textures below. The vendor's own atlas UV never
+// survives stripToPositionNormal (loadPartMeshes strips it at load time,
+// same as it always has — an atlas UV would sample disjoint atlas regions
+// per merged part, reading as uncorrelated confetti once tiled), so this
+// bakes a FRESH uv from the FINAL merged geometry instead. Called only after
+// a recipe variant's unit-height normalization + any grand/humble tweaks are
+// fully baked in, so tile frequency reads consistently across every vendor/
+// tier/variant rather than drifting with raw vendor module scale.
+function addPlanarUV(geometry, tileScale) {
+  const pos = geometry.attributes.position
+  const nrm = geometry.attributes.normal
+  const count = pos.count
+  const uv = new Float32Array(count * 2)
+  for (let i = 0; i < count; i++) {
+    const x = pos.getX(i)
+    const y = pos.getY(i)
+    const z = pos.getZ(i)
+    const nx = Math.abs(nrm.getX(i))
+    const ny = Math.abs(nrm.getY(i))
+    const nz = Math.abs(nrm.getZ(i))
+    let u, v
+    if (ny >= nx && ny >= nz) {
+      u = x
+      v = z // top/bottom-facing (roof caps, floors): XZ plane
+    } else if (nx >= ny && nx >= nz) {
+      u = z
+      v = y // X-facing walls: ZY plane
+    } else {
+      u = x
+      v = y // Z-facing walls: XY plane
+    }
+    uv[i * 2] = u * tileScale
+    uv[i * 2 + 1] = v * tileScale
+  }
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
+  return geometry
 }
 
 function roleForFilename(filename) {
@@ -169,10 +255,23 @@ function loadPartMeshes(vendor, filename) {
   return pending
 }
 
-/** Assembles one recipe (array of {u,x,y,z,ry}) into { structural, tintable } merged geometry. */
+/** Assembles one recipe (array of {u,x,y,z,ry}) into per-material-class
+ * merged geometry buckets: { wood, stone, roofTint, bannerTint }. wood/stone
+ * are baked-neutral (actual ROLE_COLOR hex); roofTint/bannerTint are baked
+ * pure white for BatchedMesh's per-instance setColorAt race-tinting
+ * (TINTABLE_ROLES) — kept as SEPARATE buckets from their class's neutral
+ * content because one BatchedMesh instance's tint multiplies its WHOLE
+ * geometry uniformly, so a tintable 'roof' part can never share one merged
+ * buffer with a neutral 'stone' wall part (that would race-tint the wall
+ * too). 'cloth'-class neutral content and 'wood'-class tintable content
+ * don't exist in today's role tables (see ROLE_CLASS/TINTABLE_ROLES in
+ * buildings.js) so aren't tracked as separate buckets; any future role/class
+ * combo outside today's tables defensively lands in neutral.stone rather
+ * than being silently dropped. Each returned bucket may be null if the
+ * recipe has no parts of that class. */
 async function buildRecipeGeometry(vendor, partList) {
-  const structuralPieces = []
-  const tintablePieces = []
+  const neutral = { wood: [], stone: [] }
+  const tint = { stone: [], cloth: [] }
   for (const p of partList) {
     const meshes = await loadPartMeshes(vendor, p.u)
     const local = new THREE.Matrix4().compose(new THREE.Vector3(p.x, p.y, p.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, p.ry, 0)), new THREE.Vector3(1, 1, 1))
@@ -180,13 +279,19 @@ async function buildRecipeGeometry(vendor, partList) {
       const g = geometry.clone()
       g.applyMatrix4(local)
       const tintable = TINTABLE_ROLES.includes(role)
+      const cls = ROLE_CLASS[role] || 'stone'
       bakeVertexColor(g, tintable ? 0xffffff : ROLE_COLOR[role] ?? ROLE_COLOR.stone)
-      ;(tintable ? tintablePieces : structuralPieces).push(g)
+      const bucket = tintable ? tint[cls] : neutral[cls]
+      if (bucket) bucket.push(g)
+      else neutral.stone.push(g)
     }
   }
+  const merge = (arr) => (arr && arr.length ? mergeGeometries(arr, false) : null)
   return {
-    structural: structuralPieces.length ? mergeGeometries(structuralPieces, false) : null,
-    tintable: tintablePieces.length ? mergeGeometries(tintablePieces, false) : null,
+    wood: merge(neutral.wood),
+    stone: merge(neutral.stone),
+    roofTint: merge(tint.stone),
+    bannerTint: merge(tint.cloth),
   }
 }
 
@@ -202,11 +307,12 @@ function deriveAnchors(box) {
     roofTopY: box.min.y + sizeY * 0.86,
     tankX: box.min.x + sizeX * 0.32,
     tankZ: box.min.z + sizeZ * 0.62,
-    // Recipes normalize to the same HEIGHT (=1) but vary a lot in footprint
-    // (a narrow tower vs. a compact Quaternius tier-3 shell) — bolt-on sizes
-    // are authored as fractions of this, not of the fixed height, or they
-    // read as wildly oversized on any recipe narrower than "average" (this
-    // is exactly the bug the tier-3 gear/tank check screenshot caught).
+    // Recipes normalize to the same HEIGHT (=1, times the model-tier variant
+    // multiplier) but vary a lot in footprint (a narrow tower vs. a compact
+    // Quaternius tier-3 shell) — bolt-on sizes are authored as fractions of
+    // this, not of the fixed height, or they read as wildly oversized on any
+    // recipe narrower than "average" (this is exactly the bug the tier-3
+    // gear/tank check screenshot caught).
     scaleRef: Math.max(Math.min(sizeX, sizeZ), 0.15),
   }
 }
@@ -329,67 +435,259 @@ function buildBoltOnGeometry(kinds, secondGear, anchors, tier, variant) {
 }
 
 // ---------------------------------------------------------------------------
+// Model-tier variant geometry (M-WX task 3 — "the plan's carryover"):
+// fable/opus sessions get a marble-trim cornice + a taller shell; haiku
+// sessions get a re-baked thatch roof (no longer race-tintable) + a shorter
+// shell; sonnet/unknown keep today's recipe verbatim. See buildings.js's
+// MODEL_TIER_BUCKET comment for the full mapping/rationale.
+// ---------------------------------------------------------------------------
+
+/** A thin marble-white cornice band just under the roofline, spanning the
+ * recipe's own footprint — the 'grand' variant's one added part. Built from
+ * the recipe's OWN (already re-derived) bounding box so it fits any type/
+ * vendor/tier without per-recipe tuning. */
+function buildMarbleTrimGeometry(box) {
+  const sizeX = box.max.x - box.min.x
+  const sizeY = box.max.y - box.min.y
+  const sizeZ = box.max.z - box.min.z
+  const cx = (box.max.x + box.min.x) / 2
+  const cz = (box.max.z + box.min.z) / 2
+  const bandH = Math.max(sizeY * 0.045, 0.01)
+  const bandY = box.min.y + sizeY * 0.84
+  const geo = new THREE.BoxGeometry(sizeX * 1.03, bandH, sizeZ * 1.03)
+  geo.translate(cx, bandY, cz)
+  return coloredGeo(geo, COLOR_MARBLE)
+}
+
+function cloneBucket(g) {
+  return g ? g.clone() : null
+}
+
+/** Derives the 'grand' or 'humble' model-tier variant from a recipe's
+ * already unit-height-normalized BASE buckets (mutates nothing on
+ * baseBuckets — 'base' itself still needs those buckets untouched). MUST run
+ * before any UV pass touches baseBuckets (addPlanarUV mutates its geometry
+ * in place; cloning afterward would carry a stale 'uv' attribute into
+ * geometry that still needs a plain position/normal/color merge with the
+ * trim/thatch pieces below — see the Phase 1 build loop's ordering). */
+function deriveVariant(baseBuckets, bucket) {
+  if (bucket === 'base') return baseBuckets
+  const out = {}
+  for (const key of BUCKET_KEYS) out[key] = cloneBucket(baseBuckets[key])
+
+  const mult = bucket === 'grand' ? GRAND_HEIGHT_MULT : HUMBLE_HEIGHT_MULT
+  for (const key of BUCKET_KEYS) if (out[key]) out[key].scale(1, mult, 1)
+
+  if (bucket === 'grand') {
+    const box = unionBox(BUCKET_KEYS.map((k) => out[k]))
+    const trim = buildMarbleTrimGeometry(box)
+    out.stone = out.stone ? mergeGeometries([out.stone, trim], false) : trim
+  } else if (bucket === 'humble' && out.roofTint) {
+    // Thatch-heavy: the roof stops being race-tintable and becomes a fixed
+    // neutral thatch color, folded into the stone-neutral bucket instead of
+    // staying a separate tint bucket.
+    bakeVertexColor(out.roofTint, COLOR_THATCH)
+    out.stone = out.stone ? mergeGeometries([out.stone, out.roofTint], false) : out.roofTint
+    out.roofTint = null
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// Micro-albedo textures (M-WX material-distinction pass) — tiny, low-
+// contrast, stylized detail per class, NOT photo-PBR (S5 verdict bans that
+// route). Each is a 256px canvas, base white, with a class-appropriate
+// low-alpha pattern baked in; sampled through material.map, which MULTIPLIES
+// against the baked vertex color — so the effect can only ever DARKEN
+// slightly (a plain multiply can't exceed white), staying within roughly 5%
+// of "no effect" by construction (alpha values below are chosen so even a
+// couple of overlapping strokes stay close to that budget). Tiled via the
+// synthetic UV from addPlanarUV above. Deterministic (seeded rngFromString,
+// not Math.random) purely for reproducibility across reloads — these are
+// fixed shared assets, not per-world content, so this isn't the same
+// determinism contract the program plan requires of world-state code.
+// ---------------------------------------------------------------------------
+
+function makeMicroAlbedoTexture(seed, draw) {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 256
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, 256, 256)
+  draw(ctx, rngFromString(seed))
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.RepeatWrapping
+  tex.needsUpdate = true
+  return tex
+}
+
+/** Wood grain: low-alpha horizontal streaks with a slight sine wobble —
+ * reads as grain once tiled without needing per-part UV alignment. */
+function drawWoodGrainTexture(ctx, rng) {
+  const rows = 22
+  for (let i = 0; i < rows; i++) {
+    const y = (i + 0.5) * (256 / rows) + (rng() - 0.5) * 6
+    ctx.strokeStyle = `rgba(90,60,30,${(0.02 + rng() * 0.025).toFixed(3)})`
+    ctx.lineWidth = 1.5 + rng() * 2
+    ctx.beginPath()
+    ctx.moveTo(0, y)
+    for (let x = 0; x <= 256; x += 16) ctx.lineTo(x, y + Math.sin(x * 0.05 + i) * 3 + (rng() - 0.5) * 2)
+    ctx.stroke()
+  }
+}
+
+/** Stone speckle: scattered low-alpha mottled blotches — masonry grain. */
+function drawStoneSpeckleTexture(ctx, rng) {
+  const count = 260
+  for (let i = 0; i < count; i++) {
+    const x = rng() * 256
+    const y = rng() * 256
+    const r = 1 + rng() * 3.5
+    ctx.fillStyle = `rgba(60,55,48,${(0.018 + rng() * 0.022).toFixed(3)})`
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
+  }
+}
+
+/** Cloth weave: a fine, slightly-jittered crosshatch — woven-fabric hint. */
+function drawClothWeaveTexture(ctx, rng) {
+  ctx.strokeStyle = 'rgba(40,40,45,0.03)'
+  ctx.lineWidth = 1
+  for (let x = 0; x <= 256; x += 6) {
+    const j = (rng() - 0.5) * 1.5
+    ctx.beginPath()
+    ctx.moveTo(x + j, 0)
+    ctx.lineTo(x + j, 256)
+    ctx.stroke()
+  }
+  for (let y = 0; y <= 256; y += 6) {
+    const j = (rng() - 0.5) * 1.5
+    ctx.beginPath()
+    ctx.moveTo(0, y + j)
+    ctx.lineTo(256, y + j)
+    ctx.stroke()
+  }
+}
+
+/** Parses the model-tier hint off the END of seedStr (world.js builds it as
+ * `id + ':' + (model || '')`) and buckets it per buildings.js's
+ * MODEL_TIER_BUCKET. Robust to `id` itself containing colons — the LAST
+ * colon is always the one world.js inserted before the model hint. */
+function modelTierBucket(seedStr) {
+  const s = String(seedStr)
+  const idx = s.lastIndexOf(':')
+  const modelHint = idx >= 0 ? s.slice(idx + 1) : ''
+  return MODEL_TIER_BUCKET[modelHint] || 'base'
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
-export async function loadBuildingAssets(renderer) {
+export async function loadBuildingAssets(renderer, sky = null) {
   try {
     if (!renderer.extensions.has('WEBGL_multi_draw')) {
       console.warn('[planet] assets: WEBGL_multi_draw not supported — BatchedMesh falls back to one draw call per unique geometry (higher draw-call count, same visuals)')
     }
 
-    // Phase 1: load + merge every (type,tier) recipe's parts. Kenney for
-    // tier 1-2, Quaternius for tier 3 grand landmarks (art verdict).
+    // Phase 1: load + merge every (type,tier) recipe's parts into per-class
+    // buckets (buildRecipeGeometry), normalize to the shared unit-height
+    // convention, then derive the 3 model-tier geometry VARIANTS per recipe
+    // (base/grand/humble). Kenney for tier 1-2, Quaternius for tier 3 grand
+    // landmarks (art verdict) — unchanged from before this pass.
     const built = []
     for (const type of STRUCTURE_TYPES) {
       for (const tier of [1, 2, 3]) {
         const vendor = tier === 3 ? 'quaternius' : 'kenney'
         const parts = tier === 3 ? GRAND_RECIPES[type] : KIT_RECIPES[type]['tier' + tier]
-        const { structural, tintable } = await buildRecipeGeometry(vendor, parts)
-        built.push({ key: type + '|' + tier, structural, tintable })
+        const baseBuckets = await buildRecipeGeometry(vendor, parts)
+
+        // Normalize to the same authored unit height (=1), matching
+        // buildTower/buildHall/etc.'s existing convention.
+        const rawBox = unionBox(BUCKET_KEYS.map((k) => baseBuckets[k]))
+        const rawSize = rawBox.getSize(new THREE.Vector3())
+        const scale = 1 / Math.max(rawSize.y, 1e-6)
+        for (const key of BUCKET_KEYS) if (baseBuckets[key]) baseBuckets[key].scale(scale, scale, scale)
+
+        // Derive ALL THREE variants before any of them gets a UV pass (see
+        // deriveVariant's own ordering comment).
+        const variantBuckets = { base: baseBuckets, grand: deriveVariant(baseBuckets, 'grand'), humble: deriveVariant(baseBuckets, 'humble') }
+
+        for (const bucket of VARIANT_BUCKETS) {
+          const buckets = variantBuckets[bucket]
+          const box = unionBox(BUCKET_KEYS.map((k) => buckets[k]))
+          const anchors = deriveAnchors(box)
+          const boundingRadius = box.getBoundingSphere(new THREE.Sphere()).radius
+          for (const key of BUCKET_KEYS) if (buckets[key]) addPlanarUV(buckets[key], MICRO_ALBEDO_TILE_SCALE[BUCKET_TILE_KEY[key]])
+          built.push({ key: type + '|' + tier + '|' + bucket, wood: buckets.wood, stone: buckets.stone, roofTint: buckets.roofTint, bannerTint: buckets.bannerTint, anchors, boundingRadius })
+        }
       }
     }
 
-    // Normalize every recipe to the same authored unit height (=1), matching
-    // buildTower/buildHall/etc.'s existing convention, then derive bolt-on
-    // mount anchors + a bounding-sphere radius from the normalized box.
-    for (const b of built) {
-      const rawBox = unionBox([b.structural, b.tintable])
-      const rawSize = rawBox.getSize(new THREE.Vector3())
-      const scale = 1 / Math.max(rawSize.y, 1e-6)
-      if (b.structural) b.structural.scale(scale, scale, scale)
-      if (b.tintable) b.tintable.scale(scale, scale, scale)
-      const box = unionBox([b.structural, b.tintable])
-      b.anchors = deriveAnchors(box)
-      b.boundingRadius = box.getBoundingSphere(new THREE.Sphere()).radius
-    }
-
-    // Phase 2: matte BatchedMesh (walls/roofs/chimneys + the race-tintable
-    // roof/banner geometry) — size = sum of the UNIQUE geometries above,
-    // never instanceCount * per-instance size (S4 gotcha).
-    let sumV = 0
-    let sumI = 0
-    for (const b of built) {
-      for (const g of [b.structural, b.tintable]) {
-        if (!g) continue
-        sumV += g.attributes.position.count
-        sumI += g.index ? g.index.count : 0
+    // Phase 2: one BatchedMesh per material class (wood / stone+thatch /
+    // cloth+banner) — size = sum of the UNIQUE geometries above, never
+    // instanceCount * per-instance size (S4 gotcha). All (type,tier,bucket)
+    // combos are known upfront (built eagerly above), so — like the old
+    // single matte batch before this pass — these geometry buffers never
+    // need runtime growth, only instance COUNT does (ensure*Instances below).
+    function classSum(keys) {
+      let v = 0
+      let idx = 0
+      for (const b of built) {
+        for (const key of keys) {
+          const g = b[key]
+          if (!g) continue
+          v += g.attributes.position.count
+          idx += g.index ? g.index.count : 0
+        }
       }
+      return { v, idx }
     }
-    const matteMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 0.88, metalness: 0.04 })
-    let matteInstanceCap = 3000
-    const matteBatch = new THREE.BatchedMesh(matteInstanceCap, Math.ceil(sumV * 1.1) + 64, Math.ceil(sumI * 1.1) + 64, matteMaterial)
-    matteBatch.perObjectFrustumCulled = true
+    const woodSum = classSum(['wood'])
+    const stoneSum = classSum(['stone', 'roofTint'])
+    const clothSum = classSum(['bannerTint'])
 
-    const recipeCache = new Map()
-    for (const b of built) {
-      const structGeoId = b.structural ? matteBatch.addGeometry(b.structural) : null
-      const roofGeoId = b.tintable ? matteBatch.addGeometry(b.tintable) : null
-      recipeCache.set(b.key, { structGeoId, roofGeoId, anchors: b.anchors, boundingRadius: b.boundingRadius })
-    }
+    const woodAlbedoTex = makeMicroAlbedoTexture('planet:micro-albedo:wood', drawWoodGrainTexture)
+    const stoneAlbedoTex = makeMicroAlbedoTexture('planet:micro-albedo:stone', drawStoneSpeckleTexture)
+    const clothAlbedoTex = makeMicroAlbedoTexture('planet:micro-albedo:cloth', drawClothWeaveTexture)
+
+    // Per-class roughness/metalness/envMapIntensity (M-WX verdict numbers).
+    // metalness isn't spec'd per-class beyond brass — wood keeps a hair of
+    // dielectric sheen (matches "warm sheen"), stone/cloth sit at/near zero
+    // (matte masonry, fully-diffuse fabric) — all well under brass's 0.75.
+    const woodMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 0.75, metalness: 0.04, map: woodAlbedoTex })
+    const stoneMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0.02, map: stoneAlbedoTex })
+    const clothMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 1.0, metalness: 0.0, map: clothAlbedoTex })
+    const metalMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 0.3, metalness: 0.75 })
+
+    // Scoped environment lighting (env.js — the M-LD env-lighting follow-on):
+    // a static PMREM capture of OUR sky palette, assigned to each class
+    // material's .envMap/.envMapIntensity individually. NEVER scene.environment
+    // — see env.js's own header for the S5 pastel-wash lesson this avoids.
+    const env = createEnvironment(renderer, sky)
+    env.apply(woodMaterial, 0.25)
+    env.apply(stoneMaterial, 0.1)
+    env.apply(clothMaterial, 0)
+    env.apply(metalMaterial, 0.9)
+
+    let woodInstanceCap = 1500
+    let stoneInstanceCap = 3000
+    let clothInstanceCap = 400
+    let metalInstanceCap = 1500
+
+    const woodBatch = new THREE.BatchedMesh(woodInstanceCap, Math.ceil(woodSum.v * 1.1) + 64, Math.ceil(woodSum.idx * 1.1) + 64, woodMaterial)
+    const stoneBatch = new THREE.BatchedMesh(stoneInstanceCap, Math.ceil(stoneSum.v * 1.1) + 64, Math.ceil(stoneSum.idx * 1.1) + 64, stoneMaterial)
+    const clothBatch = new THREE.BatchedMesh(clothInstanceCap, Math.ceil(clothSum.v * 1.1) + 64, Math.ceil(clothSum.idx * 1.1) + 64, clothMaterial)
+    woodBatch.perObjectFrustumCulled = true
+    stoneBatch.perObjectFrustumCulled = true
+    clothBatch.perObjectFrustumCulled = true
 
     // Metal (brass/copper/bronze bolt-on) BatchedMesh — geometries are built
-    // lazily per (type,tier,race,variant) the first time that combo is
+    // lazily per (type,tier,race,variant,bucket) the first time that combo is
     // requested (cheap: procedural, synchronous, no loading involved), sized
     // generously up front with an auto-grow safety net (setGeometrySize /
     // setInstanceCount) rather than trying to predict the exact final count.
@@ -399,40 +697,38 @@ export async function loadBuildingAssets(renderer) {
     // this incrementally as distinct combos are first encountered.
     let metalMaxVertex = 200000
     let metalMaxIndex = 420000
-    let metalInstanceCap = 1500
-    const metalMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 0.4, metalness: 0.62, envMapIntensity: 1.1 })
     const metalBatch = new THREE.BatchedMesh(metalInstanceCap, metalMaxVertex, metalMaxIndex, metalMaterial)
     metalBatch.perObjectFrustumCulled = true
 
-    // Scoped environment lighting for metalness > 0.3 materials ONLY (per
-    // the M2 art verdict + spikes/s5's finding): a neutral generated room
-    // env assigned just to metalMaterial.envMap, never scene.environment —
-    // setting it globally would relight every low-metalness matte material
-    // in the scene (confirmed by the spike to wash the whole scene pastel
-    // under ACES tonemapping).
-    const pmrem = new THREE.PMREMGenerator(renderer)
-    metalMaterial.envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
-    pmrem.dispose()
+    const recipeCache = new Map()
+    for (const b of built) {
+      const woodGeoId = b.wood ? woodBatch.addGeometry(b.wood) : null
+      const stoneGeoId = b.stone ? stoneBatch.addGeometry(b.stone) : null
+      const roofGeoId = b.roofTint ? stoneBatch.addGeometry(b.roofTint) : null
+      const bannerGeoId = b.bannerTint ? clothBatch.addGeometry(b.bannerTint) : null
+      recipeCache.set(b.key, { woodGeoId, stoneGeoId, roofGeoId, bannerGeoId, anchors: b.anchors, boundingRadius: b.boundingRadius })
+    }
 
     const group = new THREE.Group()
-    group.add(matteBatch, metalBatch)
+    group.add(woodBatch, stoneBatch, clothBatch, metalBatch)
 
     const boltOnCache = new Map()
 
-    function ensureMatteInstances() {
-      if (matteBatch.instanceCount >= matteInstanceCap) {
-        matteInstanceCap *= 2
-        matteBatch.setInstanceCount(matteInstanceCap)
-        console.warn('[planet] assets: grew matte BatchedMesh instance capacity to', matteInstanceCap)
+    function makeCapGrower(batch, label, initialCap) {
+      let cap = initialCap
+      return function ensure() {
+        if (batch.instanceCount >= cap) {
+          cap *= 2
+          batch.setInstanceCount(cap)
+          console.warn('[planet] assets: grew ' + label + ' BatchedMesh instance capacity to', cap)
+        }
       }
     }
-    function ensureMetalInstances() {
-      if (metalBatch.instanceCount >= metalInstanceCap) {
-        metalInstanceCap *= 2
-        metalBatch.setInstanceCount(metalInstanceCap)
-        console.warn('[planet] assets: grew metal BatchedMesh instance capacity to', metalInstanceCap)
-      }
-    }
+    const ensureWoodInstances = makeCapGrower(woodBatch, 'wood', woodInstanceCap)
+    const ensureStoneInstances = makeCapGrower(stoneBatch, 'stone', stoneInstanceCap)
+    const ensureClothInstances = makeCapGrower(clothBatch, 'cloth', clothInstanceCap)
+    const ensureMetalInstances = makeCapGrower(metalBatch, 'metal', metalInstanceCap)
+
     function ensureMetalGeometryCapacity(vertsNeeded, idxNeeded) {
       if (metalBatch.unusedVertexCount < vertsNeeded || metalBatch.unusedIndexCount < idxNeeded) {
         metalMaxVertex = metalMaxVertex * 2 + vertsNeeded
@@ -442,9 +738,14 @@ export async function loadBuildingAssets(renderer) {
       }
     }
 
-    function getOrBuildBoltOn(type, tier, race, seedStr, anchors) {
+    // Bolt-on cache key includes `bucket`: grand/humble anchors differ from
+    // base (the model-tier height stretch moves wallYmid/roofTopY/etc.), so
+    // a bolt-on built for one bucket would be mis-sized/mis-mounted if
+    // reused verbatim on another — this is genuinely a different anchor
+    // space, not just a cosmetic cache-key nicety.
+    function getOrBuildBoltOn(type, tier, race, seedStr, bucket, anchors) {
       const variant = Math.floor(hash01(String(seedStr) + '~boltvariant') * 2)
-      const key = type + '|' + tier + '|' + race + '|' + variant
+      const key = type + '|' + tier + '|' + race + '|' + variant + '|' + bucket
       let entry = boltOnCache.get(key)
       if (entry !== undefined) return entry
       const { kinds, secondGear } = pickBoltOnKinds(race, tier)
@@ -461,40 +762,51 @@ export async function loadBuildingAssets(renderer) {
     }
 
     function forEachSub(handle, fn) {
-      if (handle.structId != null) fn(matteBatch, handle.structId)
-      if (handle.roofId != null) fn(matteBatch, handle.roofId)
+      if (handle.woodId != null) fn(woodBatch, handle.woodId)
+      if (handle.stoneId != null) fn(stoneBatch, handle.stoneId)
+      if (handle.roofId != null) fn(stoneBatch, handle.roofId)
+      if (handle.bannerId != null) fn(clothBatch, handle.bannerId)
       if (handle.boltId != null) fn(metalBatch, handle.boltId)
     }
 
     function createStructureVisual(type, tier, race, seedStr) {
-      const key = type + '|' + tier
+      const bucket = modelTierBucket(seedStr)
+      const key = type + '|' + tier + '|' + bucket
       const recipe = recipeCache.get(key)
       const pal = RACE_PALETTES[race] || RACE_PALETTES.human
       if (!recipe) {
         console.warn('[planet] assets: no recipe for', key, '- returning an empty (invisible) visual')
-        return { handle: { structId: null, roofId: null, boltId: null }, boundingRadius: 0.05 }
+        return { handle: { woodId: null, stoneId: null, roofId: null, bannerId: null, boltId: null }, boundingRadius: 0.05 }
       }
 
-      ensureMatteInstances()
-      const structId = recipe.structGeoId != null ? matteBatch.addInstance(recipe.structGeoId) : null
+      ensureWoodInstances()
+      const woodId = recipe.woodGeoId != null ? woodBatch.addInstance(recipe.woodGeoId) : null
       // Explicit white, not relying on BatchedMesh's own default-white fill
       // — makes the "colors texture lazy-init" gotcha a non-issue regardless
       // of call order (see S4 spike notes): every instance we ever add gets
       // an explicit setColorAt call, full stop.
-      if (structId != null) matteBatch.setColorAt(structId, WHITE_COLOR)
+      if (woodId != null) woodBatch.setColorAt(woodId, WHITE_COLOR)
 
-      ensureMatteInstances()
-      const roofId = recipe.roofGeoId != null ? matteBatch.addInstance(recipe.roofGeoId) : null
-      if (roofId != null) matteBatch.setColorAt(roofId, new THREE.Color(pal.roof))
+      ensureStoneInstances()
+      const stoneId = recipe.stoneGeoId != null ? stoneBatch.addInstance(recipe.stoneGeoId) : null
+      if (stoneId != null) stoneBatch.setColorAt(stoneId, WHITE_COLOR)
+
+      ensureStoneInstances()
+      const roofId = recipe.roofGeoId != null ? stoneBatch.addInstance(recipe.roofGeoId) : null
+      if (roofId != null) stoneBatch.setColorAt(roofId, new THREE.Color(pal.roof))
+
+      ensureClothInstances()
+      const bannerId = recipe.bannerGeoId != null ? clothBatch.addInstance(recipe.bannerGeoId) : null
+      if (bannerId != null) clothBatch.setColorAt(bannerId, new THREE.Color(pal.banner))
 
       let boltId = null
-      const boltOn = getOrBuildBoltOn(type, tier, race, seedStr, recipe.anchors)
+      const boltOn = getOrBuildBoltOn(type, tier, race, seedStr, bucket, recipe.anchors)
       if (boltOn) {
         ensureMetalInstances()
         boltId = metalBatch.addInstance(boltOn.geoId)
       }
 
-      return { handle: { structId, roofId, boltId }, boundingRadius: recipe.boundingRadius }
+      return { handle: { woodId, stoneId, roofId, bannerId, boltId }, boundingRadius: recipe.boundingRadius }
     }
 
     function setVisualMatrix(handle, matrix4) {
@@ -513,7 +825,7 @@ export async function loadBuildingAssets(renderer) {
       // Subtle "breathing" metal — env-map intensity pulse, cheap (one
       // shared-material uniform, not per-instance). Everything else here is
       // static merged geometry; there is no per-instance animation to drive.
-      metalMaterial.envMapIntensity = 1.1 + Math.sin(elapsed * 0.5) * 0.04
+      metalMaterial.envMapIntensity = 0.9 + Math.sin(elapsed * 0.5) * 0.04
     }
 
     return { ready: true, createStructureVisual, setVisualMatrix, setVisualVisible, removeVisual, group, update }

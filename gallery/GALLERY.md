@@ -122,5 +122,23 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
   black, opacity 0.28, depthWrite off, polygonOffset, planted +0.0002 along
   the surface normal to dodge z-fighting) grounding each tree/rock instead
   of them looking like they're floating on the terrain.
+- `m-wx-material-01-before-clay.jpg` / `m-wx-material-02-after-distinct.jpg` —
+  M-WX material-distinction pass (`assets.js`/`buildings.js`/new `env.js`),
+  the "clay/play-dough" fix: identical camera position/target/lookAt
+  (float-matched, hardcoded and reused across both captures) on the same
+  Omertdkdeep dwarf forge cluster, sunlit (seekTime-advanced to a shared
+  sun-alignment dot ~0.25 in both), same live speech-bubble labels confirming
+  the same deterministic world moment. Before = the old 2-BatchedMesh
+  (matte+brass) treatment, everything sharing one flat roughness/color skin.
+  After = 4 BatchedMeshes (wood/stone+thatch/cloth+banner/brass), each its
+  own roughness+metalness+envMapIntensity+micro-albedo — the roof reads
+  distinctly reddish-maroon, walls stone-gray with speckle, wood trim warm
+  tan, brass bolt-ons catching a directional highlight from env.js's
+  sky-tinted PMREM capture instead of the flat ambient-only look. Captured
+  via a scoped `git stash push -- src/assets.js src/buildings.js` / `stash
+  pop` round-trip (not a full worktree — env.js and buildings.js's
+  non-material exports aren't part of the comparison) so the concurrent
+  builders' in-flight world.js/flora.js/planet.js changes on the shared
+  checkout stayed untouched throughout.
 
 

@@ -35,9 +35,13 @@ const COLOR_STONE = 0x8a8274
 const COLOR_DARK = 0x2a2420
 const COLOR_FIELD_A = 0x8ea34f
 const COLOR_FIELD_B = 0xc7a24a
-const COLOR_THATCH = 0xc9a94a
+export const COLOR_THATCH = 0xc9a94a
 const COLOR_EMBER = 0xff7733
 const COLOR_EMBER_EMISSIVE = 0xff5a22
+// Cool pale marble — deliberately distinct from COLOR_WHITEWASH's warm cream
+// (0xe8e0cc) so the model-tier "grand" trim (assets.js) reads as an added
+// material, not a slightly-different wall paint. M-WX model-tier styling.
+export const COLOR_MARBLE = 0xecebe6
 
 // Structure keyword routing — order matters, first hit wins.
 const TYPE_RULES = [
@@ -372,6 +376,33 @@ export const ROLE_COLOR = {
 // mirrors raceMat() only touching 'roof'/'banner'/'accent' above.
 export const TINTABLE_ROLES = ['roof', 'banner']
 
+// Material-CLASS mapping (M-WX "material-distinction" pass — the "clay/
+// play-dough" fix, ART.md's owner complaint: every building shared one
+// matte skin). assets.js splits its BatchedMesh-per-material-class so each
+// class gets its own roughness/metalness/envMapIntensity/micro-albedo
+// response instead of one flat treatment for every part. Three matte
+// classes here (a fourth, brass/copper/bronze, is handled entirely inside
+// assets.js — it's always procedural bolt-on geometry, never role-routed):
+//   wood  — timber walls/trim + organic greenery (hedges); warm, low sheen.
+//   stone — masonry walls/trim AND roofing (tile/thatch reads as a rigid,
+//           matte, non-organic surface materially closer to stone than to
+//           wood or cloth — hence "stone+thatch" as one class) + dark iron/
+//           chimney/ornament trim, which is too small-area to earn its own
+//           class and is optically closer to matte masonry than to brass.
+//   cloth — banners/fabric; fully diffuse, no sheen at all.
+// 'roof' and 'banner' stay TINTABLE within their class (see TINTABLE_ROLES
+// above) — the class split does not change which roles get race-tinted.
+export const ROLE_CLASS = {
+  wood: 'wood',
+  field: 'wood',
+  stone: 'stone',
+  whitewash: 'stone',
+  dark: 'stone',
+  roof: 'stone',
+  banner: 'cloth',
+}
+export const MATERIAL_CLASSES = ['wood', 'stone', 'cloth']
+
 // Kenney parts all carry one generic "colormap" material (no semantic name —
 // see public/models/SOURCES.md), so color role is decided by filename
 // substring, first match wins, default 'stone' (most Kenney parts used here
@@ -565,3 +596,27 @@ export const BOLT_ON_KINDS_BY_RACE = {
   elf: ['gear'],
 }
 export const BOLT_ON_SECOND_GEAR_RACES = ['dwarf', 'orc']
+
+// --- Model-tier styling (M-WX carryover) -----------------------------------
+// world.js folds the session's model into assets.js's createStructureVisual
+// seedStr as a trailing ":<model>" suffix (id + ':' + (model || '')) — model
+// is one of server/scan.js's MODEL_TIERS ('fable'|'opus'|'sonnet'|'haiku') or
+// '' when unknown. assets.js parses that suffix and buckets it into one of
+// three geometry VARIANTS via the table below; 'sonnet' and unrecognized/
+// empty hints both fall through to the implicit 'base' bucket (no entry
+// needed — assets.js defaults any unmapped hint to 'base').
+//   grand  (fable, opus — the top-tier models): a marble-white trim band
+//          (COLOR_MARBLE) added just under the roofline + the whole
+//          structure stretched GRAND_HEIGHT_MULT taller.
+//   humble (haiku — the lightweight model): the roof re-baked from the
+//          race-tinted 'roof' role to a fixed neutral thatch color
+//          (COLOR_THATCH, i.e. no longer race-tintable for this variant)
+//          + the whole structure stretched HUMBLE_HEIGHT_MULT shorter.
+//   base   (sonnet / unknown / no model recorded yet): today's recipe,
+//          unchanged.
+// Deliberately small/legible, not a rebuild — see ART.md §1 "reads clearly
+// at every zoom" and §2.3's saturation budget, neither of which this touches
+// (only silhouette height + one neutral-vs-tinted material swap).
+export const MODEL_TIER_BUCKET = { fable: 'grand', opus: 'grand', haiku: 'humble' }
+export const GRAND_HEIGHT_MULT = 1.12
+export const HUMBLE_HEIGHT_MULT = 0.94
