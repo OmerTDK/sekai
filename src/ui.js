@@ -792,6 +792,7 @@ export function createUI(world, hooks) {
 
     if (key === 'Escape') {
       if (paletteOpen) closePalette()
+      else if (godPanelOpen) toggleGodPanel(false)
       else if (featurePanelOpen) toggleFeaturePanel(false)
       else if (inspectorCard.classList.contains('open')) closeInspector()
       else if (timeLapseOn) closeTimeLapse()
@@ -843,6 +844,7 @@ export function createUI(world, hooks) {
   }
 
   const featuresBtn = makeVpBtn('🎛', 'Toggle features', () => toggleFeaturePanel())
+  const godBtn = makeVpBtn('⚡', 'God controls', () => toggleGodPanel())
   makeVpBtn('+', 'Zoom in', () => zoomBy(-260))
   makeVpBtn('−', 'Zoom out', () => zoomBy(260))
   root.appendChild(vpControls)
@@ -955,6 +957,271 @@ export function createUI(world, hooks) {
     featurePanel.classList.toggle('hidden', !featurePanelOpen)
     featuresBtn.classList.toggle('active', featurePanelOpen)
     if (featurePanelOpen) syncFeatureRows()
+  }
+
+  // --- GOD controls panel -----------------------------------------------------
+  // Interactive spectacle triggers (owner request). Every handle is read
+  // LAZILY off window.__planet and typeof-guarded, exactly like the feature
+  // panel above — several are added by sibling builders this wave (meteors,
+  // earthquake, storms.spawnStorm, sky.triggerAurora), so a missing handle
+  // just makes the button an inert no-op rather than throwing. These are
+  // user-driven, so target directions may vary per click; the search itself
+  // is deterministic (a Fibonacci-sphere sweep advanced by a plain counter —
+  // no Math.random / Date.now), and none of them ever touch a session
+  // structure (THE COVENANT — additive spectacle only).
+
+  // Scoped styles injected from JS (ui.css is not ours to edit). Mirrors the
+  // #feature-panel look; sits just left of it so the two never overlap.
+  const godStyle = document.createElement('style')
+  godStyle.id = 'god-panel-styles'
+  godStyle.textContent = `
+#god-panel {
+  position: fixed;
+  right: 250px; /* clear of #feature-panel (right:58px, width:182px) */
+  bottom: 58px;
+  width: 190px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(8, 12, 20, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 21;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+#god-panel.hidden { display: none; }
+body.photo-mode #god-panel { visibility: hidden; }
+.god-panel-title {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #8b97a6;
+  margin-bottom: 2px;
+  padding-left: 4px;
+}
+.god-sun {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 8px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.god-sun-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  color: #dfe6ee;
+}
+.god-sun-value { color: #ffd58a; font-size: 12px; }
+.god-sun-controls { display: flex; align-items: center; gap: 8px; }
+.god-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  cursor: pointer;
+}
+.god-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffd58a;
+  border: 2px solid rgba(255, 190, 120, 0.6);
+  cursor: pointer;
+}
+.god-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffd58a;
+  border: 2px solid rgba(255, 190, 120, 0.6);
+  cursor: pointer;
+}
+.god-sun-reset {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: #dfe6ee;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.god-sun-reset:hover { background: rgba(255, 255, 255, 0.12); }
+.god-btn {
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: #dfe6ee;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  transition: background 0.12s ease;
+}
+.god-btn:hover { background: rgba(255, 255, 255, 0.1); }
+.god-btn:active { background: rgba(255, 255, 255, 0.16); }
+`
+  document.head.appendChild(godStyle)
+
+  const godPanel = document.createElement('div')
+  godPanel.id = 'god-panel'
+  godPanel.classList.add('hidden')
+  root.appendChild(godPanel)
+
+  const godTitle = document.createElement('div')
+  godTitle.className = 'god-panel-title'
+  godTitle.textContent = 'GOD'
+  godPanel.appendChild(godTitle)
+
+  // --- fast-sun slider (log-ish 1×..600×) ---
+  const SUN_MAX = 600
+  const sliderToSpeed = (t) => Math.exp(t * Math.log(SUN_MAX)) // t 0..1 -> 1..600
+  const speedToSlider = (sp) => Math.log(Math.max(1, sp)) / Math.log(SUN_MAX)
+  const fmtSpeed = (sp) => (sp >= 10 ? String(Math.round(sp)) : String(Math.round(sp * 10) / 10)) + '×'
+
+  function applySunSpeed(sp) {
+    const s = window.__planet && window.__planet.sky
+    if (s && typeof s.setSunSpeed === 'function') s.setSunSpeed(sp)
+  }
+
+  const godSun = document.createElement('div')
+  godSun.className = 'god-sun'
+  const godSunHead = document.createElement('div')
+  godSunHead.className = 'god-sun-head'
+  const godSunLabel = document.createElement('span')
+  godSunLabel.textContent = 'time speed'
+  const godSunValue = document.createElement('span')
+  godSunValue.className = 'god-sun-value'
+  godSunHead.appendChild(godSunLabel)
+  godSunHead.appendChild(godSunValue)
+  godSun.appendChild(godSunHead)
+
+  const godSunControls = document.createElement('div')
+  godSunControls.className = 'god-sun-controls'
+  const godSlider = document.createElement('input')
+  godSlider.type = 'range'
+  godSlider.className = 'god-slider'
+  godSlider.min = '0'
+  godSlider.max = '1'
+  godSlider.step = '0.001'
+  godSlider.value = '0'
+  godSlider.setAttribute('aria-label', 'Sun time speed')
+  const godSunReset = document.createElement('button')
+  godSunReset.type = 'button'
+  godSunReset.className = 'god-sun-reset'
+  godSunReset.textContent = '⟲'
+  godSunReset.title = 'Reset time speed to 1×'
+  godSunReset.setAttribute('aria-label', 'Reset time speed to 1x')
+  godSunControls.appendChild(godSlider)
+  godSunControls.appendChild(godSunReset)
+  godSun.appendChild(godSunControls)
+  godPanel.appendChild(godSun)
+
+  function syncSunFromSlider(apply) {
+    const sp = sliderToSpeed(Number(godSlider.value))
+    godSunValue.textContent = fmtSpeed(sp)
+    if (apply) applySunSpeed(sp)
+  }
+  godSlider.addEventListener('input', () => syncSunFromSlider(true))
+  godSunReset.addEventListener('click', () => {
+    godSlider.value = String(speedToSlider(1))
+    syncSunFromSlider(true)
+  })
+  syncSunFromSlider(false) // seed the label; don't touch the sun until the user does
+
+  // --- targeted triggers (meteor / earthquake / storm) ---
+  // Pick a target world-direction: prefer a sunlit LAND point, else any land
+  // point, else the point directly under the camera. THREE.Vector3 scratches
+  // are obtained by cloning camera.position, so this module imports no THREE.
+  let godTargetCounter = 0
+  function computeTargetDir() {
+    const p = window.__planet
+    const camera = p && p.camera
+    if (!camera || !camera.position) return null
+    const planet = p && p.planet
+    const sky = p && p.sky
+
+    let sunDir = null
+    if (sky && typeof sky.getSunDir === 'function') {
+      sunDir = camera.position.clone()
+      sky.getSunDir(sunDir)
+    }
+
+    if (planet && typeof planet.isLand === 'function') {
+      const cand = camera.position.clone()
+      const golden = Math.PI * (3 - Math.sqrt(5))
+      let landFallback = null
+      for (let i = 0; i < 96; i++) {
+        const idx = godTargetCounter * 96 + i
+        const t = (idx * 0.6180339887498949) % 1 // fractional golden ratio -> even latitude spread
+        const y = 1 - 2 * t
+        const r = Math.sqrt(Math.max(0, 1 - y * y))
+        const theta = golden * idx
+        cand.set(r * Math.cos(theta), y, r * Math.sin(theta)) // already unit-length
+        if (!planet.isLand(cand)) continue
+        if (!landFallback) landFallback = cand.clone()
+        if (!sunDir || cand.dot(sunDir) > 0.15) {
+          godTargetCounter++
+          return cand.normalize()
+        }
+      }
+      if (landFallback) {
+        godTargetCounter++
+        return landFallback.normalize()
+      }
+    }
+    return camera.position.clone().normalize()
+  }
+
+  function targetedTrigger(mod, method) {
+    const dir = computeTargetDir()
+    if (!dir) return
+    const p = window.__planet
+    const m = p && p[mod]
+    if (m && typeof m[method] === 'function') m[method](dir)
+  }
+
+  function makeGodBtn(label, onClick) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'god-btn'
+    b.textContent = label
+    b.setAttribute('aria-label', label)
+    b.addEventListener('click', onClick)
+    godPanel.appendChild(b)
+    return b
+  }
+
+  makeGodBtn('☄️ Meteor', () => targetedTrigger('meteors', 'strike'))
+  makeGodBtn('⛰️ Earthquake', () => targetedTrigger('earthquake', 'trigger'))
+  makeGodBtn('🌀 Summon storm', () => targetedTrigger('storms', 'spawnStorm'))
+  makeGodBtn('🌌 Aurora', () => {
+    const s = window.__planet && window.__planet.sky
+    if (s && typeof s.triggerAurora === 'function') s.triggerAurora()
+  })
+
+  let godPanelOpen = false
+  function toggleGodPanel(force) {
+    godPanelOpen = typeof force === 'boolean' ? force : !godPanelOpen
+    godPanel.classList.toggle('hidden', !godPanelOpen)
+    godBtn.classList.toggle('active', godPanelOpen)
   }
 
   return { update }
