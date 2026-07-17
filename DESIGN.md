@@ -1,4 +1,4 @@
-# Claude Planet
+# Sekai
 
 A living fantasy planet on your desktop, populated by your Claude Code sessions.
 Launch it, and a stylized world floats in a starfield: continents, snowy poles,
