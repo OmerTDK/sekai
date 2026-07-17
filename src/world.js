@@ -3,26 +3,57 @@
 // session history. Everything a user will ever see here is derived from
 // string hashes (project path, session id) so relaunching the app rebuilds
 // the identical village layout, then a 4s poll layers live activity on top.
+//
+// Structure/person geometry lives in buildings.js, placement search + surface
+// math lives in placement.js, and canvas label sprites live in labels.js —
+// this module is the orchestration layer: settlement/structure/agent
+// records, ingest/polling, the per-frame update loop, click raycasting, the
+// camera tween, city lights, and the hammer-spark particle pool.
 import * as THREE from 'three'
-import { SEA_LEVEL, hash01, rngFromString, clamp, lerp, smoothstep } from './util.js'
+import { hash01, rngFromString, clamp, lerp, smoothstep } from './util.js'
+import {
+  RACE_KEYS,
+  RACE_PALETTES,
+  RACE_GLYPHS,
+  KIT_UNIT_SIZE,
+  TIER_MULT,
+  makeSettlementName,
+  pickStructureType,
+  pickTier,
+  truncateText,
+  buildKit,
+  buildPersonGroup,
+  sphereGeo,
+  hitMat,
+  boxGeo,
+  scaffoldMat,
+} from './buildings.js'
+import { findLandAnchor, findStructureSpot, randomLandNear, tangentBasis, yawedTangent, orientOnSurface, stepToward } from './placement.js'
+import {
+  makeSettlementSprite,
+  makeTopicSprite,
+  refreshTopicSprite,
+  makeBubbleSprite,
+  refreshBubbleSprite,
+  applyLabelScale,
+  SETTLEMENT_LABEL_K,
+  SETTLEMENT_LABEL_MIN,
+  SETTLEMENT_LABEL_MAX,
+  TOPIC_LABEL_K,
+  TOPIC_LABEL_MIN,
+  TOPIC_LABEL_MAX,
+  TOPIC_LABEL_REF_DIST,
+} from './labels.js'
 
 // ---------------------------------------------------------------------------
 // Tunables
 // ---------------------------------------------------------------------------
-
-const MAX_BUILD_HEIGHT = SEA_LEVEL + 0.03 // sampleHeight() must be below this to build/walk
 
 const POLL_INTERVAL = 4 // seconds between /api/sessions polls
 const CONSTRUCTION_DURATION = 45 // seconds a fresh structure takes to "grow in"
 const CONSTRUCTION_NEW_MAX_MS = 5 * 60 * 1000 // session must be this fresh to animate construction
 const LABEL_THROTTLE = 0.3 // seconds between topic-label visibility checks
 const TOPIC_VISIBLE_DIST = 0.5 // camera must be this close (world units) to see a topic label
-
-const ANCHOR_SEARCH_TRIES = 600
-const ANCHOR_STEP = 0.05
-const STRUCT_SEARCH_RADIUS = 0.05
-const STRUCT_MIN_SEP = 0.012
-const STRUCT_SEARCH_HARD_CAP = 400
 
 const AGENT_SPEED = 0.010 // rad/s baseline walking angular speed
 const WORKING_MAX_MS = 3 * 60 * 1000
@@ -36,14 +67,6 @@ const FOOT_LIFT = PERSON_HEIGHT * 0.05
 
 const CLICK_MOVE_THRESHOLD = 6 // px
 const TWEEN_DURATION = 1.1 // seconds
-
-const SETTLEMENT_LABEL_K = 0.022
-const SETTLEMENT_LABEL_MIN = 0.006
-const SETTLEMENT_LABEL_MAX = 0.085
-const TOPIC_LABEL_K = 0.02
-const TOPIC_LABEL_MIN = 0.0045
-const TOPIC_LABEL_MAX = 0.028
-const TOPIC_LABEL_REF_DIST = 1.15 // representative "up close" distance used to size topic labels once
 
 const BUBBLE_MAX_CHARS = 42 // speech-bubble text truncation
 const BUBBLE_VISIBLE_DIST = 0.35 // camera must be this close (world units) to see a speech bubble
@@ -63,203 +86,20 @@ const MINION_SCALE = 0.5 // half-size vs a normal worker
 const STRUCT_HIT_RADIUS = 0.012 // invisible click-target sphere radius per structure
 
 // ---------------------------------------------------------------------------
-// Races, palettes, naming
+// Scratch tangent-basis vectors for the tangentBasis() calls made directly
+// from this module (spark bursts, agent/minion forward vectors) — duplicated
+// from placement.js's own private copy rather than shared via an export,
+// since these are write-before-read scratch (see the M2 program plan's
+// split notes on module-level scratch vectors).
 // ---------------------------------------------------------------------------
-
-const RACE_KEYS = ['human', 'elf', 'dwarf', 'orc']
-
-const RACE_PALETTES = {
-  human: { cloth: 0x3b5c8c, roof: 0x4a6f9e, banner: 0x2f4d78, skin: 0xd9a066, accent: 0x3b5c8c },
-  elf: { cloth: 0x3f7a4a, roof: 0x4f8f5a, banner: 0x2f5f3a, skin: 0xe8caa4, accent: 0x5aa868 },
-  dwarf: { cloth: 0x8c3f2e, roof: 0x9c4a30, banner: 0x7a2f22, skin: 0xc97b5a, accent: 0xc9622f },
-  orc: { cloth: 0x5a5f66, roof: 0x4f5359, banner: 0x3f4348, skin: 0x6d8f4e, accent: 0x9fb15c },
-}
-
-const RACE_GLYPHS = { human: '⚑', elf: '✦', dwarf: '⚒', orc: '⚔' }
-
-const SUFFIXES = {
-  human: ['holm', 'stead', 'burg'],
-  elf: ['dell', 'thil', 'lorien'],
-  dwarf: ['forge', 'deep', 'helm'],
-  orc: ['gash', 'maw', 'grot'],
-}
-
-const COLOR_WOOD = 0x8a6242
-const COLOR_WHITEWASH = 0xe8e0cc
-const COLOR_STONE = 0x8a8274
-const COLOR_DARK = 0x2a2420
-const COLOR_FIELD_A = 0x8ea34f
-const COLOR_FIELD_B = 0xc7a24a
-const COLOR_THATCH = 0xc9a94a
-const COLOR_EMBER = 0xff7733
-const COLOR_EMBER_EMISSIVE = 0xff5a22
-
-// Structure keyword routing — order matters, first hit wins.
-const TYPE_RULES = [
-  ['barracks', ['fix', 'bug', 'debug', 'error']],
-  ['farm', ['data', 'pipeline', 'sql', 'dbt', 'table', 'etl']],
-  ['observatory', ['research', 'explor', 'investigat', 'analy', 'idea']],
-  ['library', ['doc', 'readme', 'report', 'write']],
-  ['forge', ['deploy', 'infra', 'docker', 'ci', 'server']],
-  ['hall', ['ui', 'design', 'front', 'css', 'page', 'app']],
-]
-const FALLBACK_TYPES = ['tower', 'hall', 'farm', 'observatory', 'library']
-
-// Authored kit height at the tier-1 (x1) baseline; tier2 = x1.45, tier3 = x2.
-// (tier2 values land in the ~0.012-0.028 world-height band the spec asks for.)
-const KIT_UNIT_SIZE = {
-  tower: 0.016,
-  hall: 0.010,
-  farm: 0.009,
-  barracks: 0.0095,
-  observatory: 0.013,
-  library: 0.011,
-  forge: 0.0095,
-}
-const TIER_MULT = [1, 1.45, 2]
-
-// ---------------------------------------------------------------------------
-// Shared geometry / material caches (never per-instance — see PERFORMANCE)
-// ---------------------------------------------------------------------------
-
-const _geomCache = new Map()
-function geom(key, factory) {
-  let g = _geomCache.get(key)
-  if (!g) {
-    g = factory()
-    _geomCache.set(key, g)
-  }
-  return g
-}
-
-const _matCache = new Map()
-function mat(key, factory) {
-  let m = _matCache.get(key)
-  if (!m) {
-    m = factory()
-    _matCache.set(key, m)
-  }
-  return m
-}
-
-function stdMat(key, color, extra) {
-  return mat(key, () => new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.88, metalness: 0.04, ...extra }))
-}
-
-function raceMat(kind, race) {
-  const pal = RACE_PALETTES[race]
-  if (kind === 'roof') return stdMat('roof_' + race, pal.roof)
-  if (kind === 'banner') return stdMat('banner_' + race, pal.banner, { side: THREE.DoubleSide })
-  if (kind === 'cloth') return stdMat('cloth_' + race, pal.cloth)
-  if (kind === 'skin') return stdMat('skin_' + race, pal.skin)
-  return stdMat('accent_' + race, pal.accent, { emissive: pal.accent, emissiveIntensity: 1.1 })
-}
-
-const boxGeo = () => geom('box', () => new THREE.BoxGeometry(1, 1, 1))
-const cylGeo = () => geom('cyl6', () => new THREE.CylinderGeometry(0.5, 0.5, 1, 6))
-const cylGeo10 = () => geom('cyl10', () => new THREE.CylinderGeometry(0.5, 0.5, 1, 10))
-const coneGeo = () => geom('cone6', () => new THREE.ConeGeometry(0.5, 1, 6))
-const sphereGeo = () => geom('sphere8', () => new THREE.SphereGeometry(0.5, 8, 6))
-const domeGeo = () => geom('dome8', () => new THREE.SphereGeometry(0.5, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2))
-const capsuleGeo = () => geom('capsule', () => new THREE.CapsuleGeometry(0.5, 1, 3, 6))
-
-const woodMat = () => stdMat('wood', COLOR_WOOD)
-const whiteMat = () => stdMat('whitewash', COLOR_WHITEWASH)
-const stoneMat = () => stdMat('stone', COLOR_STONE)
-const darkMat = () => stdMat('dark', COLOR_DARK)
-const fieldAMat = () => stdMat('fieldA', COLOR_FIELD_A)
-const fieldBMat = () => stdMat('fieldB', COLOR_FIELD_B)
-const thatchMat = () => stdMat('thatch', COLOR_THATCH)
-const emberMat = () => stdMat('ember', COLOR_EMBER, { emissive: COLOR_EMBER_EMISSIVE, emissiveIntensity: 1.8, roughness: 0.5 })
-const hitMat = () => mat('hit', () => new THREE.MeshBasicMaterial({ color: 0xffffff }))
-const scaffoldMat = () => mat('scaffold', () => new THREE.MeshBasicMaterial({ color: 0x6b4a30, wireframe: true, transparent: true, opacity: 0.85 }))
-
-/** Adds a Mesh child at a local position/scale/rotation. Returns the mesh. */
-function part(parent, geometry, material, px, py, pz, sx, sy, sz, rx = 0, ry = 0, rz = 0) {
-  const m = new THREE.Mesh(geometry, material)
-  m.position.set(px, py, pz)
-  m.scale.set(sx, sy, sz)
-  if (rx) m.rotation.x = rx
-  if (ry) m.rotation.y = ry
-  if (rz) m.rotation.z = rz
-  parent.add(m)
-  return m
-}
-
-// ---------------------------------------------------------------------------
-// Spherical math helpers (pure — no dependency on the live planet/world state)
-// ---------------------------------------------------------------------------
-
 const _tb1 = new THREE.Vector3()
 const _tb2 = new THREE.Vector3()
-
-/** Arbitrary orthonormal tangent basis at a point on the unit sphere. */
-function tangentBasis(dir, outT1, outT2) {
-  if (Math.abs(dir.y) < 0.999) outT1.set(0, 1, 0).cross(dir).normalize()
-  else outT1.set(1, 0, 0).cross(dir).normalize()
-  outT2.crossVectors(dir, outT1).normalize()
-}
-
-/** Writes into `out` the point `dist` radians from `base` along `bearing`. */
-function sphericalOffset(out, base, bearing, dist) {
-  tangentBasis(base, _tb1, _tb2)
-  const cb = Math.cos(bearing)
-  const sb = Math.sin(bearing)
-  const tx = _tb1.x * cb + _tb2.x * sb
-  const ty = _tb1.y * cb + _tb2.y * sb
-  const tz = _tb1.z * cb + _tb2.z * sb
-  const cd = Math.cos(dist)
-  const sd = Math.sin(dist)
-  out.set(base.x * cd + tx * sd, base.y * cd + ty * sd, base.z * cd + tz * sd).normalize()
-}
-
-/** A unit tangent at `dir` rotated to bearing `yaw` — used to give structures a facing. */
-function yawedTangent(dir, yaw, out) {
-  tangentBasis(dir, _tb1, _tb2)
-  const cb = Math.cos(yaw)
-  const sb = Math.sin(yaw)
-  return out.set(_tb1.x * cb + _tb2.x * sb, _tb1.y * cb + _tb2.y * sb, _tb1.z * cb + _tb2.z * sb).normalize()
-}
-
-/** Moves `current` at most `maxAngle` radians toward `target` along the great circle. Returns true if arrived. */
-function stepToward(current, target, maxAngle) {
-  const d = clamp(current.dot(target), -1, 1)
-  const angle = Math.acos(d)
-  if (angle < 1e-5) return true
-  const t = Math.min(1, maxAngle / angle)
-  current.lerp(target, t).normalize()
-  return t >= 1
-}
-
-const _up = new THREE.Vector3()
-const _right = new THREE.Vector3()
-const _fwd = new THREE.Vector3()
-const _basisMat = new THREE.Matrix4()
-
-/** Orients `object` so local +Y matches the surface normal `dir` and local +Z faces `forwardHint`. */
-function orientOnSurface(object, dir, forwardHint) {
-  _up.copy(dir).normalize()
-  _fwd.copy(forwardHint)
-  _fwd.addScaledVector(_up, -_fwd.dot(_up))
-  if (_fwd.lengthSq() < 1e-10) {
-    _fwd.set(1, 0, 0).addScaledVector(_up, -_up.x)
-    if (_fwd.lengthSq() < 1e-10) _fwd.set(0, 0, 1)
-  }
-  _fwd.normalize()
-  _right.crossVectors(_up, _fwd).normalize()
-  _fwd.crossVectors(_right, _up).normalize()
-  _basisMat.makeBasis(_right, _up, _fwd)
-  object.quaternion.setFromRotationMatrix(_basisMat)
-}
 
 // ---------------------------------------------------------------------------
 // Silent-fallback rule: every graceful-degradation path warns exactly once
 // (module-level flags — these searches run per-settlement/per-structure and
 // the ingest/poll paths repeat every 4s, so a plain warn would spam).
 // ---------------------------------------------------------------------------
-let warnedLandAnchorFallback = false
-let warnedStructureSpotFallback = false
-let warnedLandNearFallback = false
 let warnedIngestSkip = false
 let warnedPoll = false
 let warnedStructureClickCb = false
@@ -274,474 +114,6 @@ function warnPoll(reason) {
   if (warnedPoll) return
   warnedPoll = true
   console.warn('[planet] world.js: session poll degraded — ' + reason)
-}
-
-function findLandAnchor(planet, base, rng) {
-  const dir = base.clone()
-  for (let i = 0; i <= ANCHOR_SEARCH_TRIES; i++) {
-    if (planet.isLand(dir) && planet.sampleHeight(dir) < MAX_BUILD_HEIGHT) return dir
-    if (i === ANCHOR_SEARCH_TRIES) break
-    dir.set(dir.x + (rng() - 0.5) * ANCHOR_STEP, dir.y + (rng() - 0.5) * ANCHOR_STEP, dir.z + (rng() - 0.5) * ANCHOR_STEP).normalize()
-  }
-  if (!warnedLandAnchorFallback) {
-    warnedLandAnchorFallback = true
-    console.warn('[planet] world.js: settlement anchor placement degraded — exhausted search budget, using best-effort location (may be underwater or above build height)')
-  }
-  return dir // best-effort last (island worlds happen)
-}
-
-function findStructureSpot(planet, anchorDir, rng, siblings) {
-  let radius = STRUCT_SEARCH_RADIUS
-  let minSep = STRUCT_MIN_SEP
-  const dir = new THREE.Vector3()
-  let fallback = null
-  for (let tries = 1; tries <= STRUCT_SEARCH_HARD_CAP; tries++) {
-    const bearing = rng() * Math.PI * 2
-    const dist = Math.sqrt(rng()) * radius
-    sphericalOffset(dir, anchorDir, bearing, dist)
-    if (!fallback) fallback = dir.clone()
-    if (planet.isLand(dir) && planet.sampleHeight(dir) < MAX_BUILD_HEIGHT) {
-      let ok = true
-      for (let i = 0; i < siblings.length; i++) {
-        if (dir.angleTo(siblings[i]) < minSep) {
-          ok = false
-          break
-        }
-      }
-      if (ok) return dir.clone()
-    }
-    if (tries % 80 === 0) {
-      minSep *= 0.82
-      radius = Math.min(radius * 1.15, 0.14)
-    }
-  }
-  if (!warnedStructureSpotFallback) {
-    warnedStructureSpotFallback = true
-    console.warn('[planet] world.js: structure placement degraded — exhausted search budget, using fallback spot (may overlap a sibling or sit on unsuitable ground)')
-  }
-  return fallback || anchorDir.clone()
-}
-
-function randomLandNear(planet, center, rng, maxRadius) {
-  const out = new THREE.Vector3()
-  let fallback = null
-  for (let i = 0; i < 120; i++) {
-    const bearing = rng() * Math.PI * 2
-    const dist = Math.sqrt(rng()) * maxRadius
-    sphericalOffset(out, center, bearing, dist)
-    if (!fallback) fallback = out.clone()
-    if (planet.isLand(out) && planet.sampleHeight(out) < MAX_BUILD_HEIGHT) return out.clone()
-  }
-  if (!warnedLandNearFallback) {
-    warnedLandNearFallback = true
-    console.warn('[planet] world.js: agent wander-point placement degraded — exhausted search budget, using fallback location (may be underwater or above build height)')
-  }
-  return fallback || center.clone()
-}
-
-// ---------------------------------------------------------------------------
-// Naming / classification
-// ---------------------------------------------------------------------------
-
-function basenameOf(p) {
-  const parts = String(p).split(/[\\/]+/).filter(Boolean)
-  return parts.length ? parts[parts.length - 1] : 'world'
-}
-
-function makeSettlementName(project, race) {
-  const raw = basenameOf(project)
-  let clean = raw.replace(/[^a-zA-Z0-9]/g, '')
-  if (!clean) clean = 'Settlement'
-  clean = clean.charAt(0).toUpperCase() + clean.slice(1)
-  if (clean.length > 12) clean = clean.slice(0, 12)
-  const suffixes = SUFFIXES[race]
-  const suffix = suffixes[Math.floor(hash01(project + '~suffix') * suffixes.length)]
-  return { name: clean + suffix, basenameRaw: raw }
-}
-
-function pickStructureType(topic, id) {
-  const t = (topic || '').toLowerCase()
-  for (let i = 0; i < TYPE_RULES.length; i++) {
-    const type = TYPE_RULES[i][0]
-    const words = TYPE_RULES[i][1]
-    for (let j = 0; j < words.length; j++) {
-      if (t.indexOf(words[j]) !== -1) return type
-    }
-  }
-  return FALLBACK_TYPES[Math.floor(hash01(id) * FALLBACK_TYPES.length)]
-}
-
-function pickTier(bytes) {
-  if (bytes < 30000) return 1
-  if (bytes < 400000) return 2
-  return 3
-}
-
-function truncateText(s, maxLen) {
-  const str = String(s == null ? '' : s)
-  if (str.length <= maxLen) return str
-  return str.slice(0, maxLen - 1) + '…'
-}
-
-// ---------------------------------------------------------------------------
-// Canvas label sprites (topic text is untrusted — always drawn via fillText)
-// ---------------------------------------------------------------------------
-
-const LABEL_FONT = 'system-ui, -apple-system, "Segoe UI", Helvetica, sans-serif'
-
-function roundRectPath(ctx, x, y, w, h, r) {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.lineTo(x + w - r, y)
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r)
-  ctx.lineTo(x + w, y + h - r)
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
-  ctx.lineTo(x + r, y + h)
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r)
-  ctx.lineTo(x, y + r)
-  ctx.quadraticCurveTo(x, y, x + r, y)
-  ctx.closePath()
-}
-
-function buildSettlementCanvas(glyph, name, basenameRaw, accentCss) {
-  const titleSize = 46
-  const subSize = 30
-  const padX = 26
-  const padY = 18
-  const gap = 6
-
-  const meas = document.createElement('canvas').getContext('2d')
-  const titleText = glyph + '  ' + name
-  meas.font = '700 ' + titleSize + 'px ' + LABEL_FONT
-  const titleW = meas.measureText(titleText).width
-  meas.font = '500 ' + subSize + 'px ' + LABEL_FONT
-  const subW = meas.measureText(basenameRaw).width
-
-  const width = Math.ceil(Math.max(titleW, subW) + padX * 2)
-  const height = Math.ceil(titleSize + subSize + gap + padY * 2)
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-
-  ctx.fillStyle = 'rgba(16,14,20,0.55)'
-  roundRectPath(ctx, 1, 1, width - 2, height - 2, 18)
-  ctx.fill()
-  ctx.strokeStyle = accentCss
-  ctx.lineWidth = 3
-  roundRectPath(ctx, 1.5, 1.5, width - 3, height - 3, 18)
-  ctx.stroke()
-
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  ctx.fillStyle = '#f6ecd9'
-  ctx.font = '700 ' + titleSize + 'px ' + LABEL_FONT
-  ctx.fillText(titleText, width / 2, padY)
-
-  ctx.fillStyle = 'rgba(216,206,196,0.72)'
-  ctx.font = '500 ' + subSize + 'px ' + LABEL_FONT
-  ctx.fillText(basenameRaw, width / 2, padY + titleSize + gap)
-
-  return { canvas, aspect: width / height }
-}
-
-function buildTopicCanvas(text) {
-  const size = 30
-  const padX = 18
-  const padY = 12
-
-  const meas = document.createElement('canvas').getContext('2d')
-  meas.font = '600 ' + size + 'px ' + LABEL_FONT
-  const w = meas.measureText(text).width
-
-  const width = Math.ceil(w + padX * 2)
-  const height = Math.ceil(size + padY * 2)
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-
-  ctx.fillStyle = 'rgba(14,13,18,0.62)'
-  roundRectPath(ctx, 1, 1, width - 2, height - 2, 12)
-  ctx.fill()
-
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  ctx.fillStyle = '#eee6d6'
-  ctx.font = '600 ' + size + 'px ' + LABEL_FONT
-  ctx.fillText(text, width / 2, padY)
-
-  return { canvas, aspect: width / height }
-}
-
-function makeSettlementSprite(glyph, name, basenameRaw, accentCss) {
-  const { canvas, aspect } = buildSettlementCanvas(glyph, name, basenameRaw, accentCss)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  const material = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })
-  const sprite = new THREE.Sprite(material)
-  sprite.center.set(0.5, 0)
-  sprite.userData.aspect = aspect
-  return sprite
-}
-
-function makeTopicSprite(text) {
-  const { canvas, aspect } = buildTopicCanvas(text)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  const material = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })
-  const sprite = new THREE.Sprite(material)
-  sprite.center.set(0.5, 0)
-  sprite.userData.aspect = aspect
-  return sprite
-}
-
-function refreshTopicSprite(sprite, text) {
-  const { canvas, aspect } = buildTopicCanvas(text)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  sprite.material.map.dispose()
-  sprite.material.map = tex
-  sprite.material.needsUpdate = true
-  sprite.userData.aspect = aspect
-}
-
-// Small rounded speech-bubble with a tail pointing down at the speaker.
-// Text is untrusted (session lastAction) — canvas fillText only, same as topics.
-function buildBubbleCanvas(text) {
-  const size = 22
-  const padX = 14
-  const padY = 9
-  const tail = 7
-
-  const meas = document.createElement('canvas').getContext('2d')
-  meas.font = '600 ' + size + 'px ' + LABEL_FONT
-  const w = meas.measureText(text).width
-
-  const width = Math.ceil(w + padX * 2)
-  const bodyH = Math.ceil(size + padY * 2)
-  const height = bodyH + tail
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-
-  ctx.fillStyle = 'rgba(20,18,26,0.75)'
-  roundRectPath(ctx, 1, 1, width - 2, bodyH - 2, 10)
-  ctx.fill()
-  ctx.beginPath()
-  ctx.moveTo(width / 2 - tail, bodyH - 2)
-  ctx.lineTo(width / 2 + tail, bodyH - 2)
-  ctx.lineTo(width / 2, bodyH - 2 + tail)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  ctx.fillStyle = '#f6ecd9'
-  ctx.font = '600 ' + size + 'px ' + LABEL_FONT
-  ctx.fillText(text, width / 2, padY)
-
-  return { canvas, aspect: width / height }
-}
-
-function makeBubbleSprite(text) {
-  const { canvas, aspect } = buildBubbleCanvas(text)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  const material = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })
-  const sprite = new THREE.Sprite(material)
-  sprite.center.set(0.5, 0)
-  sprite.userData.aspect = aspect
-  sprite.renderOrder = 2
-  return sprite
-}
-
-function refreshBubbleSprite(sprite, text) {
-  const { canvas, aspect } = buildBubbleCanvas(text)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  sprite.material.map.dispose()
-  sprite.material.map = tex
-  sprite.material.needsUpdate = true
-  sprite.userData.aspect = aspect
-}
-
-function applyLabelScale(sprite, dist, k, min, max) {
-  const s = clamp(dist * k, min, max)
-  const aspect = sprite.userData.aspect || 2
-  sprite.scale.set(s * aspect, s, 1)
-}
-
-// ---------------------------------------------------------------------------
-// Structure kits — each built from a handful of flat-shaded primitives in
-// "local unit" space (roughly 1 unit tall); the caller applies the tier scale.
-// ---------------------------------------------------------------------------
-
-export function buildTower(race) {
-  const g = new THREE.Group()
-  let y = 0
-  part(g, cylGeo(), stoneMat(), 0, y + 0.05, 0, 0.62, 0.10, 0.62)
-  y += 0.09
-  const trunkH = 0.58
-  part(g, cylGeo(), whiteMat(), 0, y + trunkH / 2, 0, 0.42, trunkH, 0.42)
-  part(g, boxGeo(), darkMat(), 0, y + 0.16, 0.2, 0.1, 0.2, 0.02)
-  y += trunkH
-  const roofH = 0.46
-  part(g, coneGeo(), raceMat('roof', race), 0, y + roofH / 2, 0, 0.56, roofH, 0.56)
-  y += roofH
-  part(g, sphereGeo(), raceMat('accent', race), 0, y + 0.05, 0, 0.11, 0.11, 0.11)
-  return g
-}
-
-export function buildHall(race) {
-  const g = new THREE.Group()
-  let y = 0
-  part(g, boxGeo(), stoneMat(), 0, y + 0.03, 0, 0.95, 0.06, 0.62)
-  y += 0.05
-  const wallH = 0.34
-  part(g, boxGeo(), whiteMat(), 0, y + wallH / 2, 0, 0.86, wallH, 0.54)
-  part(g, boxGeo(), darkMat(), 0, y + 0.13, 0.275, 0.14, 0.26, 0.03)
-  y += wallH
-  const roofMat = raceMat('roof', race)
-  part(g, boxGeo(), roofMat, 0, y + 0.16, 0.15, 0.92, 0.05, 0.46, 0.55, 0, 0)
-  part(g, boxGeo(), roofMat, 0, y + 0.16, -0.15, 0.92, 0.05, 0.46, -0.55, 0, 0)
-  return g
-}
-
-export function buildFarm(race, rng) {
-  const g = new THREE.Group()
-  const hutW = 0.3
-  part(g, boxGeo(), woodMat(), -0.28, 0.16, -0.05, hutW, 0.32, hutW)
-  part(g, coneGeo(), thatchMat(), -0.28, 0.32 + 0.14, -0.05, 0.24, 0.28, 0.24)
-  const fieldCount = rng() < 0.5 ? 2 : 3
-  const fieldMats = [fieldAMat(), fieldBMat()]
-  let fx = 0.1
-  for (let i = 0; i < fieldCount; i++) {
-    part(g, boxGeo(), fieldMats[i % 2], fx, 0.02, -0.15 + i * 0.16, 0.3, 0.04, 0.32)
-    fx += 0.32
-  }
-  return g
-}
-
-export function buildBarracks(race) {
-  const g = new THREE.Group()
-  let y = 0
-  part(g, boxGeo(), stoneMat(), 0, y + 0.03, 0, 1.0, 0.06, 0.4)
-  y += 0.05
-  const wallH = 0.26
-  part(g, boxGeo(), woodMat(), 0, y + wallH / 2, 0, 0.92, wallH, 0.34)
-  y += wallH
-  part(g, boxGeo(), raceMat('roof', race), 0, y + 0.08, -0.02, 0.98, 0.05, 0.42, 0.22, 0, 0)
-  const poleH = 0.5
-  part(g, cylGeo(), woodMat(), -0.42, poleH / 2, 0.22, 0.02, poleH, 0.02)
-  part(g, boxGeo(), raceMat('banner', race), -0.42, poleH * 0.62, 0.23, 0.02, 0.22, 0.14)
-  return g
-}
-
-export function buildObservatory(race) {
-  const g = new THREE.Group()
-  let y = 0
-  const baseH = 0.3
-  part(g, cylGeo(), stoneMat(), 0, y + baseH / 2, 0, 0.5, baseH, 0.5)
-  y += baseH
-  const upperH = 0.22
-  part(g, cylGeo10(), whiteMat(), 0, y + upperH / 2, 0, 0.4, upperH, 0.4)
-  y += upperH
-  part(g, domeGeo(), raceMat('roof', race), 0, y, 0, 0.44, 0.36, 0.44)
-  part(g, boxGeo(), darkMat(), 0.06, y + 0.1, 0.06, 0.08, 0.08, 0.2)
-  part(g, cylGeo(), darkMat(), 0.16, y + 0.2, 0.16, 0.05, 0.34, 0.05, 0, 0, 0.7)
-  return g
-}
-
-export function buildLibrary(race) {
-  const g = new THREE.Group()
-  let y = 0
-  part(g, boxGeo(), stoneMat(), 0, y + 0.03, 0, 0.86, 0.06, 0.6)
-  y += 0.05
-  const wallH = 0.36
-  part(g, boxGeo(), whiteMat(), 0, y + wallH / 2, 0, 0.78, wallH, 0.52)
-  const colH = wallH * 0.9
-  part(g, cylGeo(), stoneMat(), -0.28, y + colH / 2, 0.3, 0.05, colH, 0.05)
-  part(g, cylGeo(), stoneMat(), 0.28, y + colH / 2, 0.3, 0.05, colH, 0.05)
-  y += wallH
-  part(g, domeGeo(), raceMat('roof', race), 0, y, 0, 0.64, 0.2, 0.64)
-  return g
-}
-
-export function buildForge(race, rng) {
-  const g = new THREE.Group()
-  const hutW = 0.6
-  part(g, boxGeo(), stoneMat(), 0, 0.2, 0, hutW, 0.4, 0.44)
-  part(g, boxGeo(), darkMat(), 0, 0.42, 0, hutW * 0.95, 0.06, 0.42)
-  const y = 0.45
-  const chimSide = rng() < 0.5 ? -1 : 1
-  part(g, cylGeo(), darkMat(), chimSide * 0.2, y + 0.2, -0.14, 0.09, 0.4, 0.09)
-  part(g, boxGeo(), emberMat(), chimSide * 0.2, 0.02, 0.16, 0.12, 0.06, 0.12)
-  part(g, boxGeo(), darkMat(), 0, 0.06, 0.28, 0.14, 0.05, 0.09)
-  return g
-}
-
-export function buildKit(type, race, tier, rng) {
-  let g
-  if (type === 'tower') g = buildTower(race)
-  else if (type === 'hall') g = buildHall(race)
-  else if (type === 'farm') g = buildFarm(race, rng)
-  else if (type === 'barracks') g = buildBarracks(race)
-  else if (type === 'observatory') g = buildObservatory(race)
-  else if (type === 'library') g = buildLibrary(race)
-  else g = buildForge(race, rng)
-
-  if (tier === 3) {
-    // Grand structures fly a race-colored banner from a corner pole.
-    const poleH = 0.85
-    part(g, cylGeo(), woodMat(), 0.38, poleH / 2, 0.38, 0.025, poleH, 0.025)
-    part(g, boxGeo(), raceMat('banner', race), 0.38, poleH * 0.68, 0.38, 0.03, 0.26, 0.16)
-  }
-  return g
-}
-
-// ---------------------------------------------------------------------------
-// Tiny people
-// ---------------------------------------------------------------------------
-
-function buildPersonGroup(race) {
-  const g = new THREE.Group()
-  const cloth = raceMat('cloth', race)
-  const skin = raceMat('skin', race)
-  const accent = raceMat('accent', race)
-
-  const body = new THREE.Mesh(capsuleGeo(), cloth)
-  body.scale.set(0.34, 0.31, 0.34)
-  body.position.set(0, 0.31, 0)
-  g.add(body)
-
-  const head = new THREE.Mesh(sphereGeo(), skin)
-  head.scale.setScalar(0.36)
-  head.position.set(0, 0.78, 0)
-  g.add(head)
-
-  const dot = new THREE.Mesh(sphereGeo(), accent)
-  dot.scale.setScalar(0.075)
-  dot.position.set(0, 0.42, 0.14)
-  g.add(dot)
-
-  let widthMul = 1
-  let heightMul = 1
-  if (race === 'dwarf') {
-    widthMul = 1.3
-    heightMul = 0.75
-  } else if (race === 'elf') {
-    heightMul = 1.15
-  } else if (race === 'orc') {
-    widthMul = 1.1
-  }
-  g.scale.set(widthMul, heightMul, widthMul)
-
-  return g
 }
 
 // ---------------------------------------------------------------------------
