@@ -212,10 +212,46 @@ export function createSky(seed) {
     stormClearUniforms.uStormOn.value = strength
   }
 
+  // M-WX weather hook (B3, pinned contract): CPU-side cloud-cover sample at
+  // an arbitrary world DIRECTION, 0..1, read from the lower deck's own
+  // already-baked coverage field (see makeCloudTexture/createClouds) — NO
+  // GPU readback, no new noise calls. Mirrors the lower shell's live drift
+  // (rotateOnWorldAxis in update() above) via its current quaternion, the
+  // SAME world-dir -> shell-local -> UV path update() already uses for
+  // uSunUV/cloud-shadow (see localDirToUV's doc comment) — so "is it cloudy
+  // here" always agrees with what's actually rendered overhead, moving deck
+  // included. Cheap (one quaternion invert + one vector rotate per call).
+  let _coverageWarned = false
+  const _coverQuatScratch = new THREE.Quaternion()
+  const _coverDirScratch = new THREE.Vector3()
+  const _coverUVScratch = new THREE.Vector2()
+  function sampleCloudCover(dir) {
+    const cov = clouds.lowerCoverage
+    if (!cov) {
+      if (!_coverageWarned) {
+        _coverageWarned = true
+        console.warn('[planet] sky: cloud coverage data unavailable — sampleCloudCover always returns 0')
+      }
+      return 0
+    }
+    _coverQuatScratch.copy(clouds.lowerMesh.quaternion).invert()
+    _coverDirScratch.copy(dir).normalize().applyQuaternion(_coverQuatScratch)
+    localDirToUV(_coverDirScratch, _coverUVScratch)
+    const w = clouds.lowerCoverageWidth
+    const h = clouds.lowerCoverageHeight
+    // Invert localDirToUV's own u = 1 - x/(w-1), v = 1 - y/(h-1) mapping
+    // (see that function's doc comment) back to the field's row-major (x,y).
+    const xf = (1 - _coverUVScratch.x) % 1
+    const yf = 1 - _coverUVScratch.y
+    const x = clamp(Math.round(xf * (w - 1)), 0, w - 1)
+    const y = clamp(Math.round(yf * (h - 1)), 0, h - 1)
+    return cov[y * w + x]
+  }
+
   // skyboxBakeMs: debug/verification handle only (read via
   // window.__planet.sky.skyboxBakeMs) — confirms the ≤1.5s bake budget
   // without adding a new console.log convention (this codebase only warns).
-  return { group, update, getSunDir, setStormClearing, skyboxBakeMs: skybox.bakeMs }
+  return { group, update, getSunDir, setStormClearing, sampleCloudCover, skyboxBakeMs: skybox.bakeMs }
 }
 
 // ---------------------------------------------------------------- helpers --
@@ -834,7 +870,13 @@ function calibrateThreshold(field, edge, target) {
 /** Builds one cloud layer's alpha texture on a 2048x1024 equirect canvas.
  * Samples the warped/banded field (see warpedCloudField) once per texel at
  * the sphere DIRECTION, auto-calibrates the coverage threshold against
- * `cfg.targetCoverage` (see calibrateThreshold), then rasterizes. */
+ * `cfg.targetCoverage` (see calibrateThreshold), then rasterizes. Returns
+ * the texture PLUS the same coverage values already computed for it (0..1,
+ * row-major, same width/height) — M-WX weather reads this CPU-side via
+ * sampleCloudCover() below instead of re-deriving coverage or doing a GPU
+ * readback; `field` is reused in place for this (each entry overwritten
+ * with its own post-threshold alpha right after it's read, so this adds no
+ * extra allocation over the pre-M-WX version of this function). */
 function makeCloudTexture(noise3, cfg) {
   const { width, height, edge, targetCoverage } = cfg
   const dir = new THREE.Vector3()
@@ -873,13 +915,14 @@ function makeCloudTexture(noise3, cfg) {
     data[idx + 1] = g
     data[idx + 2] = g
     data[idx + 3] = 255
+    field[i] = a // reuse: field[i] is only read once above, safe to overwrite with the final 0..1 coverage
   }
   ctx.putImageData(img, 0, 0)
 
   const tex = new THREE.CanvasTexture(canvas)
   tex.wrapS = THREE.RepeatWrapping
   tex.wrapT = THREE.ClampToEdgeWrapping
-  return tex
+  return { tex, coverage: field, width, height }
 }
 
 // Shared by both cloud shells: the hurricane clears a moat in the ambient
@@ -999,7 +1042,7 @@ function createClouds(seed) {
   const height = 1024
 
   const lowerNoise = makeNoise3D(seed + ':clouds-lower')
-  const lowerTex = makeCloudTexture(lowerNoise, {
+  const lowerBake = makeCloudTexture(lowerNoise, {
     width,
     height,
     // Broken cumulus fields + frontal filaments: smaller cells, sharper
@@ -1021,6 +1064,7 @@ function createClouds(seed) {
     // upper deck's 0.09 below).
     targetCoverage: 0.2,
   })
+  const lowerTex = lowerBake.tex
   const lowerMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.075, 64, 32),
     new THREE.MeshStandardMaterial({
@@ -1035,7 +1079,7 @@ function createClouds(seed) {
   )
 
   const upperNoise = makeNoise3D(seed + ':clouds-upper')
-  const upperTex = makeCloudTexture(upperNoise, {
+  const upperBake = makeCloudTexture(upperNoise, {
     width,
     height,
     // Thin elongated cirrus streaks: strong longitudinal stretch, very soft
@@ -1057,6 +1101,7 @@ function createClouds(seed) {
     // M-SKY coverage cut: 0.13 -> ~0.09 (ART.md band 15-25% total).
     targetCoverage: 0.09,
   })
+  const upperTex = upperBake.tex
   const upperMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.09, 64, 32),
     new THREE.MeshStandardMaterial({
@@ -1089,6 +1134,13 @@ function createClouds(seed) {
     upperRate: -0.0035, // retrograde
     lowerSunUniforms,
     upperSunUniforms,
+    // M-WX weather hook: the lower deck's own baked coverage field (see
+    // makeCloudTexture) — precipitation gates off THIS deck only (broken
+    // cumulus/frontal filaments), never the upper cirrus deck, which
+    // physically doesn't rain. Read CPU-side by sampleCloudCover() below.
+    lowerCoverage: lowerBake.coverage,
+    lowerCoverageWidth: lowerBake.width,
+    lowerCoverageHeight: lowerBake.height,
   }
 }
 
