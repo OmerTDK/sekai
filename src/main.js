@@ -7,7 +7,9 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { createPlanet } from './planet.js'
 import { createSky } from './sky.js'
 import { createWorld } from './world.js'
+import { createAirships } from './airships.js'
 import { createBirds } from './birds.js'
+import { createDragon } from './dragon.js'
 import { createFlora } from './flora.js'
 import { createEvents } from './events.js'
 import { createVerifyKit } from './verifykit.js'
@@ -51,6 +53,12 @@ scene.add(storms.group)
 
 const events = createEvents(world, camera)
 scene.add(events.group)
+
+const dragon = createDragon(planet, world, SEED)
+scene.add(dragon.group)
+
+const airships = createAirships(planet, world, SEED)
+scene.add(airships.group)
 // Git charm: commits become fireworks, merged PRs become monuments.
 async function pollEvents() {
   try {
@@ -101,7 +109,7 @@ const ui = createUI(world, {
   },
 })
 
-window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, ui, renderer, composer, controls }
+window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, dragon, airships, ui, renderer, composer, controls }
 window.__planet.verify = createVerifyKit({ scene, camera, composer, renderer, controls, planet, sky, world, birds, flora, wind, storms })
 
 const clock = new THREE.Clock()
@@ -126,6 +134,8 @@ renderer.setAnimationLoop(() => {
   storms.update(dt, sky.getSunDir(sunDirScratch))
   sky.setStormClearing(stormDirScratch, storms.getPrimary(stormDirScratch))
   events.update(dt)
+  dragon.update(dt, sky.getSunDir(sunDirScratch))
+  airships.update(dt)
   ui.update(dt)
   controls.update()
 

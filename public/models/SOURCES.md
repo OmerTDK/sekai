@@ -62,9 +62,47 @@ material carries no such hint, so its parts are role-tagged by filename instead 
 (GLB: manual chunk surgery preserving the BIN chunk byte-for-byte; glTF: plain JSON
 edit) — not committed, one-off tooling only.
 
+## Dragon — Quaternius "Dragon" (M2.5 resident dragon, `src/dragon.js`)
+
+- Pack page: https://poly.pizza/m/VBvzjFIYws ("Dragon - Free Model By Quaternius",
+  published Jul 11 2022; poly.pizza mirrors quaternius.com's CC0 catalog with direct
+  single-file GLB downloads — the quaternius.com/itch.io pack pages themselves gate
+  the actual download behind a Google Drive folder, not scriptable headlessly)
+- Direct GLB (poly.pizza CDN): https://static.poly.pizza/9714f533-5d2d-4cfd-b8f1-c8dfff64a672.glb
+  (268,896 bytes as downloaded)
+- License: CC0 1.0 ("Public Domain (CC0)" / `"Licence":"CC0 1.0"` in the page's own
+  model metadata), author Quaternius (https://quaternius.com/).
+- Source format: single-file GLB, FBX/GLTF origin. Already had **zero embedded
+  images/textures/samplers** — materials ship as flat `pbrMetallicRoughness.
+  baseColorFactor` values only (role-named `Eyes`/`Main`/`Belly`/`Claws`/`Wings`), so
+  there was nothing to strip on that front (unlike the Kenney/Quaternius building
+  packs above). `src/dragon.js` overrides these material colors at load time — flat
+  dark crimson `#6e2b2b` body/wings/belly, brass `#b0793a` claws — same "tint at
+  runtime, not baked into the asset" convention `assets.js` uses for buildings.
+- Geometry: 2 meshes (`Eyes`, `Dragon`), **1,344 triangles** total — well under the
+  M2.5 spec's ≤3k budget. Fully rigged: `DragonArmature` skin with 37 nodes (Body/
+  Neck/Head/Face, 4-joint Wing1-4 chains ×2, 2-joint legs ×2, 4-segment tail) and 5
+  animation clips (`Attack`/`Attack2`/`Death`/`Flying`/`Hit`) in the original.
+- Stripped to `dragon/dragon.glb` with a one-off, zero-dependency Python script
+  (`node --check`-equivalent care, not committed): kept **only the `Flying` clip**
+  (the other 4 are unused by `dragon.js`'s state machine — see its "Event hook for
+  later" comment if a future milestone-appearance flourish wants `Attack` back) and
+  removed `extras.fromFBX` debug metadata recursively; the BIN chunk (mesh/skin/
+  keyframe data) is preserved byte-for-byte, same "chunk surgery" approach as the
+  Kenney/Quaternius stripping above. 268,896 → 252,052 bytes.
+- Why a rigged GLB instead of the buildings pipeline's merge-to-BatchedMesh
+  approach: this is one hand-placed, animated, single-instance actor (not thousands
+  of static instanced parts), so `dragon.js` loads it directly via `GLTFLoader` and
+  drives the skeleton with `THREE.AnimationMixer` (weight-blended against the
+  loader's own captured bind pose for the takeoff/landing wing fold — see
+  `dragon.js` for the per-state weight/timeScale choreography) rather than routing
+  through `assets.js`'s position/normal-only merge path.
+
 ## Committed footprint
 
 `du -sh public/models` → 664K total (kenney/ 396K, quaternius/ 268K — the latter
 dominated by `Roof_Tower_RoundTiles.bin` at 203K, the one higher-detail piece, used
 once as shared BatchedMesh geometry so its cost does not scale with instance count).
 Well under the <5MB budget; the original Quaternius textures alone were 17MB.
+`dragon/` adds 246K (`dragon.glb`, 252,052 bytes) — one hand-placed rigged actor,
+not instanced, so its cost doesn't scale with world size either.

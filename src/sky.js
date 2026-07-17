@@ -28,9 +28,13 @@ const CORONA_BASE_SCALE = 9
 const CORONA_MAX_SCALE = CORONA_BASE_SCALE * 1.6
 const CORONA_MAX_OPACITY = 0.85
 
+const TWO_PI = Math.PI * 2
+
 export function createSky(seed) {
   const group = new THREE.Group()
 
+  const skybox = createSkybox(seed)
+  group.add(skybox.mesh)
   group.add(createStarfield(seed))
   group.add(createNebulae(seed))
   group.add(createAtmosphere())
@@ -86,6 +90,9 @@ export function createSky(seed) {
   // Per-frame scratch vectors (reused every call — no per-frame allocation).
   const _sunDirScratch = new THREE.Vector3()
   const _moonDirScratch = new THREE.Vector3()
+  const _invQuatScratch = new THREE.Quaternion()
+  const _localDirScratch = new THREE.Vector3()
+  const _shadowM4Scratch = new THREE.Matrix4()
 
   function update(dt /* sec */, camera /* THREE.PerspectiveCamera */) {
     clouds.lowerMesh.rotateOnWorldAxis(clouds.lowerAxis, clouds.lowerRate * dt)
@@ -101,6 +108,27 @@ export function createSky(seed) {
     // stored), so every visual response below is just e's current value —
     // no eclipse-start/eclipse-end state machine, it simply tracks alignment.
     _sunDirScratch.copy(lights.sun.position).normalize()
+
+    // 2.5D cloud shading (M-SKY): each shell rotates on its OWN independent
+    // axis/rate (see lowerAxis/upperAxis above), so the sun's direction in
+    // "shell-local UV space" has to be recomputed per shell, every frame —
+    // see applyStormClearing's injected fragment block for how uSunUV gets
+    // consumed (offset-sample the alphaMap toward it to fake a bit of cloud
+    // thickness/self-shadowing without a real raymarch).
+    _invQuatScratch.copy(clouds.lowerMesh.quaternion).invert()
+    _localDirScratch.copy(_sunDirScratch).applyQuaternion(_invQuatScratch)
+    localDirToUV(_localDirScratch, clouds.lowerSunUniforms.uSunUV.value)
+    // Cloud-shadows-on-terrain contract (M-SKY, architect-pinned — see
+    // getCloudShadowUniforms below): reuse the SAME world->local rotation
+    // for planet.js's shader uniform instead of building it twice.
+    _shadowM4Scratch.makeRotationFromQuaternion(_invQuatScratch)
+    cloudShadowUniforms.uCloudMat.value.setFromMatrix4(_shadowM4Scratch)
+    cloudShadowUniforms.uCloudTex.value = clouds.lowerMesh.material.alphaMap
+
+    _invQuatScratch.copy(clouds.upperMesh.quaternion).invert()
+    _localDirScratch.copy(_sunDirScratch).applyQuaternion(_invQuatScratch)
+    localDirToUV(_localDirScratch, clouds.upperSunUniforms.uSunUV.value)
+
     let eclipseFactor = 0
     for (const moon of moons) {
       moon.mesh.getWorldPosition(_moonDirScratch).normalize()
@@ -132,6 +160,11 @@ export function createSky(seed) {
     const fade = smoothstep(1.35, 2.4, dist)
     clouds.lowerMesh.material.opacity = 0.88 * Math.max(fade, 0.08)
     clouds.upperMesh.material.opacity = 0.5 * Math.max(fade, 0.05)
+    // Cloud shadows on terrain use the RAW fade (reaching true 0), not the
+    // deck's own floored opacity above — a strongly-darkened ground patch
+    // under a barely-visible wisp at ground level would read as a bug, not
+    // a feature, so shadows fade out completely by the same 1.35R point.
+    cloudShadowUniforms.uCloudShadowOn.value = fade
 
     // Shooting stars: five independently-timed slots. Steady-state cost per
     // slot is one counter compare — geometry/material are only touched on
@@ -170,7 +203,10 @@ export function createSky(seed) {
     stormClearUniforms.uStormOn.value = strength
   }
 
-  return { group, update, getSunDir, setStormClearing }
+  // skyboxBakeMs: debug/verification handle only (read via
+  // window.__planet.sky.skyboxBakeMs) — confirms the ≤1.5s bake budget
+  // without adding a new console.log convention (this codebase only warns).
+  return { group, update, getSunDir, setStormClearing, skyboxBakeMs: skybox.bakeMs }
 }
 
 // ---------------------------------------------------------------- helpers --
@@ -209,6 +245,26 @@ function pointNearGreatCircle(normal, u, v, theta, phi, out = new THREE.Vector3(
   return out.normalize()
 }
 
+/** Local-space unit direction -> this file's SphereGeometry UV convention,
+ * for the default full-sphere case (phiStart=0, thetaStart=0, thetaLength=PI,
+ * phiLength=2*PI — i.e. the cloud shells, NOT the storm patch's partial
+ * sweep). Matches THREE's own SphereGeometry formula exactly (see
+ * node_modules/three/src/geometries/SphereGeometry.js): a vertex at
+ * colatitude theta (0 at +Y pole) and azimuth phi has stored uv
+ * (phi/(2*PI), 1 - theta/PI), and x = -sin(theta)*cos(phi),
+ * z = sin(theta)*sin(phi) -> theta = acos(y), phi = atan2(z, -x).
+ * Used for the cloud shells' per-frame sun-UV uniform (2.5D shading below)
+ * and documented again in getCloudShadowUniforms() for planet.js to
+ * replicate in GLSL (a 3x3/4x4 matrix alone can't express this — it's
+ * fundamentally nonlinear — so the matrix only carries the ROTATION part,
+ * this formula finishes the direction->UV step). */
+function localDirToUV(dir, out) {
+  const theta = Math.acos(clamp(dir.y, -1, 1))
+  let phi = Math.atan2(dir.z, -dir.x)
+  if (phi < 0) phi += TWO_PI
+  return out.set(phi / TWO_PI, 1 - theta / Math.PI)
+}
+
 function makeRadialCanvasTexture(stops, size = 128) {
   const canvas = document.createElement('canvas')
   canvas.width = size
@@ -219,6 +275,187 @@ function makeRadialCanvasTexture(stops, size = 128) {
   ctx.fillStyle = g
   ctx.fillRect(0, 0, size, size)
   return new THREE.CanvasTexture(canvas)
+}
+
+// ----------------------------------------------------------------- skybox --
+// Baked backdrop (M-SKY): the point-based star layers below (core/band/
+// bright) are a flat scatter of dots — cheap-looking on their own. This
+// bakes a single, rich equirectangular texture ONCE per seed (milky-way
+// band density following the SAME great-circle basis the point band and
+// nebulae use, dust-lane dark filaments carved by a second/independent fbm,
+// blue-white-core-to-warm-rim color grading, and a handful of baked soft
+// star-glow blobs) and maps it onto a giant sphere drawn FIRST every frame
+// via a very negative renderOrder + disabled depth test/write — the
+// standard three.js "skybox" trick, so it always sits behind literally
+// everything else regardless of its numeric radius vs. the point stars'
+// (88-90). This AUGMENTS the point layers (kept for parallax twinkle on
+// top), it doesn't retire them — both together read far less flat than
+// either alone.
+const SKYBOX_RADIUS = 85
+const SKYBOX_TEX_WIDTH = 2048 // >= 2K effective resolution, per the M-SKY brief
+const SKYBOX_TEX_HEIGHT = 1024
+const SKYBOX_BAKE_BUDGET_MS = 1500
+
+// Cache in-module; regeneration only per seed (M-SKY requirement) — a canvas
+// bake is comparatively expensive, and createSky() has no other reason to
+// ever rebuild the same seed's skybox twice.
+let _skyboxCache = null // { seed, texture, bakeMs }
+
+/** Cheap deterministic 0..1 hash of two ints + a salt — NOT simplex noise,
+ * just a scrambled integer avalanche. Used for the fine pointlike star
+ * sprinkle, where a full fbm() call per texel (2M+ texels) would be
+ * needless cost for something that's supposed to look like sparse noise
+ * anyway. */
+function hashTexel(ix, iy, salt) {
+  let h = (ix * 374761393 + iy * 668265263 + salt * 2246822519) | 0
+  h = (h ^ (h >>> 13)) * 1274126177
+  h = h ^ (h >>> 16)
+  return (h >>> 0) / 4294967296
+}
+
+/** Builds the baked skybox's equirect canvas. Reuses the exact dir<->(row,
+ * col) convention makeCloudTexture (below) already ships with, so the band
+ * lines up with bandBasis(seed) the same way the point-based milky-way band
+ * and nebulae do. */
+function buildSkyboxTexture(seed) {
+  const t0 = performance.now()
+  const width = SKYBOX_TEX_WIDTH
+  const height = SKYBOX_TEX_HEIGHT
+  const { normal } = bandBasis(seed)
+  const densityNoise = makeNoise3D(seed + ':skybox-density')
+  const dustNoise = makeNoise3D(seed + ':skybox-dust')
+  const rng = rngFromString(seed + ':skybox-bright')
+
+  const coreColor = new THREE.Color('#dce6ff') // blue-white galactic core
+  const rimColor = new THREE.Color('#ffcf9e') // warm amber rim
+  const voidColor = new THREE.Color('#03040a') // near-black space — never pure black, avoids crushed banding
+  const bandTint = new THREE.Color()
+  const px = new THREE.Color()
+  const dir = new THREE.Vector3()
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  const img = ctx.createImageData(width, height)
+  const data = img.data
+
+  for (let y = 0; y < height; y++) {
+    const vCanvas = y / (height - 1)
+    const lat = (0.5 - vCanvas) * Math.PI
+    const cosLat = Math.cos(lat)
+    const sinLat = Math.sin(lat)
+    const row = y * width
+    for (let x = 0; x < width; x++) {
+      const uCanvas = x / (width - 1)
+      const lon = (uCanvas - 0.5) * TWO_PI
+      dir.set(cosLat * Math.cos(lon), sinLat, cosLat * Math.sin(lon))
+
+      // Angular distance from the milky-way great circle (SAME basis as the
+      // point-based band/nebulae) via the plane's signed distance -> phi.
+      const phi = Math.asin(clamp(dir.dot(normal), -1, 1))
+      const bandFalloff = Math.exp(-(phi * phi) / (2 * 0.22 * 0.22))
+
+      // Layered star density: a mid-freq fbm clumps the band into drifts
+      // instead of a uniform gaussian sausage.
+      const clump = fbm(densityNoise, dir.x * 2.6, dir.y * 2.6, dir.z * 2.6, 4, 2.1, 0.5) * 0.5 + 0.5
+      let density = bandFalloff * lerp(0.55, 1.15, clump)
+
+      // Dust lanes: a SECOND, independent mid-freq fbm that CARVES dark
+      // filaments out of the band (negative space) instead of adding
+      // brightness — real Milky Way photos read this way: dark lanes
+      // threading a bright core, never erased to zero.
+      const dustN = fbm(dustNoise, dir.x * 4.2 + 11.3, dir.y * 4.2 - 5.1, dir.z * 4.2 + 2.7, 4, 2.15, 0.5)
+      const dustMask = 1 - smoothstep(0.08, 0.42, dustN) * 0.82
+      density = clamp(density * dustMask, 0, 1)
+
+      // Color grade: blue-white toward the dense core, warm amber toward
+      // the rim/off-band sky, per real galactic-core photography.
+      bandTint.copy(coreColor).lerp(rimColor, 1 - smoothstep(0.3, 1, density))
+      px.copy(voidColor).lerp(bandTint, smoothstep(0, 0.85, density))
+
+      // Fine pointlike star sprinkle — cheap hash, no extra noise calls.
+      // Denser/brighter inside the band than off it.
+      const starChance = lerp(0.0006, 0.006, density)
+      if (hashTexel(x, y, 1) > 1 - starChance) {
+        const b = lerp(0.5, 1.0, hashTexel(x, y, 2))
+        px.r = Math.min(1, px.r + b)
+        px.g = Math.min(1, px.g + b * 0.98)
+        px.b = Math.min(1, px.b + b * 0.94)
+      }
+
+      const idx = (row + x) * 4
+      data[idx] = Math.round(clamp(px.r, 0, 1) * 255)
+      data[idx + 1] = Math.round(clamp(px.g, 0, 1) * 255)
+      data[idx + 2] = Math.round(clamp(px.b, 0, 1) * 255)
+      data[idx + 3] = 255
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+
+  // A handful of soft, larger glow blobs for the brightest few stars, baked
+  // straight into the canvas via the 2D API (same radial-gradient technique
+  // makeRadialCanvasTexture uses for sprites elsewhere in this file — here
+  // it's painted directly instead of built as a separate texture/sprite).
+  // CanvasTexture data is byte-clamped to [0,1] — this can never itself
+  // cross the bloom threshold (ART.md 2.5), so no extra dimming is needed
+  // to stay inside the bloom budget.
+  const glowCount = 5 + Math.floor(rng() * 4) // 5-8
+  for (let i = 0; i < glowCount; i++) {
+    const gx = Math.floor(rng() * width)
+    const gy = Math.floor(rng() * height)
+    const r = lerp(10, 22, rng())
+    const warm = rng() < 0.4
+    const rgb = warm ? '255,224,180' : '255,255,255'
+    // Draw at gx and, near the u=0/1 seam, also at the wrapped-around copy
+    // so a glow straddling the equirect edge doesn't clip.
+    const offsets = [0]
+    if (gx - r < 0) offsets.push(width)
+    if (gx + r > width) offsets.push(-width)
+    for (const off of offsets) {
+      const g = ctx.createRadialGradient(gx + off, gy, 0, gx + off, gy, r)
+      g.addColorStop(0, `rgba(${rgb},0.9)`)
+      g.addColorStop(0.35, `rgba(${rgb},0.35)`)
+      g.addColorStop(1, `rgba(${rgb},0)`)
+      ctx.fillStyle = g
+      ctx.fillRect(gx + off - r, gy - r, r * 2, r * 2)
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
+
+  const bakeMs = performance.now() - t0
+  if (bakeMs > SKYBOX_BAKE_BUDGET_MS) {
+    console.warn('[planet] sky: baked skybox generation took ' + bakeMs.toFixed(0) + 'ms, over the ' + SKYBOX_BAKE_BUDGET_MS + 'ms budget')
+  }
+  return { texture: tex, bakeMs }
+}
+
+function getSkyboxTexture(seed) {
+  if (_skyboxCache && _skyboxCache.seed === seed) return _skyboxCache
+  const built = buildSkyboxTexture(seed)
+  _skyboxCache = { seed, texture: built.texture, bakeMs: built.bakeMs }
+  return _skyboxCache
+}
+
+function createSkybox(seed) {
+  const cached = getSkyboxTexture(seed)
+  const geo = new THREE.SphereGeometry(SKYBOX_RADIUS, 48, 32)
+  const mat = new THREE.MeshBasicMaterial({
+    map: cached.texture,
+    side: THREE.BackSide,
+    depthWrite: false,
+    depthTest: false,
+    fog: false,
+  })
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.renderOrder = -1000 // always drawn first — a true backdrop, independent of radius vs. the point-star shells
+  mesh.matrixAutoUpdate = false // static: never moves after creation
+  mesh.updateMatrix()
+  return { mesh, bakeMs: cached.bakeMs }
 }
 
 // ------------------------------------------------------------------ stars --
@@ -628,18 +865,65 @@ const stormClearUniforms = {
   uStormOn: { value: 0 },
 }
 
+// M-SKY cloud-shadows-on-terrain contract (architect-pinned): planet.js's
+// terrain-splat shader imports getCloudShadowUniforms() (lazily/guarded —
+// see planet.js) and samples the LOWER cloud deck's own alpha texture along
+// each fragment's world direction to darken the ground beneath it.
+//   - uCloudTex: the lower shell's own alphaMap (same texture that's
+//     actually rendered overhead — coverage/shape never drifts from what's
+//     visible in the sky).
+//   - uCloudMat: WORLD-direction -> LOWER-SHELL-LOCAL-direction rotation
+//     (Matrix3), rebuilt fresh every frame in update() from the shell's live
+//     quaternion — NEVER from .matrixWorld, which three.js only refreshes
+//     during the renderer's own matrix pass, AFTER this module's update()
+//     already ran for the frame (one frame of lag). A 3x3/4x4 matrix alone
+//     cannot express the FULL world-dir -> UV mapping (equirect projection
+//     is nonlinear — acos/atan2), so this carries only the linear (rotation)
+//     part; the consumer finishes the nonlinear step itself, with THIS EXACT
+//     formula (matches localDirToUV above / this file's own SphereGeometry
+//     convention): given localDir = normalize(uCloudMat * worldDir),
+//       theta = acos(localDir.y)
+//       phi   = atan(localDir.z, -localDir.x)      // wrap negative phi by +2*PI
+//       uv    = vec2(phi / TWO_PI, 1.0 - theta / PI)
+//   - uCloudShadowOn: the SAME 1.35R-2.4R camera-distance fade the cloud
+//     deck's own opacity uses (the raw fade, not the deck's floored
+//     opacity — see update()'s cloud-fade block) so ground shadows fade
+//     fully to 0 at ground level instead of lingering under a barely-visible
+//     wisp.
+// Module-level (like stormClearUniforms above), not per-createSky-instance:
+// this app only ever builds one sky, and planet.js imports the getter
+// directly rather than reaching through the createSky() instance.
+const cloudShadowUniforms = {
+  uCloudTex: { value: null },
+  uCloudMat: { value: new THREE.Matrix3() },
+  uCloudShadowOn: { value: 0 },
+}
+
+export function getCloudShadowUniforms() {
+  return cloudShadowUniforms
+}
+
+/** Applies BOTH cloud-shell shader extensions in one onBeforeCompile (a
+ * material only gets one, so anything touching this shader has to live
+ * here): the existing storm-moat clearing (untouched) plus the new M-SKY
+ * 2.5D sun shading. Returns this MATERIAL's own {uSunUV} uniform object —
+ * needed per-material, not shared, since the two shells rotate on
+ * independent axes/rates and so have different sun directions in their own
+ * local UV space at any given moment (see update()). */
 function applyStormClearing(mat) {
-  mat.customProgramCacheKey = () => 'cloud-storm-moat-v1'
+  const sunShadeUniforms = { uSunUV: { value: new THREE.Vector2(0, 0) } }
+  mat.customProgramCacheKey = () => 'cloud-storm-moat-sun-shade-v1'
   mat.onBeforeCompile = (shader) => {
     try {
       Object.assign(shader.uniforms, stormClearUniforms)
+      Object.assign(shader.uniforms, sunShadeUniforms)
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vCloudWorld;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCloudWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
       const frag = shader.fragmentShader
         .replace(
           '#include <common>',
-          '#include <common>\nuniform vec3 uStormDir;\nuniform float uStormOn;\nvarying vec3 vCloudWorld;'
+          '#include <common>\nuniform vec3 uStormDir;\nuniform float uStormOn;\nuniform vec2 uSunUV;\nvarying vec3 vCloudWorld;'
         )
         .replace(
           '#include <alphamap_fragment>',
@@ -651,14 +935,36 @@ function applyStormClearing(mat) {
             '  float clearT = smoothstep(0.85, 0.955, cosAng);',
             '  diffuseColor.a *= 1.0 - clearT * uStormOn;',
             '}',
+            '{',
+            '  // M-SKY 2.5D shading: a second alphaMap sample offset TOWARD the',
+            '  // sun (in this shell\'s own UV space, uSunUV - see update()) fakes',
+            '  // a bit of cloud thickness without a real raymarch. High density',
+            '  // both here AND toward the sun -> this fragment sits on the',
+            '  // shadowed base of a thicker mass; low density toward the sun but',
+            '  // cloud here -> a sun-facing rim, catches a thin highlight.',
+            '  float du = uSunUV.x - vAlphaMapUv.x;',
+            '  du -= floor(du + 0.5);', // shortest wrap around the circular U seam
+            '  vec2 toSun = vec2(du, uSunUV.y - vAlphaMapUv.y);',
+            '  float toSunLen = length(toSun);',
+            '  vec2 sunDirUv = toSunLen > 1e-5 ? toSun / toSunLen : vec2(1.0, 0.0);',
+            '  float ownDensity = texture2D(alphaMap, vAlphaMapUv).g;',
+            '  float sunSample = texture2D(alphaMap, vAlphaMapUv + sunDirUv * 0.018).g;',
+            '  float shadowT = smoothstep(0.18, 0.7, sunSample) * ownDensity;',
+            '  float edgeT = (1.0 - smoothstep(0.05, 0.4, sunSample)) * ownDensity;',
+            '  vec3 shadeTint = vec3(0.7255, 0.7686, 0.8314);', // #b9c4d4
+            '  diffuseColor.rgb *= mix(vec3(1.0), shadeTint, shadowT * 0.6);',
+            '  diffuseColor.rgb *= 1.0 + edgeT * 0.08;',
+            '  diffuseColor.rgb = min(diffuseColor.rgb, vec3(1.0));', // stay white-dominant, never glow (ART.md 2.5/8)
+            '}',
           ].join('\n')
         )
       if (frag === shader.fragmentShader) throw new Error('sky.js: cloud moat injection point not found')
       shader.fragmentShader = frag
     } catch (err) {
-      /* clouds simply ignore the storm on failure */
+      /* clouds simply ignore the storm/sun-shading on failure */
     }
   }
+  return sunShadeUniforms
 }
 
 function createClouds(seed) {
@@ -684,7 +990,9 @@ function createClouds(seed) {
     bandStrength: 0.28,
     bandPhase: rngFromString(seed + ':clouds-bands-lower')() * Math.PI * 2,
     edge: 0.07,
-    targetCoverage: 0.27,
+    // M-SKY coverage cut: 0.27 -> ~0.20 (ART.md band 15-25% total with the
+    // upper deck's 0.09 below).
+    targetCoverage: 0.2,
   })
   const lowerMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.075, 64, 32),
@@ -719,7 +1027,8 @@ function createClouds(seed) {
     bandStrength: 0.22,
     bandPhase: rngFromString(seed + ':clouds-bands-upper')() * Math.PI * 2,
     edge: 0.16,
-    targetCoverage: 0.13,
+    // M-SKY coverage cut: 0.13 -> ~0.09 (ART.md band 15-25% total).
+    targetCoverage: 0.09,
   })
   const upperMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.09, 64, 32),
@@ -734,8 +1043,8 @@ function createClouds(seed) {
     })
   )
 
-  applyStormClearing(lowerMesh.material)
-  applyStormClearing(upperMesh.material)
+  const lowerSunUniforms = applyStormClearing(lowerMesh.material)
+  const upperSunUniforms = applyStormClearing(upperMesh.material)
 
   const rng = rngFromString(seed + ':clouds-axis')
   const tiltedAxis = () => new THREE.Vector3(rng() - 0.5, 1.6, rng() - 0.5).normalize()
@@ -751,6 +1060,8 @@ function createClouds(seed) {
     upperAxis,
     lowerRate: 0.006,
     upperRate: -0.0035, // retrograde
+    lowerSunUniforms,
+    upperSunUniforms,
   }
 }
 

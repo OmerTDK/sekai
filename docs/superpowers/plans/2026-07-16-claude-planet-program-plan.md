@@ -142,7 +142,23 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
   commit within 60s; time-lapse replays full history ≤60s smoothly; fps ≥55.
 - **Est:** 7–9 builder-runs. 2 sessions.
 
-### M2.5 — Dragons + airships (pulled forward: joy has no dependency on the migration)
+### M-SKY — sky interim package (added 2026-07-17, user: "skybox/clouds/
+### hurricane feel cheap"; runs PARALLEL with M2.5 — disjoint files; the real
+### fix remains M5a/M5c, this is shell polish, not early flagships)
+- [ ] Baked starfield cubemap: procedural milky way with dust lanes + color
+      grading, generated once + cached (a genuine menu gap the user caught —
+      neither plan nor technique audit had the skybox)
+- [ ] 2.5D cloud shading: sample alphaMap toward the sun → lit tops, shaded
+      bases; applied to cloud shells AND the hurricane patch
+- [ ] Cloud shadows on terrain (sky exposes texture+rotation to the splat
+      shader via an architect-pinned contract)
+- [ ] Ambient coverage cut to ART.md's 15-25% target
+- [ ] Hurricane casts a soft moving shadow on the ocean beneath it
+- Carryovers queued for the NEXT wave (not this one): camera swoop/skim
+  implementation, surface-crispness pass, wonders, model-tier styling,
+  orbit label-soup fix.
+
+### M2.5 — Dragons + airships (IN PROGRESS 2026-07-17, parallel with M-SKY)
 - **Scope:** one resident dragon (lair on the tallest range, patrol flights,
   event appearances on milestones); airship dirigibles on great-circle
   routes between git-related settlements, steam trails, dock masts at
@@ -194,6 +210,22 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
      vignette-tune) sequenced AFTER the M-LD wave ships, one variable at a
      time. Motion blur = anti-rule. Outline/ink stylization = owner
      question, default SKIP. Fog stopgap killed (CHOICE-1 conflict).
+  6. Industry-technique research (2026-07-17, user ask) — adopted into slots:
+     **flow maps** (three's own Water2, coastal currents → M5b-or-sooner);
+     **stochastic hex-tiling** (kills splat repetition → rides M3 splat
+     port); **dithered LOD crossfade** (bayer16 ships in TSL → any LOD
+     fade, post-M4); **curl-noise particles** (TSL primitive → post-M4
+     plume upgrade); **Poisson-disk scattering** (CPU, anytime → flora/
+     placement quality); **clustered many-light night windows** (real
+     per-window lights → M4+ flagship-adjacent); **dragon neck/tail CCD IK**
+     (M2.5 polish); **snow/moss top-down coverage on props** + **vertex-AO
+     bake** (ride the crispness pass); **space-colonization rivers/roads**
+     (E1). Rejected with reasons: interior mapping (cottages have 1-2
+     windows — weak fit, tier-3 only maybe), WFC town layout (CONFLICTS
+     with sessions-ARE-placement invariant; paths only), billboard cloud
+     imposters (superseded by octahedral), parallax-corrected cubemaps
+     (single-probe world), crepuscular billboards (god-rays double-build).
+     Octahedral impostors + VAT crowds parked as scale insurance (E2/late).
 - **Exit:** ART.md approved + committed; one verdict recorded per packet;
   M3/M5 JIT plans MUST cite ART.md as binding art direction.
 - **Follow-on — the "surface crispness pass" (user asks 2026-07-17: blurry
@@ -277,9 +309,53 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
   E2 → E1's sampler).
 - **Est:** spike 1 run; full LOD (if needed) 8–12 runs.
 ### E3 (was M7a) — packaged .app (electron-builder, unsigned). **Est:** 2–3 runs.
-### E4 (was M8) — living world: ruins, migration caravans, seasons, volcano,
-  whales/fish/herds, bird scatter, ambient sound, poster export, auto-tour.
-  Per-feature JIT plans. **Est:** 8–10 runs.
+### M-WX — weather & life (added 2026-07-17 from the owner's "dreaming" list —
+### none of it was crazy; sequenced after M2.5/M-SKY land)
+- [ ] REAL birds: articulated low-poly models (CC0 or built) replacing the
+      day-one 2-triangle silhouettes; same flock logic
+- [ ] Material-distinction pass (the "clay/play-dough" fix): per-material-class
+      roughness/normal/micro-albedo on buildings & props — wood/stone/cloth/
+      metal each respond to light distinctly; stylized, NOT photoreal PBR
+      (S5 verdict stands); extends the terrain-only crispness pass
+- [ ] Sea ice: polar freeze mask on the ocean (matte white-blue, pressure
+      cracks, no swell, ragged noise edge); extent hooks into E4 seasons later
+- [ ] Precipitation: camera-local snowfall in cold zones, rain under wet
+      fronts; lightweight ambient weather-front state drifting across the world
+- [ ] Hurricane landfall → coastal flooding: temporary waterline rise + wet
+      ground darkening on low shores under a landfalling storm
+- [ ] Footprint decal trails behind workers/caravans in snow biomes (the
+      honest version of snow deformation)
+- [ ] Whales + dolphins pulled forward from E4 (second owner request):
+      breaches, spouts via the plume pool, coastal dolphin pods
+- Parked with reasons: true RT snow deformation and dynamic hydrological
+  floods (payoff-per-cost fails at miniature scale; revisit for a close-up mode)
+
+### E4 (was M8) — living world remainder: ruins, migration caravans, seasons,
+  volcano, fish schools, herds, bird scatter, ambient sound, poster export,
+  auto-tour. Per-feature JIT plans. **Est:** 6–8 runs.
+### E-SIM — world simulation ladder (added 2026-07-17; owner: raids, wars,
+### armies, "how far can we push world simulation" — roadmapped, not scheduled)
+- **THE COVENANT (inviolable):** structures are session history — simulation
+  may never destroy, move, or overwrite them. Conflict is additive: it
+  happens AROUND the record, leaves marks (decals, banners, ruins-props),
+  and always heals. Sim-owned props (carts, outposts, camps) are fair game.
+- **Rung 1 — skirmish theater (cosmetic):** raiding parties march from orc
+  settlements (tmp-dir projects are canonically the raider faction) toward
+  rich ones; defenders muster; a field battle plays out with formation
+  movement, clash animations, torches at night; outcome = banners + scorch
+  decals + a "raid repelled" event in the feed. Fully scripted, seeded.
+- **Rung 2 — systemic layer:** drivers from REAL data — git merge conflicts
+  between related projects = border skirmishes; airship routes carry
+  "supplies" that raids can intercept (ties into the M2.5 route system);
+  settlement prosperity (session activity) sets raid attractiveness;
+  territory/influence shading on the terrain between rival clusters.
+- **Rung 3 — deep sim:** persistent faction standing, supply economy over
+  the route graph, army strength from historical session counts, sieges
+  (surround, never destroy), peace treaties when projects merge branches.
+  VAT GPU crowds (parked technique) is the enabler for army scale.
+- Sequencing: rung 1 is a fun standalone batch any time after M-WX; rungs
+  2-3 gated on appetite after living with rung 1.
+
 ### E5 (was M7b) — SQLite index + FSEvents watcher. Parked indefinitely: it
   reverses the no-database principle to fix a 4s poll nobody minds. Revisit
   only if cold-start or history-analytics pain becomes real.

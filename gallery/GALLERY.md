@@ -41,3 +41,45 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
 
 - `screenshot-…-38/39/41.jpg` — **the fjord world arrives**: M-LD terrain B+C+D + hybrid water live (39 = the fjord-and-coast-glow money shot).
 - `screenshot-…-42.jpg` — new Aemunis from orbit, all 250 buildings on the GLTF asset path.
+- `m25-airships-01-cruising.jpg` — M2.5 airships verify: a dirigible cruising
+  the `/Users/omertdk/Cloover/*` trade-cluster route at altitude, brass rib
+  rings + gondola visible against daylight cloud deck.
+- `m25-airships-02-moored.jpg` — same ship moments later, moored nose-first
+  at its dock mast (altitude locked to `groundR + MAST_HEIGHT` exactly) next
+  to Clooverdbtfolorien's forge glow.
+- `m25-dragon-01-perched.jpg` — M2.5 dragon verify: the resident dragon
+  perched at its lair (tallest-peak lattice scan landed it on a polar
+  massif this seed), cave-mouth rock arc + brass hoard glints visible at
+  its feet, wings folded via the Flying clip's own narrowest-span frame
+  (the rig's raw bind pose turned out fully spread, not folded — worth
+  flagging for anyone reusing this asset).
+- `m25-dragon-02-banking.jpg` — same dragon moments later, mid-patrol,
+  banked hard into a turn over icy terrain — wings, tail and tucked legs
+  all read clearly against the sky; a settlement's speech bubble is
+  visible below for scale.
+- `m-sky-01-starfield-night-orbit.jpg` / `m-sky-02-starfield-zoom-dustlanes.png`
+  — M-SKY baked skybox verify: night-side orbit view showing the new
+  procedurally-baked milky way (2048x1024 equirect, 553.7ms bake, cached
+  per-seed) — the zoom crop shows the dust-lane dark filaments and
+  blue-white-core-to-warm-rim grading over the amber galactic band; the
+  old point-based starfield rides on top unchanged for parallax twinkle.
+- `m-sky-03-sunlit-clouds-shaded.jpg` — M-SKY 2.5D cloud shading + coverage
+  cut: ambient deck at its new ~20%/~9% (lower/upper) calibrated coverage,
+  sun-relative base-darkening/edge-highlight visible but deliberately
+  subtle (white-dominant, no glow, per ART.md 2.5/8).
+- `m-sky-04-hurricane-oblique.jpg` / `m-sky-05-hurricane-shadow-zoom.png` —
+  M-SKY hurricane 2.5D shading + ocean shadow: oblique view of the mature
+  storm (strength 1.0) showing sun-relative shading on the spiral bands;
+  the ocean-shadow patch mesh (r=1.001, opacity 0.22, offset away from the
+  sun, confirmed live via direct mesh inspection: visible=true, correct
+  color/position/renderOrder) is mostly self-occluded under the storm's
+  own dense core from this angle — physically expected, most visible at
+  the cloud edges/gaps.
+- `m-sky-06/07-terrain-cloud-shadow-before/after.jpg` — M-SKY cloud
+  shadows on terrain: same fixed camera position, 90 sim-seconds apart
+  (verify.seekTime) — the lower cloud deck visibly drifts and the darker
+  patches on the terrain beneath track the same motion, confirming the
+  getCloudShadowUniforms() contract (sky.js -> planet.js) is live, not
+  static. `m-sky-08-terrain-cloud-shadow-zoom.png` is a close crop of the
+  after-state showing a shadow band right at a cloud/coast boundary.
+- `screenshot-…-64.jpg` — **the galaxy arrives**: PR #4 wave complete — baked milky way, shaded clouds, dragon + airships live.
