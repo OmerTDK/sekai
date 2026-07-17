@@ -2,8 +2,12 @@
 // wind-swept grass blades, a globally-scattered forest, and scattered rocks.
 // Everything is derived from `seed` plus the planet's own deterministic
 // biome fields, so the same seed + camera path always regrows the same
-// world. Three draw calls total -- one InstancedMesh each for grass, trees
-// and rocks.
+// world. Four draw calls total -- one InstancedMesh each for grass, trees,
+// rocks, and a shared tree/rock ground-contact-shadow blob layer. Trees and
+// rocks scatter via a seeded rejection stream upgraded to Poisson-disk
+// quality (see createSpacingGrid below): a candidate within a minimum
+// angular distance of an already-accepted point of the SAME layer is
+// rejected too, so growth stays dense without clumping.
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { rngFromString, clamp, lerp, smoothstep } from './util.js'
@@ -40,6 +44,7 @@ const TREE_MIN_LAND_T = 0.05
 const TREE_MAX_LAND_T = 0.6
 const TREE_MAX_SLOPE = 0.4
 const TREE_MAX_POLAR = 0.3
+const TREE_MIN_SPACING = 0.006 // rad-ish min gap between accepted trees (Poisson-disk quality) -- forests stay dense but non-clumping
 
 const COLOR_TRUNK = 0x6b4a32
 const COLOR_CANOPY_DARK = 0x4a7f45
@@ -53,8 +58,18 @@ const ROCK_MAX_SCALE = 0.004
 const ROCK_MIN_LAND_T = 0.65
 const ROCK_MIN_SLOPE = 0.5
 const ROCK_MAX_POLAR = 0.6
+const ROCK_MIN_SPACING = 0.01 // rad-ish min gap between accepted rocks (Poisson-disk quality)
 
 const COLOR_ROCK = 0x7d766a
+
+// -- tree/rock contact blobs (soft ground-contact shadow; ONE shared
+// InstancedMesh for both layers -- 18k+6k per-instance sprites would be a
+// draw-call disaster, this is one draw call regardless of instance count) --
+const BLOB_CAPACITY = TREE_CAPACITY + ROCK_CAPACITY
+const TREE_BLOB_RADIUS = 0.0016
+const ROCK_BLOB_RADIUS_MULT = 1.3 // blob reads as a soft shadow just past the rock's own silhouette
+const BLOB_NORMAL_OFFSET = 0.0002 // lifted off the terrain along the normal to dodge z-fighting
+const COLOR_BLOB = 0x000000
 
 // Small permanent props (trees/rocks) fade out beyond this -- they're tiny
 // from space anyway, so a hard visibility toggle (no opacity fade) is fine.
@@ -78,6 +93,7 @@ const _basis = new THREE.Matrix4()
 const _quat = new THREE.Quaternion()
 const _mat4 = new THREE.Matrix4()
 const _paintColor = new THREE.Color()
+const _blobDir = new THREE.Vector3()
 
 /**
  * Composes a "planted" instance matrix into `out`: origin lifted to radius
@@ -128,6 +144,66 @@ function paintFlatColor(geo, hex) {
     arr[i * 3 + 2] = _paintColor.b
   }
   geo.setAttribute('color', new THREE.BufferAttribute(arr, 3))
+}
+
+// ---------------------------------------------------------------------------
+// Poisson-disk-quality spacing grid (trees + rocks; grass is disabled and
+// out of scope). Layered on TOP of the existing seeded rejection stream: a
+// candidate that already passed every biome check is additionally rejected
+// if it falls within `minDist` of an ACCEPTED point of the same layer.
+// Accepted points are grid-hashed by quantized direction (cell size ==
+// minDist) so a candidate's neighbor check only ever visits the 3x3x3 block
+// of cells around it -- O(1) average, never the O(n^2) of scanning every
+// prior accept. That 3x3x3 neighborhood is exact, not approximate: two
+// points whose cell indices differ by 2+ on any axis are already more than
+// `minDist` apart along that axis alone, so nothing outside the block could
+// ever be a neighbor. Squared chord (Euclidean) distance stands in for true
+// great-circle angular distance -- at these minDist scales (0.006-0.01 rad)
+// chord and arc length agree to within ~1e-8 relative error, so no acos()
+// is needed. Each builder constructs its own grid from scratch (no shared
+// module state across trees/rocks/calls), so the result stays a pure
+// function of the candidate stream: same seed -> same accept/reject
+// sequence -> same final set, every time.
+// ---------------------------------------------------------------------------
+function createSpacingGrid(minDist) {
+  const invCell = 1 / minDist
+  const minDistSq = minDist * minDist
+  const cells = new Map()
+  const cellKey = (ix, iy, iz) => ix + '_' + iy + '_' + iz
+
+  return {
+    /** True if some already-accepted point sits within minDist of (x, y, z). */
+    hasNeighbor(x, y, z) {
+      const ix = Math.floor(x * invCell)
+      const iy = Math.floor(y * invCell)
+      const iz = Math.floor(z * invCell)
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            const bucket = cells.get(cellKey(ix + dx, iy + dy, iz + dz))
+            if (!bucket) continue
+            for (let i = 0; i < bucket.length; i += 3) {
+              const ddx = bucket[i] - x
+              const ddy = bucket[i + 1] - y
+              const ddz = bucket[i + 2] - z
+              if (ddx * ddx + ddy * ddy + ddz * ddz < minDistSq) return true
+            }
+          }
+        }
+      }
+      return false
+    },
+    /** Records an accepted point so later candidates are checked against it. */
+    insert(x, y, z) {
+      const k = cellKey(Math.floor(x * invCell), Math.floor(y * invCell), Math.floor(z * invCell))
+      let bucket = cells.get(k)
+      if (!bucket) {
+        bucket = []
+        cells.set(k, bucket)
+      }
+      bucket.push(x, y, z)
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -182,15 +258,17 @@ export function createFlora(planet, camera, seed) {
   const grass = GRASS_ENABLED ? buildGrass(planet, camera, seed) : null
   const trees = buildTrees(planet, camera, seed)
   const rocks = buildRocks(planet, camera, seed)
+  const blobs = buildContactBlobs(trees, rocks, camera)
 
   const group = new THREE.Group()
   if (grass) group.add(grass.mesh)
-  group.add(trees.mesh, rocks.mesh)
+  group.add(trees.mesh, rocks.mesh, blobs.mesh)
 
   function update(dt) {
     if (grass) grass.update(dt)
     trees.update(dt)
     rocks.update(dt)
+    blobs.update(dt)
   }
 
   return { group, update }
@@ -496,6 +574,15 @@ function buildTrees(planet, camera, seed) {
   const rng = rngFromString(seed + ':trees')
   const dir = new THREE.Vector3()
   const biome = {}
+  const spacing = createSpacingGrid(TREE_MIN_SPACING)
+  // Contact-blob data, collected in lockstep with accepted trees so the
+  // blob layer reuses these exact directions/heights -- never recomputed,
+  // never drifts from where the tree itself actually landed.
+  const blobDirX = new Float32Array(TREE_CAPACITY)
+  const blobDirY = new Float32Array(TREE_CAPACITY)
+  const blobDirZ = new Float32Array(TREE_CAPACITY)
+  const blobGroundH = new Float32Array(TREE_CAPACITY)
+  const blobRadius = new Float32Array(TREE_CAPACITY).fill(TREE_BLOB_RADIUS)
   let count = 0
   for (let tries = 0; tries < TREE_TRIES_CAP && count < TREE_CAPACITY; tries++) {
     randUnit3(rng, dir)
@@ -505,13 +592,23 @@ function buildTrees(planet, camera, seed) {
     if (biome.landT < TREE_MIN_LAND_T || biome.landT > TREE_MAX_LAND_T) continue
     if (biome.slope >= TREE_MAX_SLOPE) continue
     if (biome.polar >= TREE_MAX_POLAR) continue
+    // Poisson-disk-quality spacing: reject candidates too close to an
+    // already-accepted tree of this same layer (grid-hash lookup, O(1)).
+    if (spacing.hasNeighbor(dir.x, dir.y, dir.z)) continue
 
     const yaw = rng() * Math.PI * 2
     const scale = TREE_HEIGHT * (0.7 + rng() * 0.6) // +/-30%
-    const h = planet.sampleHeight(dir) - 0.0004 // sink the base slightly so it never floats
+    const groundH = planet.sampleHeight(dir)
+    const h = groundH - 0.0004 // sink the base slightly so it never floats
     plantedMatrix(_mat4, dir, h, yaw, 0, 0, scale, scale, scale)
     treeMesh.setMatrixAt(count, _mat4)
     phaseAttr.array[count] = rng() * Math.PI * 2
+
+    spacing.insert(dir.x, dir.y, dir.z)
+    blobDirX[count] = dir.x
+    blobDirY[count] = dir.y
+    blobDirZ[count] = dir.z
+    blobGroundH[count] = groundH
     count++
   }
   treeMesh.count = count
@@ -528,7 +625,11 @@ function buildTrees(planet, camera, seed) {
     if (treeUniforms) treeUniforms.uTime.value = elapsed
   }
 
-  return { mesh: treeMesh, update }
+  return {
+    mesh: treeMesh,
+    update,
+    blobData: { count, dirX: blobDirX, dirY: blobDirY, dirZ: blobDirZ, groundH: blobGroundH, radius: blobRadius },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -558,6 +659,14 @@ function buildRocks(planet, camera, seed) {
   const dir = new THREE.Vector3()
   const biome = {}
   const instColor = new THREE.Color()
+  const spacing = createSpacingGrid(ROCK_MIN_SPACING)
+  // Contact-blob data, collected in lockstep with accepted rocks (see the
+  // matching comment in buildTrees above).
+  const blobDirX = new Float32Array(ROCK_CAPACITY)
+  const blobDirY = new Float32Array(ROCK_CAPACITY)
+  const blobDirZ = new Float32Array(ROCK_CAPACITY)
+  const blobGroundH = new Float32Array(ROCK_CAPACITY)
+  const blobRadius = new Float32Array(ROCK_CAPACITY)
   let count = 0
   for (let tries = 0; tries < ROCK_TRIES_CAP && count < ROCK_CAPACITY; tries++) {
     randUnit3(rng, dir)
@@ -565,6 +674,9 @@ function buildRocks(planet, camera, seed) {
     planet.biomeAt(dir, biome)
     if (biome.slope <= ROCK_MIN_SLOPE && biome.landT <= ROCK_MIN_LAND_T) continue // needs slope>0.5 OR landT>0.65
     if (biome.polar >= ROCK_MAX_POLAR) continue
+    // Poisson-disk-quality spacing: reject candidates too close to an
+    // already-accepted rock of this same layer (grid-hash lookup, O(1)).
+    if (spacing.hasNeighbor(dir.x, dir.y, dir.z)) continue
 
     const yaw = rng() * Math.PI * 2
     const tiltMag = rng() * 0.3 // rocks settle at odd angles more readily than trees
@@ -582,6 +694,13 @@ function buildRocks(planet, camera, seed) {
     const jitter = 0.85 + rng() * 0.3
     instColor.setRGB(jitter, jitter * (0.97 + rng() * 0.06), jitter * (0.97 + rng() * 0.06))
     rockMesh.setColorAt(count, instColor)
+
+    spacing.insert(dir.x, dir.y, dir.z)
+    blobDirX[count] = dir.x
+    blobDirY[count] = dir.y
+    blobDirZ[count] = dir.z
+    blobGroundH[count] = h
+    blobRadius[count] = base * ROCK_BLOB_RADIUS_MULT
     count++
   }
   rockMesh.count = count
@@ -593,5 +712,65 @@ function buildRocks(planet, camera, seed) {
     rockMesh.visible = camera.position.length() < PROP_VISIBLE_DIST
   }
 
-  return { mesh: rockMesh, update }
+  return {
+    mesh: rockMesh,
+    update,
+    blobData: { count, dirX: blobDirX, dirY: blobDirY, dirZ: blobDirZ, groundH: blobGroundH, radius: blobRadius },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tree/rock contact blobs -- a soft dark ground-contact shadow under every
+// tree and large rock. NOT per-instance sprites (18k+6k sprites would be a
+// draw-call disaster); instead ONE shared InstancedMesh of tiny flat circle
+// geometry, reusing the exact directions/heights buildTrees/buildRocks
+// already collected above (see each function's blobData return field) so
+// placement can never drift from where the tree/rock itself landed.
+// ---------------------------------------------------------------------------
+export function buildBlobGeometry() {
+  const geo = new THREE.CircleGeometry(1, 8) // unit radius (per-instance scaled); 8-segment, low-poly
+  geo.rotateX(-Math.PI / 2) // lie flat: default +Z-facing circle -> +Y-facing (matches plantedMatrix's "local +Y = surface normal" basis)
+  return geo
+}
+
+function buildContactBlobs(treesResult, rocksResult, camera) {
+  const blobGeo = buildBlobGeometry()
+
+  const blobMat = new THREE.MeshBasicMaterial({
+    color: COLOR_BLOB,
+    transparent: true,
+    opacity: 0.28,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  })
+
+  const blobMesh = new THREE.InstancedMesh(blobGeo, blobMat, BLOB_CAPACITY)
+  blobMesh.count = 0
+  blobMesh.visible = false
+
+  let count = 0
+  for (const src of [treesResult.blobData, rocksResult.blobData]) {
+    for (let i = 0; i < src.count; i++) {
+      _blobDir.set(src.dirX[i], src.dirY[i], src.dirZ[i])
+      const r = src.groundH[i] + BLOB_NORMAL_OFFSET
+      const br = src.radius[i]
+      // yaw is irrelevant for a rotationally-symmetric circle; tilt stays 0
+      // so every blob lies flat on its own local tangent plane regardless
+      // of whether the rock above it settled at an angle.
+      plantedMatrix(_mat4, _blobDir, r, 0, 0, 0, br, 1, br)
+      blobMesh.setMatrixAt(count, _mat4)
+      count++
+    }
+  }
+  blobMesh.count = count
+  blobMesh.instanceMatrix.needsUpdate = true
+  if (count > 0) blobMesh.computeBoundingSphere()
+
+  function update() {
+    blobMesh.visible = camera.position.length() < PROP_VISIBLE_DIST
+  }
+
+  return { mesh: blobMesh, update }
 }

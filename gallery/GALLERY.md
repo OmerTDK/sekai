@@ -83,3 +83,106 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
   static. `m-sky-08-terrain-cloud-shadow-zoom.png` is a close crop of the
   after-state showing a shadow band right at a cloud/coast boundary.
 - `screenshot-…-64.jpg` — **the galaxy arrives**: PR #4 wave complete — baked milky way, shaded clouds, dragon + airships live.
+- `crispness-01-normalmap-ground-ON.jpg` / `crispness-02-normalmap-ground-OFF.jpg`
+  — M-POLISH surface-crispness pass, detail normal maps: `ground-sunlit`
+  viewpoint, identical camera position (position vector matched to float
+  precision across both captures — confirmed via a temporary `uNormalOn`
+  live-uniform toggle, removed after use), triplanar NormalGL perturbation
+  ON vs OFF. Deliberately subtle at a glance — strength 0.55 per ART.md's
+  "silhouettes over noise" — the shading gains a little more micro-variation
+  with the maps on; no silhouette or hue change either way.
+- `crispness-03-macro-midcoast2R-ON.jpg` / `crispness-04-macro-midcoast2R-OFF.jpg`
+  — M-POLISH surface-crispness pass, mid-zoom macro layer: camera pinned to
+  exactly 2R along the `mid-coast` viewpoint's own direction (inside the
+  layer's 1.5R-3R full-strength band), toggled via a temporary `uMacroOn`
+  uniform (added for this comparison, removed from the shipped code
+  afterward). `crispness-05-macro-zoom-ON.png` / `crispness-06-macro-zoom-OFF.png`
+  are a tighter crop of the same pair (same region, same two states) — the
+  broad TILE_MACRO=7 tint breaking up the flat interpolated-vertex-color
+  "gradient" look reads more clearly at this crop size, especially over the
+  desert/grass transition on the right.
+- `flora-poisson-01-before-clumping-wide.jpg` / `flora-poisson-02-after-spread-wide.jpg`
+  — M-POLISH flora pass (`flora.js`), Poisson-disk-quality scattering:
+  identical camera position/viewpoint (same forest patch, an isolated
+  git-worktree build used to isolate this comparison from other builders'
+  concurrent in-flight changes on the shared checkout) — before is the
+  original pure-rejection stream (12365 trees), after is the same seeded
+  stream with a minimum-spacing rejection layered on top via a grid-hashed
+  accepted-point lookup (8069 trees, min spacing 0.006 rad, independently
+  verified by a brute-force O(n^2) nearest-neighbor check over the actual
+  output). The tight clumps + bare gaps in "before" (top-left and
+  top-right tree bunches) give way to a more even, breathing-room spread
+  in "after" at comparable overall density. Rocks stayed capacity-bound at
+  6000/6000 in both (spacing = 0.01 rad had headroom under the existing
+  tries budget on this seed).
+- `flora-poisson-03-before-close.jpg` / `flora-poisson-04-after-close-blobs.jpg`
+  — same pass, close-up on grounded trees: "after" shows the new soft dark
+  contact-shadow blobs (one shared InstancedMesh across both trees' and
+  rocks' footprints — 14069 instances, ONE draw call; MeshBasicMaterial
+  black, opacity 0.28, depthWrite off, polygonOffset, planted +0.0002 along
+  the surface normal to dodge z-fighting) grounding each tree/rock instead
+  of them looking like they're floating on the terrain.
+- `m-wx-material-01-before-clay.jpg` / `m-wx-material-02-after-distinct.jpg` —
+  M-WX material-distinction pass (`assets.js`/`buildings.js`/new `env.js`),
+  the "clay/play-dough" fix: identical camera position/target/lookAt
+  (float-matched, hardcoded and reused across both captures) on the same
+  Omertdkdeep dwarf forge cluster, sunlit (seekTime-advanced to a shared
+  sun-alignment dot ~0.25 in both), same live speech-bubble labels confirming
+  the same deterministic world moment. Before = the old 2-BatchedMesh
+  (matte+brass) treatment, everything sharing one flat roughness/color skin.
+  After = 4 BatchedMeshes (wood/stone+thatch/cloth+banner/brass), each its
+  own roughness+metalness+envMapIntensity+micro-albedo — the roof reads
+  distinctly reddish-maroon, walls stone-gray with speckle, wood trim warm
+  tan, brass bolt-ons catching a directional highlight from env.js's
+  sky-tinted PMREM capture instead of the flat ambient-only look. Captured
+  via a scoped `git stash push -- src/assets.js src/buildings.js` / `stash
+  pop` round-trip (not a full worktree — env.js and buildings.js's
+  non-material exports aren't part of the comparison) so the concurrent
+  builders' in-flight world.js/flora.js/planet.js changes on the shared
+  checkout stayed untouched throughout.
+- `m-polish-camera-1-orbit-start.jpg` / `m-polish-camera-2-swoop-fov-peak.jpg`
+  / `m-polish-camera-3-swoop-descending.jpg` /
+  `m-polish-camera-4-arrival-tmpgrot.jpg` — M-POLISH camera-feel pass
+  (`src/cameraFeel.js`, new), the swoop verdict (ART.md §7) implemented and
+  driven live: `flyTo(Tmpgrot.anchorDir, 1.523)` from the default orbit
+  (163.5° away — near-antipodal, duration ≈6.1s per the
+  `lerp(2.2s,6.5s,angle/π)` formula), four checkpoints through the same
+  flight (manually ticked via a temporary cameraFeel instance since the
+  verify tab was backgrounded — the task's own "drive updates manually if
+  tab hidden" path). Shot 1 near the start (FOV 45.1°, barely underway);
+  shot 2 at the exact temporal midpoint (FOV 52.0° — the `sin(πt)` envelope's
+  exact peak, camera visibly arced off the straight chord and much closer to
+  the surface than a linear interpolation would put it); shot 3 descending
+  (FOV 48.7°, easing back down); shot 4 at arrival (`isFlying()`=false, FOV
+  exactly 45.0000, camera radius exactly 1.5227 — the commanded arriveDist,
+  landed square on Tmpgrot's own buildings). Cancel-on-pointerdown (position
+  freezes exactly where interrupted, FOV eases back to exactly 45 over its
+  own short recovery timer) verified separately via direct isFlying()/fov
+  assertions, not screenshotted.
+- `m-polish-declutter-before-orbit.jpg` / `m-polish-declutter-after-orbit.jpg`
+  — M-POLISH orbit label-declutter fix (`src/world.js`, the ART.md §7
+  flagged label-soup defect): same camera position (default orbit, 3.384R),
+  same live world state. Before = every settlement's label sprite forced to
+  opacity 1 (simulating the pre-fix unconditional-visible behavior); after =
+  the live declutter rule actually running — top 8 settlements by (agents
+  desc, structures desc) plus anything within 0.25 rad of screen center,
+  eased toward opacity 0/1 (rate 4/s) rather than popped. Verified
+  quantitatively, not just visually: 26/26 labels at opacity 1 before, 16/26
+  after (8 by rank + 8 more inside the screen-center cone at this particular
+  view angle — confirmed by directly reading `labelWantVisible` +
+  `material.opacity` off every settlement's own record).
+- `m-polish-blob-with.png` / `m-polish-blob-without.png` — M-POLISH agent
+  contact-shadow blobs (`src/world.js`, the technique audit's "blob contact
+  shadows" slot / the "grounded dwarf" fix): identical camera position, one
+  agent's own blob mesh toggled visible/hidden between the two captures
+  (nothing else changed) — the soft dark ellipse extending past the dwarf's
+  feet in "with" is entirely gone in "without", leaving only the character's
+  own tight self-shadow. `m-polish-blob-context.jpg` is the wider same-angle
+  shot the crop was taken from, for scene context (rocks/coastline visible).
+  Confirmed programmatically too: the blob mesh's scale reads exactly
+  `[0.004, 0.00248, 1]` (`BLOB_WIDTH` × `BLOB_WIDTH·BLOB_DEPTH_RATIO`),
+  tracking each agent's true ground position (`dir·groundR`) rather than
+  their walk-bob/foot-lift offset — confirmed by direct position diffing
+  against the paired agent's own visual group.
+
+

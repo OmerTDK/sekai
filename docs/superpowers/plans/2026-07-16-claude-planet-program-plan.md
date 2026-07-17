@@ -36,6 +36,16 @@ material port on the WebGL bridge → WebGPURenderer flip → visual flagships.
   self-merge. No AI attribution anywhere in commits or PRs (standing user
   rule). Revert protocol: `git revert <sha>` then re-run that milestone's
   JIT plan — commits stay fine-grained to keep this cheap.
+- **WORKTREE RULE (user, 2026-07-17: "always work in proper git worktrees"):**
+  the main checkout `~/claude-planet` stays parked on `main` forever — it is
+  what the user's app and :5173 serve (stable, merged). Every wave works in
+  `git worktree add ~/.config/superpowers/worktrees/claude-planet/<branch>`
+  with its own `npm install`, its own dev-server port for verification, and
+  a green baseline test before builders start; builders receive the worktree
+  absolute path. Merge → main checkout pulls → worktree removed. Branch
+  switching in the main checkout is banned (it swaps the app under the live
+  server — the failure that motivated this rule). The m-polish wave
+  (2026-07-17) was the last grandfathered in-place wave.
 - **CI (M0 deliverable):** GitHub Action on PR: `node --check` all src/server
   files + `npm test` + `npm run build`. Merge blocked on red.
 - **Verification is code, not labor (M0 deliverable, the "verify kit"):**
@@ -154,7 +164,7 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
       shader via an architect-pinned contract)
 - [ ] Ambient coverage cut to ART.md's 15-25% target
 - [ ] Hurricane casts a soft moving shadow on the ocean beneath it
-- Carryovers queued for the NEXT wave (not this one): camera swoop/skim
+- IN PROGRESS 2026-07-17 (PR #5): camera swoop/skim
   implementation, surface-crispness pass, wonders, model-tier styling,
   orbit label-soup fix.
 
