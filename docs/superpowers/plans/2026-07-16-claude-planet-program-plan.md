@@ -174,10 +174,22 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
      (isLand changes at coasts — accepted, pre-1.0 world). Mesa (E) rejected
      as underdelivering. Implementation ships in the single M-LD wave after
      the water + camera verdicts, so the look upgrades land coherently.
-  3. Water treatment comparison — 3 variants → owner verdict.
-  4. Camera-feel prototypes — 2-3 near-surface behaviors captured as GIFs
-     (terrain-following floor, zoom curve + FOV shift, cinematic visit
-     swoop) → owner verdict.
+  3. Water — VERDICT (Omer, 2026-07-17): **hybrid 2+3, stylized-leaning** —
+     graded-fresnel depth base (sapphire→turquoise, coast glow band) with
+     posterized stylized band accents at shorelines; owner "really liked the
+     stylized look" — err graphic when tuning. Min-elevation camera clamp
+     near water adopted (spike lesson).
+  4. Camera — VERDICT (Omer, 2026-07-17): **swoop for visits + skim near
+     ground** (parameters as measured in the GIF packet: easeInOutCubic,
+     arc 0.35·sin(πt), FOV 45→52→45; skim floor sampleHeight+0.008,
+     smoothing gain 0.12, roll 0.18 rad).
+  5. Technique audit (2026-07-17) — adopted top-5: banner sway (rides M3
+     tree-sway PR), blob contact shadows, orbit tilt-shift DoF, path +
+     farmland decals, night light-pools (M2/M-LD wave, additive-safe).
+     Tone-touching items (near-camera shadow map, SSAO, LUT grades,
+     vignette-tune) sequenced AFTER the M-LD wave ships, one variable at a
+     time. Motion blur = anti-rule. Outline/ink stylization = owner
+     question, default SKIP. Fog stopgap killed (CHOICE-1 conflict).
 - **Exit:** ART.md approved + committed; one verdict recorded per packet;
   M3/M5 JIT plans MUST cite ART.md as binding art direction.
 - **Follow-on — the "surface crispness pass" (user asks 2026-07-17: blurry
