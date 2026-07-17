@@ -9,6 +9,7 @@ import { createSky } from './sky.js'
 import { createWorld } from './world.js'
 import { createAirships } from './airships.js'
 import { createBirds } from './birds.js'
+import { createCameraFeel } from './cameraFeel.js'
 import { createDragon } from './dragon.js'
 import { createFlora } from './flora.js'
 import { createEvents } from './events.js'
@@ -36,7 +37,18 @@ scene.add(planet.group)
 const sky = createSky(SEED)
 scene.add(sky.group)
 
-const world = createWorld(planet, camera, renderer.domElement, renderer)
+// Controls exist before the world so cameraFeel can be threaded into
+// createWorld's click-to-visit path.
+const controls = new OrbitControls(camera, renderer.domElement)
+controls.enableDamping = true
+controls.dampingFactor = 0.07
+controls.enablePan = false
+controls.minDistance = 1.06
+controls.maxDistance = 9
+
+const cameraFeel = createCameraFeel(planet, camera, controls)
+
+const world = createWorld(planet, camera, renderer.domElement, renderer, cameraFeel)
 scene.add(world.group)
 
 const birds = createBirds(SEED)
@@ -77,13 +89,6 @@ composer.addPass(new RenderPass(scene, camera))
 composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.3, 0.7, 1.0))
 composer.addPass(new OutputPass())
 
-const controls = new OrbitControls(camera, renderer.domElement)
-controls.enableDamping = true
-controls.dampingFactor = 0.07
-controls.enablePan = false
-controls.minDistance = 1.06
-controls.maxDistance = 9
-
 document.querySelector('#title .planet-name').textContent = fantasyName(SEED)
 const statsEl = document.getElementById('stats')
 
@@ -109,7 +114,7 @@ const ui = createUI(world, {
   },
 })
 
-window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, dragon, airships, ui, renderer, composer, controls }
+window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, dragon, airships, cameraFeel, ui, renderer, composer, controls }
 window.__planet.verify = createVerifyKit({ scene, camera, composer, renderer, controls, planet, sky, world, birds, flora, wind, storms })
 
 const clock = new THREE.Clock()
@@ -137,6 +142,7 @@ renderer.setAnimationLoop(() => {
   dragon.update(dt, sky.getSunDir(sunDirScratch))
   airships.update(dt)
   ui.update(dt)
+  cameraFeel.update(dt)
   controls.update()
 
   hudTimer -= dt

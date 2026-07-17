@@ -5,10 +5,13 @@
 // the identical village layout, then a 4s poll layers live activity on top.
 //
 // Structure/person geometry lives in buildings.js, placement search + surface
-// math lives in placement.js, and canvas label sprites live in labels.js —
+// math lives in placement.js, canvas label sprites live in labels.js, and
+// the camera swoop/skim feel lives in cameraFeel.js (M-LD camera verdict) —
 // this module is the orchestration layer: settlement/structure/agent
 // records, ingest/polling, the per-frame update loop, click raycasting, the
-// camera tween, city lights, and the hammer-spark particle pool.
+// camera flight (delegated to cameraFeel when wired in, with a small
+// built-in tween as a fallback), city lights, agent contact-shadow blobs,
+// and the hammer-spark particle pool.
 import * as THREE from 'three'
 import { hash01, rngFromString, clamp, lerp, smoothstep } from './util.js'
 import {
@@ -66,7 +69,27 @@ const BOB_IDLE = PERSON_HEIGHT * 0.05
 const FOOT_LIFT = PERSON_HEIGHT * 0.05
 
 const CLICK_MOVE_THRESHOLD = 6 // px
-const TWEEN_DURATION = 1.1 // seconds
+const TWEEN_DURATION = 1.1 // seconds -- fallback-tween duration, used only when no cameraFeel is wired in
+
+// Orbit label declutter (ART.md §7's flagged label-soup defect): above this
+// camera radial distance, only a handful of settlement labels stay targeted
+// at full opacity -- the rest ease toward invisible instead of piling into
+// unreadable text soup. Below it, every settlement label is targeted at
+// full opacity, same as before this task.
+const SETTLEMENT_DECLUTTER_DIST = 2.0 // R
+const SETTLEMENT_DECLUTTER_TOP_N = 8 // ranked by (agents desc, structures desc)
+const SETTLEMENT_DECLUTTER_CENTER_RAD = 0.25 // radians of screen-center leeway -- always shown regardless of rank
+const SETTLEMENT_LABEL_FADE_RATE = 4 // exponential ease rate (1/s) for the declutter opacity fade -- see dragon.js's identical dt-scaled convention
+
+// Agent contact blobs (M-LD technique audit's "blob contact shadows" slot):
+// a soft dark ground-flat ellipse under every worker/minion, tracking their
+// true ground position -- NOT their walk-bob or foot-lift offset -- fixing
+// the "grounded dwarf" defect where tiny people read as floating just above
+// the terrain rather than standing on it.
+const BLOB_WIDTH = 0.004 // world units
+const BLOB_DEPTH_RATIO = 0.62 // squash factor for the ellipse look
+const BLOB_OPACITY = 0.35
+const BLOB_GROUND_OFFSET = 0.0006 // world units outward from sampleHeight -- avoids z-fighting with the terrain mesh
 
 const BUBBLE_MAX_CHARS = 42 // speech-bubble text truncation
 const BUBBLE_VISIBLE_DIST = 0.35 // camera must be this close (world units) to see a speech bubble
@@ -116,6 +139,12 @@ const _tb2 = new THREE.Vector3()
 const _visMat = new THREE.Matrix4()
 const _visScale = new THREE.Vector3()
 
+// Scratch for the orbit label-declutter "near screen center" check (see the
+// throttled settlement-label pass in update()) — same write-before-read
+// scratch convention as _tb1/_tb2 above.
+const _camForwardScratch = new THREE.Vector3()
+const _toSettlementScratch = new THREE.Vector3()
+
 // ---------------------------------------------------------------------------
 // Silent-fallback rule: every graceful-degradation path warns exactly once
 // (module-level flags — these searches run per-settlement/per-structure and
@@ -162,7 +191,7 @@ function warnAssetsCreate(reason) {
 // createWorld
 // ---------------------------------------------------------------------------
 
-export function createWorld(planet, camera, domElement, renderer = null) {
+export function createWorld(planet, camera, domElement, renderer = null, cameraFeel = null) {
   const group = new THREE.Group()
   const settlementsGroup = new THREE.Group()
   const structuresGroup = new THREE.Group()
@@ -429,6 +458,67 @@ export function createWorld(planet, camera, domElement, renderer = null) {
     }
   }
 
+  // Agent contact blobs: one shared canvas texture + geometry + material for
+  // every blob in the world (see the BLOB_* tunables above for the "grounded
+  // dwarf" background) — only the per-agent Mesh (position/orientation/
+  // scale) is unique, so a busy settlement costs one shared draw-call-worth
+  // of GL state, not N.
+  //
+  // A THREE.Sprite (always camera-facing) was considered and rejected: this
+  // app's own ground-sunlit viewpoint looks nearly horizontally along the
+  // terrain (verifykit.js), and a billboarded blob at that grazing angle
+  // reads as a floating card next to the character, not a shadow on the
+  // ground beneath them. A flat, surface-oriented quad — the same
+  // orientOnSurface convention already used for every other ground object in
+  // this file — reads correctly from any angle, including the one that
+  // matters most here.
+  function buildBlobTexture() {
+    const size = 64
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+    const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+    grad.addColorStop(0, 'rgba(8,7,6,0.9)')
+    grad.addColorStop(0.55, 'rgba(8,7,6,0.5)')
+    grad.addColorStop(1, 'rgba(8,7,6,0)')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, size, size)
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.colorSpace = THREE.SRGBColorSpace
+    return tex
+  }
+  // PlaneGeometry's default face-normal is local +Z; rotated here so the
+  // visible face is local +Y instead, matching orientOnSurface's contract
+  // ("local +Y matches the surface normal").
+  const blobGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2)
+  const blobTexture = buildBlobTexture()
+  const blobMaterial = new THREE.MeshBasicMaterial({
+    map: blobTexture,
+    transparent: true,
+    opacity: BLOB_OPACITY,
+    depthWrite: false,
+  })
+
+  function makeBlobMesh() {
+    const mesh = new THREE.Mesh(blobGeo, blobMaterial)
+    mesh.renderOrder = 1
+    agentsGroup.add(mesh)
+    return mesh
+  }
+
+  // Tracks the agent/minion's true ground position (dir * groundR, no
+  // walk-bob or foot-lift) rather than their bouncing visual position — a
+  // shadow that bobbed along with its owner would read as attached to them,
+  // not resting on the ground beneath them. scaleMult lets callers shrink
+  // the blob with a despawning agent's own fadeScale, or a minion's
+  // half-size MINION_SCALE.
+  function updateBlobTransform(mesh, dir, forward, groundR, scaleMult) {
+    mesh.position.copy(dir).multiplyScalar(groundR + BLOB_GROUND_OFFSET)
+    orientOnSurface(mesh, dir, forward)
+    mesh.scale.set(BLOB_WIDTH * scaleMult, BLOB_WIDTH * BLOB_DEPTH_RATIO * scaleMult, 1)
+  }
+
   const stats = { settlements: 0, structures: 0, agents: 0 }
 
   const settlements = new Map() // project -> settlement record
@@ -499,7 +589,7 @@ export function createWorld(planet, camera, domElement, renderer = null) {
     hitMesh.scale.setScalar(0.08) // sphereGeo radius 0.5 -> world radius 0.04
     settlementsGroup.add(hitMesh)
 
-    const settlement = { project, anchorDir, groundR, race, name, basenameRaw, labelSprite, hitMesh, structureDirs: [], visibleStructureCount: 0 }
+    const settlement = { project, anchorDir, groundR, race, name, basenameRaw, labelSprite, hitMesh, structureDirs: [], visibleStructureCount: 0, labelWantVisible: true }
     hitMesh.userData.settlement = settlement
     hitSpheres.push(hitMesh)
     return settlement
@@ -734,6 +824,7 @@ export function createWorld(planet, camera, domElement, renderer = null) {
     const visualGroup = new THREE.Group()
     visualGroup.add(visual)
     agentsGroup.add(visualGroup)
+    const blobMesh = makeBlobMesh()
 
     const wanderPoints = [structure.dir.clone()]
     for (let i = 0; i < 3; i++) {
@@ -747,6 +838,7 @@ export function createWorld(planet, camera, domElement, renderer = null) {
       structure,
       settlement,
       group: visualGroup,
+      blobMesh,
       dir: structure.dir.clone(),
       forward: _tb1.clone(),
       targetDir: wanderPoints[1].clone(),
@@ -772,6 +864,7 @@ export function createWorld(planet, camera, domElement, renderer = null) {
     const visualGroup = new THREE.Group()
     visualGroup.add(visual)
     agentsGroup.add(visualGroup)
+    const blobMesh = makeBlobMesh()
 
     const wanderPoints = [structure.dir.clone()]
     for (let i = 0; i < 3; i++) {
@@ -783,6 +876,7 @@ export function createWorld(planet, camera, domElement, renderer = null) {
 
     return {
       group: visualGroup,
+      blobMesh,
       dir: start.clone(),
       forward: _tb1.clone(),
       targetDir: wanderPoints[1].clone(),
@@ -864,6 +958,7 @@ export function createWorld(planet, camera, domElement, renderer = null) {
     agent.group.position.copy(agent.dir).multiplyScalar(groundR + FOOT_LIFT + bob)
     orientOnSurface(agent.group, agent.dir, agent.forward)
     agent.group.scale.setScalar(PERSON_HEIGHT * agent.fadeScale)
+    updateBlobTransform(agent.blobMesh, agent.dir, agent.forward, groundR, agent.fadeScale)
 
     if (hammering) {
       agent.sparkCooldown -= dt
@@ -923,6 +1018,7 @@ export function createWorld(planet, camera, domElement, renderer = null) {
     m.group.position.copy(m.dir).multiplyScalar(groundR + FOOT_LIFT * MINION_SCALE + bob * MINION_SCALE)
     orientOnSurface(m.group, m.dir, m.forward)
     m.group.scale.setScalar(PERSON_HEIGHT * MINION_SCALE)
+    updateBlobTransform(m.blobMesh, m.dir, m.forward, groundR, MINION_SCALE)
   }
 
   // --- data ingest --------------------------------------------------------------
@@ -992,6 +1088,7 @@ export function createWorld(planet, camera, domElement, renderer = null) {
         while (minionPool.length > wantMinions) {
           const m = minionPool.pop()
           agentsGroup.remove(m.group)
+          agentsGroup.remove(m.blobMesh) // shared geometry/material -- only the mesh itself is per-instance and needs removing, never disposing
         }
       } catch (e) {
         // Keep the world stable even if one session entry is malformed.
@@ -1097,10 +1194,17 @@ export function createWorld(planet, camera, domElement, renderer = null) {
     if (!settlement) return
 
     const currentDist = camera.position.length()
-    tween.from.copy(camera.position)
-    tween.to.copy(settlement.anchorDir).multiplyScalar(Math.max(1.3, 0.45 * currentDist))
-    tween.t = 0
-    tween.active = true
+    const arriveDist = Math.max(1.3, 0.45 * currentDist)
+    if (cameraFeel) {
+      cameraFeel.flyTo(settlement.anchorDir, arriveDist)
+    } else {
+      // Fallback: the pre-M-LD straight-chord tween, kept for when no
+      // cameraFeel instance is wired in.
+      tween.from.copy(camera.position)
+      tween.to.copy(settlement.anchorDir).multiplyScalar(arriveDist)
+      tween.t = 0
+      tween.active = true
+    }
   }
 
   function onStructureClick(cb) {
@@ -1127,6 +1231,14 @@ export function createWorld(planet, camera, domElement, renderer = null) {
       // not billboards
       const d = settlement.labelSprite.position.distanceTo(camera.position)
       applyLabelScale(settlement.labelSprite, d, SETTLEMENT_LABEL_K, SETTLEMENT_LABEL_MIN, SETTLEMENT_LABEL_MAX)
+      // Orbit label declutter: ease opacity toward the throttled selection's
+      // target (below) every single frame, so crossing the
+      // SETTLEMENT_DECLUTTER_DIST threshold — or a settlement entering/
+      // leaving the top-N + near-center set — always fades smoothly rather
+      // than popping visible/invisible.
+      const mat = settlement.labelSprite.material
+      const targetOpacity = settlement.labelWantVisible ? 1 : 0
+      mat.opacity += (targetOpacity - mat.opacity) * clamp(dt * SETTLEMENT_LABEL_FADE_RATE, 0, 1)
     }
 
     for (const st of constructingSet) {
@@ -1166,12 +1278,46 @@ export function createWorld(planet, camera, domElement, renderer = null) {
         st.topicSprite.visible = true
         applyLabelScale(st.topicSprite, d, TOPIC_LABEL_K, TOPIC_LABEL_MIN, TOPIC_LABEL_MAX)
       }
+
+      // Settlement label declutter (ART.md §7's flagged label-soup defect):
+      // above SETTLEMENT_DECLUTTER_DIST, only the top-N settlements by
+      // (agents desc, structures desc) plus anything near screen center are
+      // targeted visible; below it, every settlement is targeted visible,
+      // same as before this task. This only decides the TARGET — the actual
+      // opacity easing runs unthrottled above so it stays smooth regardless
+      // of how often this selection re-runs.
+      if (camera.position.length() > SETTLEMENT_DECLUTTER_DIST) {
+        const agentCounts = new Map()
+        for (const a of agents.values()) {
+          agentCounts.set(a.settlement, (agentCounts.get(a.settlement) || 0) + 1)
+        }
+        const ranked = Array.from(settlements.values()).sort((a, b) => {
+          const agentsA = agentCounts.get(a) || 0
+          const agentsB = agentCounts.get(b) || 0
+          if (agentsB !== agentsA) return agentsB - agentsA
+          return b.visibleStructureCount - a.visibleStructureCount
+        })
+        const topSet = new Set(ranked.slice(0, SETTLEMENT_DECLUTTER_TOP_N))
+
+        camera.getWorldDirection(_camForwardScratch)
+        for (const settlement of settlements.values()) {
+          let want = topSet.has(settlement)
+          if (!want) {
+            _toSettlementScratch.copy(settlement.labelSprite.position).sub(camera.position).normalize()
+            want = _toSettlementScratch.angleTo(_camForwardScratch) < SETTLEMENT_DECLUTTER_CENTER_RAD
+          }
+          settlement.labelWantVisible = want
+        }
+      } else {
+        for (const settlement of settlements.values()) settlement.labelWantVisible = true
+      }
     }
 
     for (const [id, agent] of agents) {
       const remove = updateAgent(agent, dt, nowMs)
       if (remove) {
         agentsGroup.remove(agent.group)
+        agentsGroup.remove(agent.blobMesh) // shared geometry/material -- only the mesh itself is per-instance and needs removing, never disposing
         if (agent.bubbleSprite) {
           agentsGroup.remove(agent.bubbleSprite)
           agent.bubbleSprite.material.map.dispose()
@@ -1219,14 +1365,21 @@ export function createWorld(planet, camera, domElement, renderer = null) {
     }))
   }
 
-  // Fly the camera to a settlement — same tween as clicking it in the scene.
+  // Fly the camera to a settlement — same flight as clicking it in the scene.
   function visit(project) {
     const s = settlements.get(project)
     if (!s) return false
-    tween.from.copy(camera.position)
-    tween.to.copy(s.anchorDir).multiplyScalar(Math.max(1.3, 0.45 * camera.position.length()))
-    tween.t = 0
-    tween.active = true
+    const arriveDist = Math.max(1.3, 0.45 * camera.position.length())
+    if (cameraFeel) {
+      cameraFeel.flyTo(s.anchorDir, arriveDist)
+    } else {
+      // Fallback: the pre-M-LD straight-chord tween, kept for when no
+      // cameraFeel instance is wired in.
+      tween.from.copy(camera.position)
+      tween.to.copy(s.anchorDir).multiplyScalar(arriveDist)
+      tween.t = 0
+      tween.active = true
+    }
     return true
   }
 

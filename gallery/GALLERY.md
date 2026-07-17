@@ -140,5 +140,49 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
   non-material exports aren't part of the comparison) so the concurrent
   builders' in-flight world.js/flora.js/planet.js changes on the shared
   checkout stayed untouched throughout.
+- `m-polish-camera-1-orbit-start.jpg` / `m-polish-camera-2-swoop-fov-peak.jpg`
+  / `m-polish-camera-3-swoop-descending.jpg` /
+  `m-polish-camera-4-arrival-tmpgrot.jpg` — M-POLISH camera-feel pass
+  (`src/cameraFeel.js`, new), the swoop verdict (ART.md §7) implemented and
+  driven live: `flyTo(Tmpgrot.anchorDir, 1.523)` from the default orbit
+  (163.5° away — near-antipodal, duration ≈6.1s per the
+  `lerp(2.2s,6.5s,angle/π)` formula), four checkpoints through the same
+  flight (manually ticked via a temporary cameraFeel instance since the
+  verify tab was backgrounded — the task's own "drive updates manually if
+  tab hidden" path). Shot 1 near the start (FOV 45.1°, barely underway);
+  shot 2 at the exact temporal midpoint (FOV 52.0° — the `sin(πt)` envelope's
+  exact peak, camera visibly arced off the straight chord and much closer to
+  the surface than a linear interpolation would put it); shot 3 descending
+  (FOV 48.7°, easing back down); shot 4 at arrival (`isFlying()`=false, FOV
+  exactly 45.0000, camera radius exactly 1.5227 — the commanded arriveDist,
+  landed square on Tmpgrot's own buildings). Cancel-on-pointerdown (position
+  freezes exactly where interrupted, FOV eases back to exactly 45 over its
+  own short recovery timer) verified separately via direct isFlying()/fov
+  assertions, not screenshotted.
+- `m-polish-declutter-before-orbit.jpg` / `m-polish-declutter-after-orbit.jpg`
+  — M-POLISH orbit label-declutter fix (`src/world.js`, the ART.md §7
+  flagged label-soup defect): same camera position (default orbit, 3.384R),
+  same live world state. Before = every settlement's label sprite forced to
+  opacity 1 (simulating the pre-fix unconditional-visible behavior); after =
+  the live declutter rule actually running — top 8 settlements by (agents
+  desc, structures desc) plus anything within 0.25 rad of screen center,
+  eased toward opacity 0/1 (rate 4/s) rather than popped. Verified
+  quantitatively, not just visually: 26/26 labels at opacity 1 before, 16/26
+  after (8 by rank + 8 more inside the screen-center cone at this particular
+  view angle — confirmed by directly reading `labelWantVisible` +
+  `material.opacity` off every settlement's own record).
+- `m-polish-blob-with.png` / `m-polish-blob-without.png` — M-POLISH agent
+  contact-shadow blobs (`src/world.js`, the technique audit's "blob contact
+  shadows" slot / the "grounded dwarf" fix): identical camera position, one
+  agent's own blob mesh toggled visible/hidden between the two captures
+  (nothing else changed) — the soft dark ellipse extending past the dwarf's
+  feet in "with" is entirely gone in "without", leaving only the character's
+  own tight self-shadow. `m-polish-blob-context.jpg` is the wider same-angle
+  shot the crop was taken from, for scene context (rocks/coastline visible).
+  Confirmed programmatically too: the blob mesh's scale reads exactly
+  `[0.004, 0.00248, 1]` (`BLOB_WIDTH` × `BLOB_WIDTH·BLOB_DEPTH_RATIO`),
+  tracking each agent's true ground position (`dir·groundR`) rather than
+  their walk-bob/foot-lift offset — confirmed by direct position diffing
+  against the paired agent's own visual group.
 
 
