@@ -9,7 +9,7 @@
 // angular distance of an already-accepted point of the SAME layer is
 // rejected too, so growth stays dense without clumping.
 import * as THREE from 'three/webgpu'
-import { attribute, dot, modelWorldMatrix, positionGeometry, positionLocal, uniform } from 'three/tsl'
+import { attribute, dot, modelWorldMatrix, positionGeometry, positionLocal, uniform, vec4 } from 'three/tsl'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { rngFromString, clamp, lerp, smoothstep } from './util.js'
 
@@ -373,7 +373,7 @@ function buildGrass(planet, camera, seed) {
   const instBase = attribute('instBase', 'vec3')
   const swayRight = attribute('swayRight', 'vec3')
 
-  const worldBase = modelWorldMatrix.mul(instBase).xyz
+  const worldBase = modelWorldMatrix.mul(vec4(instBase, 1.0)).xyz
   const bladeH = positionGeometry.y.div(BLADE_HEIGHT).clamp(0, 1)
   const bend = bladeH.mul(bladeH) // bases stay planted, tips move most
   const wave1 = dot(worldBase, uGustDir).mul(180.0).add(uTime.mul(2.2)).add(phase.mul(0.5)).sin()
