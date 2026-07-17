@@ -352,27 +352,30 @@ canvas {
 .sidebar-toggle {
   position: absolute;
   top: 50%;
-  right: 3px;
+  right: -14px; /* overhangs the sidebar edge so it reads as a grab-tab */
   transform: translateY(-50%);
-  width: 20px;
-  height: 38px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.06);
+  width: 26px;
+  height: 48px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(8, 12, 20, 0.72);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
   color: #cfd8e3;
-  font-size: 13px;
+  font-size: 16px;
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  z-index: 2;
+  z-index: 5;
   transition:
     transform 0.32s cubic-bezier(0.4, 0, 0.2, 1),
     background 0.15s ease;
 }
 .sidebar-toggle:hover {
-  background: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.16);
 }
 #sidebar.collapsed .sidebar-toggle {
   transform: translateY(-50%) rotate(180deg);
@@ -757,4 +760,112 @@ body.photo-mode #hint {
 }
 body.time-lapse #sidebar {
   opacity: 0.35;
+}
+
+/* --- viewport controls: zoom + feature toggles (DOM built by src/ui.js) --- */
+#viewport-controls {
+  position: fixed;
+  right: 16px;
+  bottom: 58px; /* stacks above #photo-mode-btn (bottom:16px, 34px tall) */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 20;
+}
+.vp-btn {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(8, 12, 20, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #cfd8e3;
+  font-size: 19px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.55;
+  transition:
+    opacity 0.2s ease,
+    background 0.15s ease;
+}
+.vp-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+.vp-btn.active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.14);
+}
+body.photo-mode #viewport-controls,
+body.photo-mode #feature-panel {
+  visibility: hidden;
+}
+
+#feature-panel {
+  position: fixed;
+  right: 58px; /* just left of the control column */
+  bottom: 58px;
+  width: 182px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(8, 12, 20, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  z-index: 21;
+}
+#feature-panel.hidden {
+  display: none;
+}
+.feature-panel-title {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #8b97a6;
+  margin-bottom: 5px;
+  padding-left: 4px;
+}
+.feature-row {
+  text-align: left;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: #dfe6ee;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  transition:
+    background 0.12s ease,
+    opacity 0.12s ease;
+}
+.feature-row::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7fe0c8; /* on = coast-glow teal (ART.md accent) */
+  flex: none;
+  transition: background 0.12s ease;
+}
+.feature-row:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.feature-row.off {
+  opacity: 0.5;
+}
+.feature-row.off::before {
+  background: #55606c;
 }

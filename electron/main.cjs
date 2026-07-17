@@ -1,6 +1,6 @@
 'use strict'
 
-// Minimal Electron shell for Claude Planet.
+// Minimal Electron shell for Sekai.
 // Loads the Vite dev server in a native window; starts the dev server itself
 // if it isn't already running. CommonJS on purpose: the project is
 // "type": "module", but Electron's main process entry must be .cjs.
@@ -95,7 +95,7 @@ function createWindow() {
     width: 1680,
     height: 1050,
     minWidth: 1100,
-    title: 'Claude Planet',
+    title: 'Sekai',
     backgroundColor: '#04060c',
     titleBarStyle: 'hiddenInset',
     webPreferences: {
@@ -126,7 +126,7 @@ async function boot() {
   } else {
     showError(
       win,
-      `Claude Planet could not reach the dev server at ${DEV_URL} after 30s. ` +
+      `Sekai could not reach the dev server at ${DEV_URL} after 30s. ` +
         'Start it manually with "npm run dev" and reload this window (Cmd+R).',
     )
   }

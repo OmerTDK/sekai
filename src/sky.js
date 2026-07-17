@@ -268,7 +268,28 @@ export function createSky(seed) {
   // skyboxBakeMs: debug/verification handle only (read via
   // window.__planet.sky.skyboxBakeMs) — confirms the ≤1.5s bake budget
   // without adding a new console.log convention (this codebase only warns).
-  return { group, update, getSunDir, setStormClearing, sampleCloudCover, skyboxBakeMs: skybox.bakeMs }
+  // Cloud decks live inside the sky group alongside stars/atmosphere, so a
+  // clean per-deck visibility toggle (for the UI feature panel) beats hiding
+  // the whole group. Rotation/shadow updates keep running while hidden — the
+  // meshes just aren't drawn — so re-showing is seamless.
+  function setCloudsVisible(on) {
+    clouds.lowerMesh.visible = on
+    clouds.upperMesh.visible = on
+  }
+  function getCloudsVisible() {
+    return clouds.lowerMesh.visible
+  }
+
+  return {
+    group,
+    update,
+    getSunDir,
+    setStormClearing,
+    sampleCloudCover,
+    setCloudsVisible,
+    getCloudsVisible,
+    skyboxBakeMs: skybox.bakeMs,
+  }
 }
 
 // ---------------------------------------------------------------- helpers --

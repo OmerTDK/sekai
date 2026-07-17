@@ -1,4 +1,4 @@
-# Engineering standards — Claude Planet
+# Engineering standards — Sekai
 
 The canonical workflow doc. The program plan (docs/superpowers/plans/) owns
 *what* gets built and *when*; this file owns *how*. If they disagree, this

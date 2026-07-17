@@ -792,6 +792,7 @@ export function createUI(world, hooks) {
 
     if (key === 'Escape') {
       if (paletteOpen) closePalette()
+      else if (featurePanelOpen) toggleFeaturePanel(false)
       else if (inspectorCard.classList.contains('open')) closeInspector()
       else if (timeLapseOn) closeTimeLapse()
       else if (photoMode) setPhotoModeState(false)
@@ -817,6 +818,144 @@ export function createUI(world, hooks) {
       setPhotoModeState(!photoMode)
     }
   })
+
+  // --- viewport controls: zoom + feature toggles ------------------------------
+  // Zoom works by dispatching wheel events at the canvas — OrbitControls' own
+  // dolly+damping path handles them, so the UI needs no direct controls ref.
+  function zoomBy(deltaY) {
+    const c = document.querySelector('canvas')
+    if (c) c.dispatchEvent(new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }))
+  }
+
+  const vpControls = document.createElement('div')
+  vpControls.id = 'viewport-controls'
+
+  function makeVpBtn(glyph, label, onClick) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'vp-btn'
+    b.textContent = glyph
+    b.title = label
+    b.setAttribute('aria-label', label)
+    b.addEventListener('click', onClick)
+    vpControls.appendChild(b)
+    return b
+  }
+
+  const featuresBtn = makeVpBtn('🎛', 'Toggle features', () => toggleFeaturePanel())
+  makeVpBtn('+', 'Zoom in', () => zoomBy(-260))
+  makeVpBtn('−', 'Zoom out', () => zoomBy(260))
+  root.appendChild(vpControls)
+
+  // --- feature toggle panel ---------------------------------------------------
+  // Each row flips `.visible` on a live scene group exposed via window.__planet.
+  // Read lazily (the handle is populated just after createUI returns) and always
+  // guarded, so a missing/renamed module simply yields an inert row.
+  // Each feature exposes read()/write(on). Most just flip `.visible` on a live
+  // scene group; clouds routes through sky's own toggle since the two cloud
+  // decks share the sky group with the stars/atmosphere and can't be hidden
+  // wholesale.
+  function featureGroup(key) {
+    const mod = window.__planet && window.__planet[key]
+    return mod && mod.group ? mod.group : null
+  }
+  function groupFeature(key, label) {
+    return {
+      storageKey: key,
+      label,
+      read: () => {
+        const g = featureGroup(key)
+        return g ? g.visible : true
+      },
+      write: (on) => {
+        const g = featureGroup(key)
+        if (g) g.visible = on
+      },
+    }
+  }
+  const FEATURES = [
+    groupFeature('flora', 'Trees & rocks'),
+    groupFeature('birds', 'Birds'),
+    {
+      storageKey: 'clouds',
+      label: 'Clouds',
+      read: () => {
+        const s = window.__planet && window.__planet.sky
+        return s && s.getCloudsVisible ? s.getCloudsVisible() : true
+      },
+      write: (on) => {
+        const s = window.__planet && window.__planet.sky
+        if (s && s.setCloudsVisible) s.setCloudsVisible(on)
+      },
+    },
+    groupFeature('storms', 'Hurricane'),
+    groupFeature('weather', 'Rain & snow'),
+    groupFeature('seaIce', 'Sea ice'),
+    groupFeature('seaLife', 'Whales & dolphins'),
+    groupFeature('trails', 'Footprints'),
+    groupFeature('dragon', 'Dragon'),
+    groupFeature('airships', 'Airships'),
+    groupFeature('wind', 'Wind'),
+  ]
+  const FEATURE_STORAGE = 'planet-feature-'
+
+  const featurePanel = document.createElement('div')
+  featurePanel.id = 'feature-panel'
+  featurePanel.classList.add('hidden')
+  const featureTitle = document.createElement('div')
+  featureTitle.className = 'feature-panel-title'
+  featureTitle.textContent = 'FEATURES'
+  featurePanel.appendChild(featureTitle)
+  root.appendChild(featurePanel)
+
+  function setFeature(f, on) {
+    f.write(on)
+    try {
+      localStorage.setItem(FEATURE_STORAGE + f.storageKey, on ? '1' : '0')
+    } catch {
+      /* localStorage may be unavailable (private mode) */
+    }
+    if (f.row) f.row.classList.toggle('off', !on)
+  }
+
+  const featureRows = FEATURES.map((f) => {
+    const row = document.createElement('button')
+    row.type = 'button'
+    row.className = 'feature-row'
+    row.textContent = f.label
+    row.setAttribute('aria-label', 'Toggle ' + f.label)
+    row.addEventListener('click', () => setFeature(f, !f.read()))
+    featurePanel.appendChild(row)
+    f.row = row
+    return f
+  })
+
+  function syncFeatureRows() {
+    for (const f of featureRows) f.row.classList.toggle('off', !f.read())
+  }
+
+  // Apply any persisted "hidden" choices once the scene handles exist (the
+  // __planet handle is assigned by main.js just after createUI returns).
+  setTimeout(() => {
+    for (const f of featureRows) {
+      let saved
+      try {
+        saved = localStorage.getItem(FEATURE_STORAGE + f.storageKey)
+      } catch {
+        saved = null
+      }
+      if (saved === '0') setFeature(f, false)
+    }
+    syncFeatureRows()
+  }, 1200)
+
+  let featurePanelOpen = false
+  function toggleFeaturePanel(force) {
+    featurePanelOpen = typeof force === 'boolean' ? force : !featurePanelOpen
+    featurePanel.classList.toggle('hidden', !featurePanelOpen)
+    featuresBtn.classList.toggle('active', featurePanelOpen)
+    if (featurePanelOpen) syncFeatureRows()
+  }
 
   return { update }
 }
