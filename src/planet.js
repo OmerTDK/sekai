@@ -136,6 +136,7 @@ const OCEAN_DEEP_MUL = [1, 1, 1]
 let warnedTerrainSplat = false
 let warnedOceanShader = false
 let warnedCloudShadow = false
+let warnedNormalMapLoad = false
 
 // Guarded shader-chunk injection: replaces an `#include <x>` anchor with
 // itself + extra GLSL lines, throwing if the anchor wasn't found (guards
@@ -433,6 +434,18 @@ export function createPlanet(seed) {
   // biomeW vertex weights — grass/rock/sand/snow each get their own surface
   // pattern while the vertex color keeps the biome hue. Distance-faded so
   // orbit views stay clean; uDetailOn stays 0 until all four maps are loaded.
+  //
+  // M-POLISH surface-crispness pass adds two more layers on this same
+  // triplanar plumbing (see onBeforeCompile below): (1) NormalGL detail
+  // normal maps, perturbing the shaded normal at the same near-camera fade
+  // + biomeW blend as the albedo above (uNormalOn gates once all four
+  // normal maps load, independently of uDetailOn so one missing/failed
+  // fetch never blocks the other layer); (2) a much-lower-frequency
+  // "macro" resample (TILE_MACRO=7) of the SAME four textures, active only
+  // in the 1.2R-4R camera-to-planet-center band where the close-up layers
+  // have already faded — breaks up the flat interpolated-vertex-color look
+  // at mid zoom without fighting the close-up detail. Sources for all eight
+  // (four Color + four NormalGL) maps: public/textures/SOURCES.md.
   const texLoader = new THREE.TextureLoader()
   const detailUniforms = {
     uDetailOn: { value: 0 },
@@ -462,10 +475,54 @@ export function createPlanet(seed) {
     }
   }
 
-  terrainMat.customProgramCacheKey = () => 'terrain-splat-v1'
+  // Detail NORMAL maps: same four ambientCG sets' NormalGL downloads (see
+  // public/textures/SOURCES.md), loaded the same way as the Color maps
+  // above but gated by their OWN uNormalOn flag -- a missing/failed normal
+  // map degrades to flat (unperturbed) shading without blocking the albedo
+  // detail layer, and vice versa.
+  const normalUniforms = {
+    uNormalOn: { value: 0 },
+    uGrassNrm: { value: null },
+    uRockNrm: { value: null },
+    uSandNrm: { value: null },
+    uSnowNrm: { value: null },
+  }
+  {
+    const files = {
+      uGrassNrm: '/textures/Grass004_1K-JPG_NormalGL.jpg',
+      uRockNrm: '/textures/Rock030_1K-JPG_NormalGL.jpg',
+      uSandNrm: '/textures/Ground080_1K-JPG_NormalGL.jpg',
+      uSnowNrm: '/textures/Snow_NormalGL.jpg',
+    }
+    let loaded = 0
+    const total = Object.keys(files).length
+    for (const [key, url] of Object.entries(files)) {
+      texLoader.load(
+        url,
+        (tex) => {
+          tex.wrapS = THREE.RepeatWrapping
+          tex.wrapT = THREE.RepeatWrapping
+          tex.colorSpace = THREE.NoColorSpace // normal maps encode directions, not sRGB color
+          tex.anisotropy = 8
+          normalUniforms[key].value = tex
+          if (++loaded === total) normalUniforms.uNormalOn.value = 1
+        },
+        undefined,
+        (err) => {
+          if (!warnedNormalMapLoad) {
+            warnedNormalMapLoad = true
+            console.warn('[planet] planet.js: detail normal-map load failed, ground renders without normal perturbation (' + url + '): ' + err)
+          }
+        }
+      )
+    }
+  }
+
+  terrainMat.customProgramCacheKey = () => 'terrain-splat-v2'
   terrainMat.onBeforeCompile = (shader) => {
     try {
       Object.assign(shader.uniforms, detailUniforms)
+      Object.assign(shader.uniforms, normalUniforms)
       shader.vertexShader = shader.vertexShader
         .replace(
           '#include <common>',
@@ -485,6 +542,17 @@ export function createPlanet(seed) {
             'uniform sampler2D uRockTex;',
             'uniform sampler2D uSandTex;',
             'uniform sampler2D uSnowTex;',
+            'uniform float uNormalOn;',
+            'uniform sampler2D uGrassNrm;',
+            'uniform sampler2D uRockNrm;',
+            'uniform sampler2D uSandNrm;',
+            'uniform sampler2D uSnowNrm;',
+            // Not declared elsewhere in this shader (no .normalMap set, so
+            // three.js never emits normalmap_pars_fragment's own copy) --
+            // three.js still fills it in every frame regardless of which
+            // chunk declared it, the same per-object uniform refresh that
+            // powers USE_NORMALMAP_OBJECTSPACE's normal_fragment_maps path.
+            'uniform mat3 normalMatrix;',
             'varying vec4 vBiomeW;',
             'varying vec3 vDetailPos;',
             'varying vec3 vObjNormal;',
@@ -493,6 +561,21 @@ export function createPlanet(seed) {
             '  vec3 cy = texture2D(tex, p.xz * scale).rgb;',
             '  vec3 cz = texture2D(tex, p.xy * scale).rgb;',
             '  return cx * bw.x + cy * bw.y + cz * bw.z;',
+            '}',
+            'vec3 triplanarNormal(sampler2D tex, vec3 p, vec3 n, vec3 bw, float scale) {',
+            '  vec3 tx = texture2D(tex, p.yz * scale).xyz * 2.0 - 1.0;',
+            '  vec3 ty = texture2D(tex, p.xz * scale).xyz * 2.0 - 1.0;',
+            '  vec3 tz = texture2D(tex, p.xy * scale).xyz * 2.0 - 1.0;',
+            '  // Whiteout blend -- the standard tangentless triplanar normal',
+            '  // technique: fold the in-plane components of the flat object-',
+            '  // space normal into each planar sample before the final',
+            '  // swizzle (no per-vertex tangent/bitangent needed). Same',
+            '  // p.yz/p.xz/p.xy sample axes as triplanar() above so bumps',
+            '  // register under the matching albedo pixel.',
+            '  tx = vec3(tx.xy + n.yz, abs(tx.z) * n.x);',
+            '  ty = vec3(ty.xy + n.xz, abs(ty.z) * n.y);',
+            '  tz = vec3(tz.xy + n.xy, abs(tz.z) * n.z);',
+            '  return normalize(tx.zxy * bw.x + ty.xzy * bw.y + tz.xyz * bw.z);',
             '}',
           ].join('\n')
         )
@@ -519,6 +602,62 @@ export function createPlanet(seed) {
             '    diffuseColor.rgb = clamp(diffuseColor.rgb, 0.0, 1.0);',
             '  }',
             '}',
+            '{',
+            '  // MID-ZOOM MACRO LAYER: a second, much-larger-scale sample of',
+            '  // the same four textures, active only in the camera-to-',
+            '  // planet-center distance band where the close-up detail',
+            '  // layer above has already faded out -- its envelope is that',
+            '  // one INVERTED: ramps in 1.2R-1.5R, full strength 1.5R-3R,',
+            '  // ramps out 3R-4R. Kills the flat interpolated-vertex-color',
+            '  // "gradient" look at mid zoom without fighting the close-up',
+            '  // detail, which fades on camera-to-FRAGMENT distance instead',
+            '  // (near-ground only, see dNear above).',
+            '  float camR = length(cameraPosition);',
+            '  float macroT = smoothstep(1.2, 1.5, camR) * (1.0 - smoothstep(3.0, 4.0, camR));',
+            '  if (uDetailOn > 0.5 && macroT > 0.003) {',
+            '    vec3 n2 = normalize(vObjNormal);',
+            '    vec3 bw2 = abs(n2);',
+            '    bw2 /= (bw2.x + bw2.y + bw2.z);',
+            '    const float TILE_MACRO = 7.0; // broad mid-zoom variation, well below TILE so it never moires against the close-up layer',
+            '    vec3 macroDet = triplanar(uGrassTex, vDetailPos, bw2, TILE_MACRO) * vBiomeW.x',
+            '                  + triplanar(uRockTex,  vDetailPos, bw2, TILE_MACRO) * vBiomeW.y',
+            '                  + triplanar(uSandTex,  vDetailPos, bw2, TILE_MACRO) * vBiomeW.z',
+            '                  + triplanar(uSnowTex,  vDetailPos, bw2, TILE_MACRO) * vBiomeW.w;',
+            '    float macroWTot = vBiomeW.x + vBiomeW.y + vBiomeW.z + vBiomeW.w;',
+            '    macroDet /= max(macroWTot, 0.001);',
+            '    vec3 macroMult = macroDet / vec3(0.45);',
+            '    // +-6% subtle value tint -- the clamp range IS the effect budget',
+            '    diffuseColor.rgb *= mix(vec3(1.0), clamp(macroMult, 0.94, 1.06), macroT);',
+            '    diffuseColor.rgb = clamp(diffuseColor.rgb, 0.0, 1.0);',
+            '  }',
+            '}',
+          ].join('\n')
+        )
+        .replace(
+          '#include <normal_fragment_maps>',
+          [
+            '#include <normal_fragment_maps>',
+            '{',
+            '  float dNearNrm = 1.0 - smoothstep(0.3, 1.7, length(vViewPosition));',
+            '  if (uNormalOn > 0.5 && dNearNrm > 0.003) {',
+            '    vec3 nrmN = normalize(vObjNormal);',
+            '    vec3 nrmBw = abs(nrmN);',
+            '    nrmBw /= (nrmBw.x + nrmBw.y + nrmBw.z);',
+            '    const float TILE = 80.0; // same tile scale as the albedo layer so bumps sit under the matching surface pattern',
+            '    vec3 detN = triplanarNormal(uGrassNrm, vDetailPos, nrmN, nrmBw, TILE) * vBiomeW.x',
+            '              + triplanarNormal(uRockNrm,  vDetailPos, nrmN, nrmBw, TILE) * vBiomeW.y',
+            '              + triplanarNormal(uSandNrm,  vDetailPos, nrmN, nrmBw, TILE) * vBiomeW.z',
+            '              + triplanarNormal(uSnowNrm,  vDetailPos, nrmN, nrmBw, TILE) * vBiomeW.w;',
+            '    float nrmWTot = vBiomeW.x + vBiomeW.y + vBiomeW.z + vBiomeW.w;',
+            '    vec3 blendedObjN = nrmWTot > 0.001 ? normalize(detN) : nrmN;',
+            '    // ART.md silhouettes-over-noise: keep strength modest, and',
+            '    // fade with the same near-camera falloff as the albedo',
+            '    // detail layer above.',
+            '    const float NORMAL_STRENGTH = 0.55;',
+            '    blendedObjN = normalize(mix(nrmN, blendedObjN, NORMAL_STRENGTH * dNearNrm));',
+            '    normal = normalize(normalMatrix * blendedObjN);',
+            '  }',
+            '}',
           ].join('\n')
         )
       if (frag === shader.fragmentShader) throw new Error('planet.js: splat injection point not found')
@@ -528,7 +667,7 @@ export function createPlanet(seed) {
       terrainMat.userData.shaderError = String(err)
       if (!warnedTerrainSplat) {
         warnedTerrainSplat = true
-        console.warn('[planet] planet.js: terrain detail-texture splat degraded — onBeforeCompile injection failed, ground renders without triplanar detail textures: ' + err)
+        console.warn('[planet] planet.js: terrain detail-texture splat degraded — onBeforeCompile injection failed, ground renders without triplanar detail textures, normal perturbation, or the mid-zoom macro layer: ' + err)
       }
     }
 

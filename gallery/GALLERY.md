@@ -83,3 +83,23 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
   static. `m-sky-08-terrain-cloud-shadow-zoom.png` is a close crop of the
   after-state showing a shadow band right at a cloud/coast boundary.
 - `screenshot-…-64.jpg` — **the galaxy arrives**: PR #4 wave complete — baked milky way, shaded clouds, dragon + airships live.
+- `crispness-01-normalmap-ground-ON.jpg` / `crispness-02-normalmap-ground-OFF.jpg`
+  — M-POLISH surface-crispness pass, detail normal maps: `ground-sunlit`
+  viewpoint, identical camera position (position vector matched to float
+  precision across both captures — confirmed via a temporary `uNormalOn`
+  live-uniform toggle, removed after use), triplanar NormalGL perturbation
+  ON vs OFF. Deliberately subtle at a glance — strength 0.55 per ART.md's
+  "silhouettes over noise" — the shading gains a little more micro-variation
+  with the maps on; no silhouette or hue change either way.
+- `crispness-03-macro-midcoast2R-ON.jpg` / `crispness-04-macro-midcoast2R-OFF.jpg`
+  — M-POLISH surface-crispness pass, mid-zoom macro layer: camera pinned to
+  exactly 2R along the `mid-coast` viewpoint's own direction (inside the
+  layer's 1.5R-3R full-strength band), toggled via a temporary `uMacroOn`
+  uniform (added for this comparison, removed from the shipped code
+  afterward). `crispness-05-macro-zoom-ON.png` / `crispness-06-macro-zoom-OFF.png`
+  are a tighter crop of the same pair (same region, same two states) — the
+  broad TILE_MACRO=7 tint breaking up the flat interpolated-vertex-color
+  "gradient" look reads more clearly at this crop size, especially over the
+  desert/grass transition on the right.
+
+
