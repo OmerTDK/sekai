@@ -333,6 +333,29 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
 ### E4 (was M8) — living world remainder: ruins, migration caravans, seasons,
   volcano, fish schools, herds, bird scatter, ambient sound, poster export,
   auto-tour. Per-feature JIT plans. **Est:** 6–8 runs.
+### E-SIM — world simulation ladder (added 2026-07-17; owner: raids, wars,
+### armies, "how far can we push world simulation" — roadmapped, not scheduled)
+- **THE COVENANT (inviolable):** structures are session history — simulation
+  may never destroy, move, or overwrite them. Conflict is additive: it
+  happens AROUND the record, leaves marks (decals, banners, ruins-props),
+  and always heals. Sim-owned props (carts, outposts, camps) are fair game.
+- **Rung 1 — skirmish theater (cosmetic):** raiding parties march from orc
+  settlements (tmp-dir projects are canonically the raider faction) toward
+  rich ones; defenders muster; a field battle plays out with formation
+  movement, clash animations, torches at night; outcome = banners + scorch
+  decals + a "raid repelled" event in the feed. Fully scripted, seeded.
+- **Rung 2 — systemic layer:** drivers from REAL data — git merge conflicts
+  between related projects = border skirmishes; airship routes carry
+  "supplies" that raids can intercept (ties into the M2.5 route system);
+  settlement prosperity (session activity) sets raid attractiveness;
+  territory/influence shading on the terrain between rival clusters.
+- **Rung 3 — deep sim:** persistent faction standing, supply economy over
+  the route graph, army strength from historical session counts, sieges
+  (surround, never destroy), peace treaties when projects merge branches.
+  VAT GPU crowds (parked technique) is the enabler for army scale.
+- Sequencing: rung 1 is a fun standalone batch any time after M-WX; rungs
+  2-3 gated on appetite after living with rung 1.
+
 ### E5 (was M7b) — SQLite index + FSEvents watcher. Parked indefinitely: it
   reverses the no-database principle to fix a 4s poll nobody minds. Revisit
   only if cold-start or history-analytics pain becomes real.
