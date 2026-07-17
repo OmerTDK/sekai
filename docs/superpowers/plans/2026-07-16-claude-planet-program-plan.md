@@ -174,6 +174,11 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
      swoop) → owner verdict.
 - **Exit:** ART.md approved + committed; one verdict recorded per packet;
   M3/M5 JIT plans MUST cite ART.md as binding art direction.
+- **Follow-on (user ask 2026-07-17, sequenced AFTER the verdicts so packet
+  lighting stays comparable):** environment-lighting pass — PMREM env from
+  our own sky, per-material envMapIntensity (water/snow/windows subtle,
+  metals stronger — brass already scoped in assets.js), never the naive
+  global wash; evaluate 2K ground textures at the same time.
 - **Est:** 4 builder-runs. Runs parallel-safe with M2 integration
   (spikes/ + docs/ only).
 
