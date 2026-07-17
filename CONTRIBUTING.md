@@ -67,6 +67,14 @@ file wins for process, the plan wins for scope.
   deliberately not introduced mid-wave to avoid colliding with in-flight
   builder diffs). After that lands, CI enforces both.
 
+## Known constraint
+
+- GitHub branch protection (required status checks) is unavailable on this
+  free-tier private repo — CI is therefore mandatory **by convention**: the
+  verification gate above is the enforced process, and a red CI on a PR
+  blocks the ready/merge step by rule even though GitHub won't physically
+  prevent it.
+
 ## Deliberately not adopted (decisions, not omissions)
 
 - No review requirement, no CODEOWNERS (solo repo, owner's call).
