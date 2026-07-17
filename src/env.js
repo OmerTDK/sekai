@@ -56,7 +56,7 @@ function buildSkyCaptureScene(sunDir) {
   const colors = new Float32Array(count * 3)
   const c = new THREE.Color()
   for (let i = 0; i < count; i++) {
-    const t = THREE.MathUtils.clamp(posAttr.getY(i) / CAPTURE_RADIUS * 0.5 + 0.5, 0, 1)
+    const t = THREE.MathUtils.clamp((posAttr.getY(i) / CAPTURE_RADIUS) * 0.5 + 0.5, 0, 1)
     c.copy(SKY_BOTTOM).lerp(SKY_TOP, t)
     colors[i * 3] = c.r
     colors[i * 3 + 1] = c.g
@@ -66,7 +66,10 @@ function buildSkyCaptureScene(sunDir) {
   const skyMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })
   scene.add(new THREE.Mesh(geo, skyMat))
 
-  const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(SUN_GLOW_RADIUS, 12, 8), new THREE.MeshBasicMaterial({ color: SUN_GLOW, fog: false }))
+  const sunMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(SUN_GLOW_RADIUS, 12, 8),
+    new THREE.MeshBasicMaterial({ color: SUN_GLOW, fog: false }),
+  )
   sunMesh.position.copy(sunDir).multiplyScalar(SUN_GLOW_DIST)
   scene.add(sunMesh)
 

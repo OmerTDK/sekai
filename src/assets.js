@@ -110,7 +110,12 @@ const VARIANT_BUCKETS = ['base', 'grand', 'humble']
 // bannerTint is 'banner', class 'cloth' — derived straight from ROLE_CLASS
 // rather than re-hardcoded, so the two tables can't drift apart).
 const BUCKET_KEYS = ['wood', 'stone', 'roofTint', 'bannerTint']
-const BUCKET_TILE_KEY = { wood: ROLE_CLASS.wood, stone: ROLE_CLASS.stone, roofTint: ROLE_CLASS.roof, bannerTint: ROLE_CLASS.banner }
+const BUCKET_TILE_KEY = {
+  wood: ROLE_CLASS.wood,
+  stone: ROLE_CLASS.stone,
+  roofTint: ROLE_CLASS.roof,
+  bannerTint: ROLE_CLASS.banner,
+}
 
 // Micro-albedo tiling frequency per material class — chosen so the pattern
 // reads as a handful of grain/speckle/weave cycles across a wall face at the
@@ -246,7 +251,12 @@ function loadPartMeshes(vendor, filename) {
       // which would otherwise wrongly fall out of the race-tintable bucket
       // entirely (caught in spikes/m2-assets verification: 6 of 7 tier-3
       // types had a fully neutral, never-tinted roof because of this).
-      const role = vendor === 'quaternius' ? (fallbackRole === 'roof' ? 'roof' : roleForMaterialName(node.material && node.material.name, fallbackRole)) : fallbackRole
+      const role =
+        vendor === 'quaternius'
+          ? fallbackRole === 'roof'
+            ? 'roof'
+            : roleForMaterialName(node.material && node.material.name, fallbackRole)
+          : fallbackRole
       out.push({ geometry: geo, role })
     })
     return out
@@ -274,13 +284,17 @@ async function buildRecipeGeometry(vendor, partList) {
   const tint = { stone: [], cloth: [] }
   for (const p of partList) {
     const meshes = await loadPartMeshes(vendor, p.u)
-    const local = new THREE.Matrix4().compose(new THREE.Vector3(p.x, p.y, p.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, p.ry, 0)), new THREE.Vector3(1, 1, 1))
+    const local = new THREE.Matrix4().compose(
+      new THREE.Vector3(p.x, p.y, p.z),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(0, p.ry, 0)),
+      new THREE.Vector3(1, 1, 1),
+    )
     for (const { geometry, role } of meshes) {
       const g = geometry.clone()
       g.applyMatrix4(local)
       const tintable = TINTABLE_ROLES.includes(role)
       const cls = ROLE_CLASS[role] || 'stone'
-      bakeVertexColor(g, tintable ? 0xffffff : ROLE_COLOR[role] ?? ROLE_COLOR.stone)
+      bakeVertexColor(g, tintable ? 0xffffff : (ROLE_COLOR[role] ?? ROLE_COLOR.stone))
       const bucket = tintable ? tint[cls] : neutral[cls]
       if (bucket) bucket.push(g)
       else neutral.stone.push(g)
@@ -328,7 +342,10 @@ function deriveAnchors(box) {
 // ---------------------------------------------------------------------------
 
 function makeGearGeometry(radius, thickness, teeth) {
-  const parts = [new THREE.CylinderGeometry(radius, radius, thickness, 16), new THREE.CylinderGeometry(radius * 0.22, radius * 0.22, thickness * 1.6, 10)]
+  const parts = [
+    new THREE.CylinderGeometry(radius, radius, thickness, 16),
+    new THREE.CylinderGeometry(radius * 0.22, radius * 0.22, thickness * 1.6, 10),
+  ]
   const toothW = radius * 0.34 // chunkier than spikes/s5 (0.26) per the M2 art verdict
   const toothH = radius * 0.33 // chunkier than spikes/s5 (0.22) — the "depth" that reads obliquely
   for (let i = 0; i < teeth; i++) {
@@ -353,7 +370,8 @@ function pipeSegmentGeometry(a, b, radius) {
 
 function makePipeRunGeometry(points, radius) {
   const parts = []
-  for (let i = 0; i < points.length - 1; i++) parts.push(pipeSegmentGeometry(points[i], points[i + 1], radius))
+  for (let i = 0; i < points.length - 1; i++)
+    parts.push(pipeSegmentGeometry(points[i], points[i + 1], radius))
   for (const p of points) {
     const joint = new THREE.SphereGeometry(radius * 1.2, 8, 6)
     joint.translate(p.x, p.y, p.z)
@@ -384,12 +402,15 @@ function makeTankGeometry(radius, length) {
 
 function mountMatrix(x, y, z, halfThickness, sign) {
   const pos = new THREE.Vector3(x + sign * halfThickness, y, z)
-  const quat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, sign > 0 ? -Math.PI / 2 : Math.PI / 2))
+  const quat = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(0, 0, sign > 0 ? -Math.PI / 2 : Math.PI / 2),
+  )
   return new THREE.Matrix4().compose(pos, quat, new THREE.Vector3(1, 1, 1))
 }
 
 function pickBoltOnKinds(race, tier) {
-  if (tier === 3) return { kinds: ['gear', 'pipe', 'tank'], secondGear: BOLT_ON_SECOND_GEAR_RACES.includes(race) }
+  if (tier === 3)
+    return { kinds: ['gear', 'pipe', 'tank'], secondGear: BOLT_ON_SECOND_GEAR_RACES.includes(race) }
   return { kinds: BOLT_ON_KINDS_BY_RACE[race] || BOLT_ON_KINDS_BY_RACE.human, secondGear: false }
 }
 
@@ -416,7 +437,13 @@ function buildBoltOnGeometry(kinds, secondGear, anchors, tier, variant) {
     const tr = TANK_RADIUS * s
     const tl = TANK_LENGTH * s
     const tank = makeTankGeometry(tr, tl)
-    tank.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(anchors.tankX, anchors.roofTopY + 0.05 * s, anchors.tankZ), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.35, 0)), new THREE.Vector3(1, 1, 1)))
+    tank.applyMatrix4(
+      new THREE.Matrix4().compose(
+        new THREE.Vector3(anchors.tankX, anchors.roofTopY + 0.05 * s, anchors.tankZ),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0.35, 0)),
+        new THREE.Vector3(1, 1, 1),
+      ),
+    )
     parts.push(tank)
   }
   if (kinds.includes('pipe')) {
@@ -591,7 +618,9 @@ function modelTierBucket(seedStr) {
 export async function loadBuildingAssets(renderer, sky = null) {
   try {
     if (!renderer.extensions.has('WEBGL_multi_draw')) {
-      console.warn('[planet] assets: WEBGL_multi_draw not supported — BatchedMesh falls back to one draw call per unique geometry (higher draw-call count, same visuals)')
+      console.warn(
+        '[planet] assets: WEBGL_multi_draw not supported — BatchedMesh falls back to one draw call per unique geometry (higher draw-call count, same visuals)',
+      )
     }
 
     // Phase 1: load + merge every (type,tier) recipe's parts into per-class
@@ -615,15 +644,28 @@ export async function loadBuildingAssets(renderer, sky = null) {
 
         // Derive ALL THREE variants before any of them gets a UV pass (see
         // deriveVariant's own ordering comment).
-        const variantBuckets = { base: baseBuckets, grand: deriveVariant(baseBuckets, 'grand'), humble: deriveVariant(baseBuckets, 'humble') }
+        const variantBuckets = {
+          base: baseBuckets,
+          grand: deriveVariant(baseBuckets, 'grand'),
+          humble: deriveVariant(baseBuckets, 'humble'),
+        }
 
         for (const bucket of VARIANT_BUCKETS) {
           const buckets = variantBuckets[bucket]
           const box = unionBox(BUCKET_KEYS.map((k) => buckets[k]))
           const anchors = deriveAnchors(box)
           const boundingRadius = box.getBoundingSphere(new THREE.Sphere()).radius
-          for (const key of BUCKET_KEYS) if (buckets[key]) addPlanarUV(buckets[key], MICRO_ALBEDO_TILE_SCALE[BUCKET_TILE_KEY[key]])
-          built.push({ key: type + '|' + tier + '|' + bucket, wood: buckets.wood, stone: buckets.stone, roofTint: buckets.roofTint, bannerTint: buckets.bannerTint, anchors, boundingRadius })
+          for (const key of BUCKET_KEYS)
+            if (buckets[key]) addPlanarUV(buckets[key], MICRO_ALBEDO_TILE_SCALE[BUCKET_TILE_KEY[key]])
+          built.push({
+            key: type + '|' + tier + '|' + bucket,
+            wood: buckets.wood,
+            stone: buckets.stone,
+            roofTint: buckets.roofTint,
+            bannerTint: buckets.bannerTint,
+            anchors,
+            boundingRadius,
+          })
         }
       }
     }
@@ -659,10 +701,37 @@ export async function loadBuildingAssets(renderer, sky = null) {
     // metalness isn't spec'd per-class beyond brass — wood keeps a hair of
     // dielectric sheen (matches "warm sheen"), stone/cloth sit at/near zero
     // (matte masonry, fully-diffuse fabric) — all well under brass's 0.75.
-    const woodMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 0.75, metalness: 0.04, map: woodAlbedoTex })
-    const stoneMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0.02, map: stoneAlbedoTex })
-    const clothMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 1.0, metalness: 0.0, map: clothAlbedoTex })
-    const metalMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, flatShading: true, roughness: 0.3, metalness: 0.75 })
+    const woodMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      flatShading: true,
+      roughness: 0.75,
+      metalness: 0.04,
+      map: woodAlbedoTex,
+    })
+    const stoneMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      flatShading: true,
+      roughness: 0.95,
+      metalness: 0.02,
+      map: stoneAlbedoTex,
+    })
+    const clothMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      flatShading: true,
+      roughness: 1.0,
+      metalness: 0.0,
+      map: clothAlbedoTex,
+    })
+    const metalMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      flatShading: true,
+      roughness: 0.3,
+      metalness: 0.75,
+    })
 
     // Scoped environment lighting (env.js — the M-LD env-lighting follow-on):
     // a static PMREM capture of OUR sky palette, assigned to each class
@@ -679,9 +748,24 @@ export async function loadBuildingAssets(renderer, sky = null) {
     let clothInstanceCap = 400
     let metalInstanceCap = 1500
 
-    const woodBatch = new THREE.BatchedMesh(woodInstanceCap, Math.ceil(woodSum.v * 1.1) + 64, Math.ceil(woodSum.idx * 1.1) + 64, woodMaterial)
-    const stoneBatch = new THREE.BatchedMesh(stoneInstanceCap, Math.ceil(stoneSum.v * 1.1) + 64, Math.ceil(stoneSum.idx * 1.1) + 64, stoneMaterial)
-    const clothBatch = new THREE.BatchedMesh(clothInstanceCap, Math.ceil(clothSum.v * 1.1) + 64, Math.ceil(clothSum.idx * 1.1) + 64, clothMaterial)
+    const woodBatch = new THREE.BatchedMesh(
+      woodInstanceCap,
+      Math.ceil(woodSum.v * 1.1) + 64,
+      Math.ceil(woodSum.idx * 1.1) + 64,
+      woodMaterial,
+    )
+    const stoneBatch = new THREE.BatchedMesh(
+      stoneInstanceCap,
+      Math.ceil(stoneSum.v * 1.1) + 64,
+      Math.ceil(stoneSum.idx * 1.1) + 64,
+      stoneMaterial,
+    )
+    const clothBatch = new THREE.BatchedMesh(
+      clothInstanceCap,
+      Math.ceil(clothSum.v * 1.1) + 64,
+      Math.ceil(clothSum.idx * 1.1) + 64,
+      clothMaterial,
+    )
     woodBatch.perObjectFrustumCulled = true
     stoneBatch.perObjectFrustumCulled = true
     clothBatch.perObjectFrustumCulled = true
@@ -706,7 +790,14 @@ export async function loadBuildingAssets(renderer, sky = null) {
       const stoneGeoId = b.stone ? stoneBatch.addGeometry(b.stone) : null
       const roofGeoId = b.roofTint ? stoneBatch.addGeometry(b.roofTint) : null
       const bannerGeoId = b.bannerTint ? clothBatch.addGeometry(b.bannerTint) : null
-      recipeCache.set(b.key, { woodGeoId, stoneGeoId, roofGeoId, bannerGeoId, anchors: b.anchors, boundingRadius: b.boundingRadius })
+      recipeCache.set(b.key, {
+        woodGeoId,
+        stoneGeoId,
+        roofGeoId,
+        bannerGeoId,
+        anchors: b.anchors,
+        boundingRadius: b.boundingRadius,
+      })
     }
 
     const group = new THREE.Group()
@@ -776,7 +867,10 @@ export async function loadBuildingAssets(renderer, sky = null) {
       const pal = RACE_PALETTES[race] || RACE_PALETTES.human
       if (!recipe) {
         console.warn('[planet] assets: no recipe for', key, '- returning an empty (invisible) visual')
-        return { handle: { woodId: null, stoneId: null, roofId: null, bannerId: null, boltId: null }, boundingRadius: 0.05 }
+        return {
+          handle: { woodId: null, stoneId: null, roofId: null, bannerId: null, boltId: null },
+          boundingRadius: 0.05,
+        }
       }
 
       ensureWoodInstances()
@@ -828,9 +922,20 @@ export async function loadBuildingAssets(renderer, sky = null) {
       metalMaterial.envMapIntensity = 0.9 + Math.sin(elapsed * 0.5) * 0.04
     }
 
-    return { ready: true, createStructureVisual, setVisualMatrix, setVisualVisible, removeVisual, group, update }
+    return {
+      ready: true,
+      createStructureVisual,
+      setVisualMatrix,
+      setVisualVisible,
+      removeVisual,
+      group,
+      update,
+    }
   } catch (err) {
-    console.warn('[planet] assets: failed to load the building asset pack, falling back to procedural kits —', err)
+    console.warn(
+      '[planet] assets: failed to load the building asset pack, falling back to procedural kits —',
+      err,
+    )
     return { ready: false }
   }
 }

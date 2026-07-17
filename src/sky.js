@@ -48,7 +48,10 @@ export function createSky(seed) {
     corona = createCoronaSprite()
     group.add(corona)
   } catch (err) {
-    console.warn('[planet] sky: corona degraded — sprite failed to build, eclipses will render without the corona flourish', err)
+    console.warn(
+      '[planet] sky: corona degraded — sprite failed to build, eclipses will render without the corona flourish',
+      err,
+    )
     corona = null // corona is a flourish — the sun/eclipse lighting still works without it
   }
 
@@ -68,7 +71,10 @@ export function createSky(seed) {
     aurora = createAurora(seed)
     group.add(aurora.group)
   } catch (err) {
-    console.warn('[planet] sky: aurora degraded — curtains failed to build, night sky will render without aurora', err)
+    console.warn(
+      '[planet] sky: aurora degraded — curtains failed to build, night sky will render without aurora',
+      err,
+    )
     aurora = null
   }
 
@@ -78,7 +84,10 @@ export function createSky(seed) {
     meteors = createMeteors(seed)
     group.add(meteors.group)
   } catch (err) {
-    console.warn('[planet] sky: meteors degraded — shooting-star pool failed to build, no meteors this session', err)
+    console.warn(
+      '[planet] sky: meteors degraded — shooting-star pool failed to build, no meteors this session',
+      err,
+    )
     meteors = null
   }
 
@@ -429,7 +438,13 @@ function buildSkyboxTexture(seed) {
 
   const bakeMs = performance.now() - t0
   if (bakeMs > SKYBOX_BAKE_BUDGET_MS) {
-    console.warn('[planet] sky: baked skybox generation took ' + bakeMs.toFixed(0) + 'ms, over the ' + SKYBOX_BAKE_BUDGET_MS + 'ms budget')
+    console.warn(
+      '[planet] sky: baked skybox generation took ' +
+        bakeMs.toFixed(0) +
+        'ms, over the ' +
+        SKYBOX_BAKE_BUDGET_MS +
+        'ms budget',
+    )
   }
   return { texture: tex, bakeMs }
 }
@@ -584,7 +599,7 @@ function createBrightStars(seed) {
       [0.6, 'rgba(255,255,255,0.25)'],
       [1, 'rgba(255,255,255,0)'],
     ],
-    64
+    64,
   )
   const mat = new THREE.PointsMaterial({
     size: 3,
@@ -625,7 +640,7 @@ function createNebulae(seed) {
         [0.4, `rgba(${rgb},0.4)`],
         [1, `rgba(${rgb},0)`],
       ],
-      128
+      128,
     )
     const mat = new THREE.SpriteMaterial({
       map,
@@ -692,7 +707,7 @@ function createSunSprite() {
       [0.45, 'rgba(255,214,140,0.35)'],
       [1, 'rgba(255,200,120,0)'],
     ],
-    128
+    128,
   )
   const mat = new THREE.SpriteMaterial({
     map,
@@ -719,7 +734,7 @@ function createCoronaSprite() {
       [0.55, 'rgba(255,190,120,0.45)'],
       [1, 'rgba(255,180,100,0)'],
     ],
-    128
+    128,
   )
   const mat = new THREE.SpriteMaterial({
     map,
@@ -755,21 +770,27 @@ function warpedCloudField(noise3, dir, lat, cfg) {
     sx * cfg.warpScale + 2.1,
     sy * cfg.warpScale - 6.4,
     sz * cfg.warpScale + 4.9,
-    cfg.warpOctaves, 2.05, 0.5
+    cfg.warpOctaves,
+    2.05,
+    0.5,
   )
   const r = fbm(
     noise3,
     sx * cfg.warpScale + q * cfg.warpStrength - 3.7,
     sy * cfg.warpScale + q * cfg.warpStrength + 8.1,
     sz * cfg.warpScale + q * cfg.warpStrength - 1.3,
-    cfg.warpOctaves, 2.05, 0.5
+    cfg.warpOctaves,
+    2.05,
+    0.5,
   )
   const n = fbm(
     noise3,
     sx * cfg.scale + r * cfg.warpStrength2,
     sy * cfg.scale + r * cfg.warpStrength2,
     sz * cfg.scale + r * cfg.warpStrength2,
-    cfg.octaves, 2.05, 0.5
+    cfg.octaves,
+    2.05,
+    0.5,
   )
 
   // Equatorial belt + mirrored mid-latitude storm tracks with subtropical
@@ -777,7 +798,10 @@ function warpedCloudField(noise3, dir, lat, cfg) {
   // cosine that carves the subtropical dip / storm-track bump, seeded phase
   // so the bands sit differently from planet to planet.
   const latN = lat / (Math.PI / 2)
-  const band = 0.5 + cfg.bandAmp1 * Math.cos(latN * Math.PI) + cfg.bandAmp2 * Math.cos(latN * Math.PI * 3 + cfg.bandPhase)
+  const band =
+    0.5 +
+    cfg.bandAmp1 * Math.cos(latN * Math.PI) +
+    cfg.bandAmp2 * Math.cos(latN * Math.PI * 3 + cfg.bandPhase)
 
   return clamp(n * 0.5 + 0.5 + (band - cfg.bandBias) * cfg.bandStrength, 0, 1)
 }
@@ -919,11 +943,14 @@ function applyStormClearing(mat) {
       Object.assign(shader.uniforms, sunShadeUniforms)
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vCloudWorld;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCloudWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
+        .replace(
+          '#include <begin_vertex>',
+          '#include <begin_vertex>\nvCloudWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+        )
       const frag = shader.fragmentShader
         .replace(
           '#include <common>',
-          '#include <common>\nuniform vec3 uStormDir;\nuniform float uStormOn;\nuniform vec2 uSunUV;\nvarying vec3 vCloudWorld;'
+          '#include <common>\nuniform vec3 uStormDir;\nuniform float uStormOn;\nuniform vec2 uSunUV;\nvarying vec3 vCloudWorld;',
         )
         .replace(
           '#include <alphamap_fragment>',
@@ -937,7 +964,7 @@ function applyStormClearing(mat) {
             '}',
             '{',
             '  // M-SKY 2.5D shading: a second alphaMap sample offset TOWARD the',
-            '  // sun (in this shell\'s own UV space, uSunUV - see update()) fakes',
+            "  // sun (in this shell's own UV space, uSunUV - see update()) fakes",
             '  // a bit of cloud thickness without a real raymarch. High density',
             '  // both here AND toward the sun -> this fragment sits on the',
             '  // shadowed base of a thicker mass; low density toward the sun but',
@@ -956,7 +983,7 @@ function applyStormClearing(mat) {
             '  diffuseColor.rgb *= 1.0 + edgeT * 0.08;',
             '  diffuseColor.rgb = min(diffuseColor.rgb, vec3(1.0));', // stay white-dominant, never glow (ART.md 2.5/8)
             '}',
-          ].join('\n')
+          ].join('\n'),
         )
       if (frag === shader.fragmentShader) throw new Error('sky.js: cloud moat injection point not found')
       shader.fragmentShader = frag
@@ -1004,7 +1031,7 @@ function createClouds(seed) {
       roughness: 1,
       metalness: 0,
       opacity: 0.88,
-    })
+    }),
   )
 
   const upperNoise = makeNoise3D(seed + ':clouds-upper')
@@ -1040,7 +1067,7 @@ function createClouds(seed) {
       roughness: 1,
       metalness: 0,
       opacity: 0.5,
-    })
+    }),
   )
 
   const lowerSunUniforms = applyStormClearing(lowerMesh.material)
@@ -1073,7 +1100,11 @@ function createLights() {
   const target = new THREE.Object3D() // stays at the origin: the planet
   sun.target = target
 
-  const hemi = new THREE.HemisphereLight(new THREE.Color('#9db8ff'), new THREE.Color('#3a3128'), HEMI_BASE_INTENSITY)
+  const hemi = new THREE.HemisphereLight(
+    new THREE.Color('#9db8ff'),
+    new THREE.Color('#3a3128'),
+    HEMI_BASE_INTENSITY,
+  )
 
   // Cool "moonlight" fill from the anti-solar direction so the night side
   // reads silvery-blue instead of black. Kept in opposition in update().
@@ -1176,9 +1207,7 @@ function createMoons(seed) {
     const pivot = new THREE.Object3D()
     const tiltAxis = new THREE.Vector3(rng() - 0.5, 0, rng() - 0.5).normalize()
     const tiltAngle =
-      index === 0
-        ? lerp(SUN_DECLINATION + 0.01, SUN_DECLINATION + 0.08, rng())
-        : lerp(0.15, 0.55, rng())
+      index === 0 ? lerp(SUN_DECLINATION + 0.01, SUN_DECLINATION + 0.08, rng()) : lerp(0.15, 0.55, rng())
     pivot.quaternion.setFromAxisAngle(tiltAxis, tiltAngle)
     pivot.rotateY(rng() * Math.PI * 2) // random starting phase
 
@@ -1218,7 +1247,15 @@ function buildAuroraCurtain(seed, poleSign, ringIndex, uniforms) {
 
   for (let i = 0; i < cols; i++) {
     const theta = (i / AURORA_STEPS) * Math.PI * 2
-    const wob = fbm(noise3, Math.cos(theta) * waveFreq, Math.sin(theta) * waveFreq, ringIndex * 4.1 + 2.3, 3, 2.15, 0.5)
+    const wob = fbm(
+      noise3,
+      Math.cos(theta) * waveFreq,
+      Math.sin(theta) * waveFreq,
+      ringIndex * 4.1 + 2.3,
+      3,
+      2.15,
+      0.5,
+    )
     const angRadius = angRadius0 + wob * waveAmp
     const sinA = Math.sin(angRadius)
     const cosA = Math.cos(angRadius)

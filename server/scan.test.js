@@ -4,38 +4,38 @@
 // Builds a fixture tree under a temp dir and exercises scanSessions() twice
 // (the second call must hit the in-memory cache and still be correct).
 
-import assert from 'node:assert';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { scanSessions } from './scan.js';
-import { validateResumeInput } from './resume.js';
+import assert from 'node:assert'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { scanSessions } from './scan.js'
+import { validateResumeInput } from './resume.js'
 
-const MIN_BYTES = 1500;
+const MIN_BYTES = 1500
 
 function line(obj) {
-  return JSON.stringify(obj);
+  return JSON.stringify(obj)
 }
 
 // Joins jsonl `lines` with newlines and, if the result is under `minBytes`,
 // appends one more harmless filler line so the file comfortably clears the
 // exclusion threshold.
 function buildJsonl(lines, minBytes) {
-  const body = lines.join('\n') + '\n';
-  const currentBytes = Buffer.byteLength(body, 'utf8');
-  if (currentBytes >= minBytes) return body;
-  const need = minBytes - currentBytes + 50;
-  const filler = line({ type: 'assistant', message: { content: 'p'.repeat(need) } });
-  return body + filler + '\n';
+  const body = lines.join('\n') + '\n'
+  const currentBytes = Buffer.byteLength(body, 'utf8')
+  if (currentBytes >= minBytes) return body
+  const need = minBytes - currentBytes + 50
+  const filler = line({ type: 'assistant', message: { content: 'p'.repeat(need) } })
+  return body + filler + '\n'
 }
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-test-'));
-let homeTestDir; // created inside the resume.js validation block below, cleaned up in `finally`
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-test-'))
+let homeTestDir // created inside the resume.js validation block below, cleaned up in `finally`
 
 try {
   // --- Project dir A: caveat-wrapped first user line, then a real one ---
-  const dirA = path.join(root, '-Users-test-repoA');
-  fs.mkdirSync(dirA, { recursive: true });
+  const dirA = path.join(root, '-Users-test-repoA')
+  fs.mkdirSync(dirA, { recursive: true })
 
   const caveatLines = [
     line({
@@ -57,11 +57,11 @@ try {
       sessionId: 'caveat-session',
       timestamp: '2026-07-10T00:00:05.000Z',
     }),
-  ];
-  const caveatFile = path.join(dirA, 'caveat-session.jsonl');
-  fs.writeFileSync(caveatFile, buildJsonl(caveatLines, MIN_BYTES + 500));
-  const tCaveat = new Date('2026-07-15T12:00:00.000Z');
-  fs.utimesSync(caveatFile, tCaveat, tCaveat);
+  ]
+  const caveatFile = path.join(dirA, 'caveat-session.jsonl')
+  fs.writeFileSync(caveatFile, buildJsonl(caveatLines, MIN_BYTES + 500))
+  const tCaveat = new Date('2026-07-15T12:00:00.000Z')
+  fs.utimesSync(caveatFile, tCaveat, tCaveat)
 
   // A file with a garbage non-JSON line mixed in — must not throw, and must
   // still find the real topic from the valid line that follows.
@@ -75,18 +75,22 @@ try {
       sessionId: 'garbage-session',
       timestamp: '2026-07-12T00:00:00.000Z',
     }),
-  ];
-  const garbageFile = path.join(dirA, 'garbage-session.jsonl');
-  fs.writeFileSync(garbageFile, buildJsonl(garbageLines, MIN_BYTES + 500));
-  const tGarbage = new Date('2026-07-14T12:00:00.000Z');
-  fs.utimesSync(garbageFile, tGarbage, tGarbage);
+  ]
+  const garbageFile = path.join(dirA, 'garbage-session.jsonl')
+  fs.writeFileSync(garbageFile, buildJsonl(garbageLines, MIN_BYTES + 500))
+  const tGarbage = new Date('2026-07-14T12:00:00.000Z')
+  fs.utimesSync(garbageFile, tGarbage, tGarbage)
 
   // --- Project dir B: a summary line (must win over the user-text rule) ---
-  const dirB = path.join(root, '-Users-test-repoB');
-  fs.mkdirSync(dirB, { recursive: true });
+  const dirB = path.join(root, '-Users-test-repoB')
+  fs.mkdirSync(dirB, { recursive: true })
 
   const summaryLines = [
-    line({ type: 'summary', summary: 'Design the planet renderer camera controls', sessionId: 'summary-session' }),
+    line({
+      type: 'summary',
+      summary: 'Design the planet renderer camera controls',
+      sessionId: 'summary-session',
+    }),
     line({
       type: 'user',
       isSidechain: false,
@@ -95,11 +99,11 @@ try {
       sessionId: 'summary-session',
       timestamp: '2026-07-11T00:00:00.000Z',
     }),
-  ];
-  const summaryFile = path.join(dirB, 'summary-session.jsonl');
-  fs.writeFileSync(summaryFile, buildJsonl(summaryLines, MIN_BYTES + 500));
-  const tSummary = new Date('2026-07-13T12:00:00.000Z');
-  fs.utimesSync(summaryFile, tSummary, tSummary);
+  ]
+  const summaryFile = path.join(dirB, 'summary-session.jsonl')
+  fs.writeFileSync(summaryFile, buildJsonl(summaryLines, MIN_BYTES + 500))
+  const tSummary = new Date('2026-07-13T12:00:00.000Z')
+  fs.utimesSync(summaryFile, tSummary, tSummary)
 
   // An ai-title line (what current Claude Code emits) must also win rule 1.
   const aiTitleLines = [
@@ -112,11 +116,11 @@ try {
       sessionId: 'aititle-session',
       timestamp: '2026-07-11T01:00:00.000Z',
     }),
-  ];
-  const aiTitleFile = path.join(dirB, 'aititle-session.jsonl');
-  fs.writeFileSync(aiTitleFile, buildJsonl(aiTitleLines, MIN_BYTES + 500));
-  const tAiTitle = new Date('2026-07-13T13:00:00.000Z');
-  fs.utimesSync(aiTitleFile, tAiTitle, tAiTitle);
+  ]
+  const aiTitleFile = path.join(dirB, 'aititle-session.jsonl')
+  fs.writeFileSync(aiTitleFile, buildJsonl(aiTitleLines, MIN_BYTES + 500))
+  const tAiTitle = new Date('2026-07-13T13:00:00.000Z')
+  fs.utimesSync(aiTitleFile, tAiTitle, tAiTitle)
 
   // A tiny session (< 1500 bytes) that must be excluded despite having an
   // otherwise perfectly valid topic + cwd.
@@ -129,19 +133,22 @@ try {
       sessionId: 'tiny-session',
       timestamp: '2026-07-09T00:00:00.000Z',
     }),
-  ];
-  const tinyBody = tinyLines.join('\n') + '\n';
-  assert.ok(Buffer.byteLength(tinyBody, 'utf8') < MIN_BYTES, 'fixture bug: tiny session must be under threshold');
-  const tinyFile = path.join(dirB, 'tiny-session.jsonl');
-  fs.writeFileSync(tinyFile, tinyBody);
-  const tTiny = new Date('2026-07-08T12:00:00.000Z');
-  fs.utimesSync(tinyFile, tTiny, tTiny);
+  ]
+  const tinyBody = tinyLines.join('\n') + '\n'
+  assert.ok(
+    Buffer.byteLength(tinyBody, 'utf8') < MIN_BYTES,
+    'fixture bug: tiny session must be under threshold',
+  )
+  const tinyFile = path.join(dirB, 'tiny-session.jsonl')
+  fs.writeFileSync(tinyFile, tinyBody)
+  const tTiny = new Date('2026-07-08T12:00:00.000Z')
+  fs.utimesSync(tinyFile, tTiny, tTiny)
 
   // --- Project dir C: an "active" session (mtime = now) whose tail carries
   // a couple of sidechain lines and ends on an assistant tool_use, to
   // exercise lastAction + subagents.
-  const dirC = path.join(root, '-Users-test-repoC');
-  fs.mkdirSync(dirC, { recursive: true });
+  const dirC = path.join(root, '-Users-test-repoC')
+  fs.mkdirSync(dirC, { recursive: true })
 
   const activeLines = [
     line({
@@ -186,160 +193,163 @@ try {
       sessionId: 'active-session',
       timestamp: '2026-07-16T18:00:15.000Z',
     }),
-  ];
-  const activeFile = path.join(dirC, 'active-session.jsonl');
-  fs.writeFileSync(activeFile, buildJsonl(activeLines, MIN_BYTES + 500));
-  const tActive = new Date(); // "now": must land inside the 10-minute active window
-  fs.utimesSync(activeFile, tActive, tActive);
+  ]
+  const activeFile = path.join(dirC, 'active-session.jsonl')
+  fs.writeFileSync(activeFile, buildJsonl(activeLines, MIN_BYTES + 500))
+  const tActive = new Date() // "now": must land inside the 10-minute active window
+  fs.utimesSync(activeFile, tActive, tActive)
 
   // --- First call ---
-  const results1 = await scanSessions(root);
+  const results1 = await scanSessions(root)
 
   assert.strictEqual(
     results1.length,
     5,
-    `expected 5 sessions, got ${results1.length}: ${JSON.stringify(results1.map((s) => s.id))}`
-  );
+    `expected 5 sessions, got ${results1.length}: ${JSON.stringify(results1.map((s) => s.id))}`,
+  )
 
-  const ids1 = results1.map((s) => s.id);
+  const ids1 = results1.map((s) => s.id)
   assert.deepStrictEqual(
     ids1,
     ['active-session', 'caveat-session', 'garbage-session', 'aititle-session', 'summary-session'],
-    'sessions must be sorted by lastActive desc'
-  );
+    'sessions must be sorted by lastActive desc',
+  )
 
-  const byId1 = Object.fromEntries(results1.map((s) => [s.id, s]));
+  const byId1 = Object.fromEntries(results1.map((s) => [s.id, s]))
 
   assert.strictEqual(
     byId1['caveat-session'].topic,
     'Fix the flaky retry logic in the payment worker',
-    'must skip the <local-command-caveat> line and use the next real user line, trimmed+collapsed'
-  );
-  assert.strictEqual(byId1['caveat-session'].project, '/Users/test/repoA');
+    'must skip the <local-command-caveat> line and use the next real user line, trimmed+collapsed',
+  )
+  assert.strictEqual(byId1['caveat-session'].project, '/Users/test/repoA')
 
   assert.strictEqual(
     byId1['garbage-session'].topic,
     'Investigate why the nightly ETL job silently drops rows',
-    'must skip the unparseable line without throwing and still extract the real topic'
-  );
-  assert.strictEqual(byId1['garbage-session'].project, '/Users/test/repoA');
+    'must skip the unparseable line without throwing and still extract the real topic',
+  )
+  assert.strictEqual(byId1['garbage-session'].project, '/Users/test/repoA')
 
   assert.strictEqual(
     byId1['summary-session'].topic,
     'Design the planet renderer camera controls',
-    'a summary line must win over a valid user-text topic (rule 1 beats rule 2)'
-  );
-  assert.strictEqual(byId1['summary-session'].project, '/Users/test/repoB');
+    'a summary line must win over a valid user-text topic (rule 1 beats rule 2)',
+  )
+  assert.strictEqual(byId1['summary-session'].project, '/Users/test/repoB')
 
   assert.strictEqual(
     byId1['aititle-session'].topic,
     'Build a session-scanner backend',
-    'an ai-title line must win over a valid user-text topic (rule 1 beats rule 2)'
-  );
-  assert.strictEqual(byId1['aititle-session'].project, '/Users/test/repoB');
+    'an ai-title line must win over a valid user-text topic (rule 1 beats rule 2)',
+  )
+  assert.strictEqual(byId1['aititle-session'].project, '/Users/test/repoB')
 
-  assert.ok(!('tiny-session' in byId1), 'tiny session must be excluded for being under the byte threshold');
+  assert.ok(!('tiny-session' in byId1), 'tiny session must be excluded for being under the byte threshold')
 
   for (const s of results1) {
-    assert.strictEqual(typeof s.id, 'string');
-    assert.strictEqual(typeof s.project, 'string');
-    assert.strictEqual(typeof s.topic, 'string');
-    assert.ok(s.topic.length <= 80, 'topic must be truncated to 80 chars');
-    assert.ok(!/[\n\r]/.test(s.topic), 'topic must be a single line');
-    assert.strictEqual(typeof s.lastActive, 'number');
-    assert.strictEqual(typeof s.bytes, 'number');
-    assert.ok(s.bytes >= MIN_BYTES);
-    assert.ok(s.lastAction === null || typeof s.lastAction === 'string', 'lastAction must be null or a string');
+    assert.strictEqual(typeof s.id, 'string')
+    assert.strictEqual(typeof s.project, 'string')
+    assert.strictEqual(typeof s.topic, 'string')
+    assert.ok(s.topic.length <= 80, 'topic must be truncated to 80 chars')
+    assert.ok(!/[\n\r]/.test(s.topic), 'topic must be a single line')
+    assert.strictEqual(typeof s.lastActive, 'number')
+    assert.strictEqual(typeof s.bytes, 'number')
+    assert.ok(s.bytes >= MIN_BYTES)
+    assert.ok(
+      s.lastAction === null || typeof s.lastAction === 'string',
+      'lastAction must be null or a string',
+    )
     if (typeof s.lastAction === 'string') {
-      assert.ok(!/[\n\r]/.test(s.lastAction), 'lastAction must be a single line');
-      assert.ok(s.lastAction.length <= 60, 'lastAction must be capped at 60 chars');
+      assert.ok(!/[\n\r]/.test(s.lastAction), 'lastAction must be a single line')
+      assert.ok(s.lastAction.length <= 60, 'lastAction must be capped at 60 chars')
     }
-    assert.strictEqual(typeof s.subagents, 'number');
-    assert.ok(s.subagents >= 0 && s.subagents <= 20, 'subagents must be within [0,20]');
+    assert.strictEqual(typeof s.subagents, 'number')
+    assert.ok(s.subagents >= 0 && s.subagents <= 20, 'subagents must be within [0,20]')
     assert.ok(
       s.model === null || ['fable', 'opus', 'sonnet', 'haiku'].includes(s.model),
-      `model must be null or a known tier, got: ${s.model}`
-    );
+      `model must be null or a known tier, got: ${s.model}`,
+    )
   }
 
   // lastAction/subagents: only the "active" (mtime within 10min) session gets
   // a tail read at all.
   assert.ok(
     typeof byId1['active-session'].lastAction === 'string' && byId1['active-session'].lastAction.length > 0,
-    'the active session must have a non-empty lastAction'
-  );
+    'the active session must have a non-empty lastAction',
+  )
   assert.ok(
     byId1['active-session'].lastAction.includes('Edit'),
-    `lastAction must mention the tool name, got: ${byId1['active-session'].lastAction}`
-  );
+    `lastAction must mention the tool name, got: ${byId1['active-session'].lastAction}`,
+  )
   assert.ok(
     byId1['active-session'].subagents >= 2,
-    `active session must count at least 2 sidechain lines, got ${byId1['active-session'].subagents}`
-  );
+    `active session must count at least 2 sidechain lines, got ${byId1['active-session'].subagents}`,
+  )
   assert.strictEqual(
     byId1['active-session'].model,
     'fable',
-    `active session must normalize message.model "claude-fable-5-20260101" to "fable", got: ${byId1['active-session'].model}`
-  );
+    `active session must normalize message.model "claude-fable-5-20260101" to "fable", got: ${byId1['active-session'].model}`,
+  )
 
   assert.strictEqual(
     byId1['garbage-session'].lastAction,
     null,
-    'an old (non-active) session must have lastAction null'
-  );
+    'an old (non-active) session must have lastAction null',
+  )
   assert.strictEqual(
     byId1['garbage-session'].subagents,
     0,
-    'an old (non-active) session must have subagents 0 (its tail is never read)'
-  );
+    'an old (non-active) session must have subagents 0 (its tail is never read)',
+  )
   assert.strictEqual(
     byId1['garbage-session'].model,
     null,
-    'an old (non-active) session must have model null (its tail is never read)'
-  );
+    'an old (non-active) session must have model null (its tail is never read)',
+  )
 
   // --- Second call: must exercise the cache and return identical results ---
-  const results2 = await scanSessions(root);
-  assert.deepStrictEqual(results2, results1, 'second (cached) call must return identical results');
+  const results2 = await scanSessions(root)
+  assert.deepStrictEqual(results2, results1, 'second (cached) call must return identical results')
 
-  console.log('scan.test.js: all assertions passed (%d sessions)', results1.length);
+  console.log('scan.test.js: all assertions passed (%d sessions)', results1.length)
 
   // --- server/resume.js: pure-validation tests (never spawns osascript) ---
-  homeTestDir = fs.mkdtempSync(path.join(os.homedir(), '.claude-planet-resume-test-'));
-  const VALID_ID = 'a1b2c3d4-e5f6-47a8-b9c0-1234567890ab';
+  homeTestDir = fs.mkdtempSync(path.join(os.homedir(), '.claude-planet-resume-test-'))
+  const VALID_ID = 'a1b2c3d4-e5f6-47a8-b9c0-1234567890ab'
 
-  const ok = validateResumeInput({ id: VALID_ID, project: homeTestDir });
-  assert.strictEqual(ok.error, undefined, 'a valid id + an existing directory under $HOME must validate');
-  assert.strictEqual(ok.id, VALID_ID);
-  assert.strictEqual(ok.project, path.resolve(homeTestDir));
+  const ok = validateResumeInput({ id: VALID_ID, project: homeTestDir })
+  assert.strictEqual(ok.error, undefined, 'a valid id + an existing directory under $HOME must validate')
+  assert.strictEqual(ok.id, VALID_ID)
+  assert.strictEqual(ok.project, path.resolve(homeTestDir))
 
   assert.ok(
     validateResumeInput({ id: 'not-an-id!!', project: homeTestDir }).error,
-    'an id with non hex/dash characters must be rejected'
-  );
+    'an id with non hex/dash characters must be rejected',
+  )
   assert.ok(
     validateResumeInput({ id: 'short', project: homeTestDir }).error,
-    'an id under 8 chars must be rejected'
-  );
+    'an id under 8 chars must be rejected',
+  )
   assert.ok(
     validateResumeInput({ id: VALID_ID, project: path.join(homeTestDir, 'does-not-exist') }).error,
-    'a nonexistent project directory must be rejected'
-  );
+    'a nonexistent project directory must be rejected',
+  )
 
-  const notADir = path.join(homeTestDir, 'file.txt');
-  fs.writeFileSync(notADir, 'x');
+  const notADir = path.join(homeTestDir, 'file.txt')
+  fs.writeFileSync(notADir, 'x')
   assert.ok(
     validateResumeInput({ id: VALID_ID, project: notADir }).error,
-    'a project path that is a file, not a directory, must be rejected'
-  );
+    'a project path that is a file, not a directory, must be rejected',
+  )
 
   assert.ok(
     validateResumeInput({ id: VALID_ID, project: root }).error,
-    'a project directory outside the home directory must be rejected'
-  );
+    'a project directory outside the home directory must be rejected',
+  )
 
-  console.log('resume.test: all validation assertions passed');
+  console.log('resume.test: all validation assertions passed')
 } finally {
-  fs.rmSync(root, { recursive: true, force: true });
-  if (homeTestDir) fs.rmSync(homeTestDir, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true })
+  if (homeTestDir) fs.rmSync(homeTestDir, { recursive: true, force: true })
 }

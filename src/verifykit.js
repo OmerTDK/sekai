@@ -191,7 +191,12 @@ function determinismHash(scene, worldGroup) {
     const ud = obj.userData
     if (ud && ud.settlement) {
       obj.getWorldPosition(_hashPos)
-      entries.push({ key: 'settlement:' + ud.settlement.project, x: _hashPos.x, y: _hashPos.y, z: _hashPos.z })
+      entries.push({
+        key: 'settlement:' + ud.settlement.project,
+        x: _hashPos.x,
+        y: _hashPos.y,
+        z: _hashPos.z,
+      })
     } else if (ud && ud.structure) {
       const root = ud.structure.structureRoot || obj
       root.getWorldPosition(_hashPos)
@@ -199,7 +204,9 @@ function determinismHash(scene, worldGroup) {
     }
   })
   if (entries.length === 0) {
-    console.warn('[planet] verifykit: determinismHash found zero settlement/structure anchors -- world may not be loaded yet')
+    console.warn(
+      '[planet] verifykit: determinismHash found zero settlement/structure anchors -- world may not be loaded yet',
+    )
   }
   entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
   let str = ''
@@ -249,7 +256,9 @@ export function createVerifyKit(handles) {
   // every call below reuses module-level scratch.
   function seekTime(seconds) {
     if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) {
-      console.warn('[planet] verifykit: seekTime called with invalid seconds (' + seconds + '); treating as 0')
+      console.warn(
+        '[planet] verifykit: seekTime called with invalid seconds (' + seconds + '); treating as 0',
+      )
       seconds = 0
     }
     const steps = Math.round(seconds / SEEK_DT)
@@ -281,7 +290,9 @@ export function createVerifyKit(handles) {
     const sunDir = sky.getSunDir(_sunDirScratch)
     const found = findCoastDir(planet, sunDir, _resultDir)
     if (!found) {
-      console.warn('[planet] verifykit: no sunlit coastline found for mid-coast viewpoint; using fallback position')
+      console.warn(
+        '[planet] verifykit: no sunlit coastline found for mid-coast viewpoint; using fallback position',
+      )
       _resultDir.copy(sunDir)
     }
     camera.position.copy(_resultDir).multiplyScalar(MID_COAST_R)
@@ -293,7 +304,9 @@ export function createVerifyKit(handles) {
     const sunDir = sky.getSunDir(_sunDirScratch)
     const found = findGrassDir(planet, sunDir, _resultDir)
     if (!found) {
-      console.warn('[planet] verifykit: no sunlit grass found for ground-sunlit viewpoint; using fallback position')
+      console.warn(
+        '[planet] verifykit: no sunlit grass found for ground-sunlit viewpoint; using fallback position',
+      )
       _resultDir.copy(sunDir)
     }
     const h = planet.sampleHeight(_resultDir)
@@ -302,7 +315,7 @@ export function createVerifyKit(handles) {
     camera.lookAt(
       camera.position.x + _tangentScratch.x * GROUND_SUNLIT_LOOK_DIST,
       camera.position.y + _tangentScratch.y * GROUND_SUNLIT_LOOK_DIST,
-      camera.position.z + _tangentScratch.z * GROUND_SUNLIT_LOOK_DIST
+      camera.position.z + _tangentScratch.z * GROUND_SUNLIT_LOOK_DIST,
     )
     return { name: 'ground-sunlit', fallback: !found }
   }
@@ -312,7 +325,9 @@ export function createVerifyKit(handles) {
     const settlements = collectSettlements(world.group)
 
     if (settlements.length === 0) {
-      console.warn('[planet] verifykit: no settlements exist yet; using a fallback anti-solar viewpoint for night-city')
+      console.warn(
+        '[planet] verifykit: no settlements exist yet; using a fallback anti-solar viewpoint for night-city',
+      )
       camera.position.copy(sunDir).multiplyScalar(-NIGHT_CITY_R)
       camera.lookAt(0, 0, 0)
       return { name: 'night-city', fallback: true }
@@ -343,7 +358,11 @@ export function createVerifyKit(handles) {
           best = s
         }
       }
-      console.warn('[planet] verifykit: no settlement currently on the night side; seeking forward to ' + best.name + "'s night")
+      console.warn(
+        '[planet] verifykit: no settlement currently on the night side; seeking forward to ' +
+          best.name +
+          "'s night",
+      )
       let elapsed = 0
       let dot = best.anchorDir.dot(sky.getSunDir(_sunDirScratch))
       while (elapsed < NIGHT_CITY_SEEK_CAP && dot >= NIGHT_DOT_THRESHOLD) {
@@ -353,7 +372,11 @@ export function createVerifyKit(handles) {
         dot = best.anchorDir.dot(sky.getSunDir(_sunDirScratch))
       }
       if (dot >= NIGHT_DOT_THRESHOLD) {
-        console.warn('[planet] verifykit: settlement ' + best.name + ' never reached night within the seek budget; using its current (lit) position')
+        console.warn(
+          '[planet] verifykit: settlement ' +
+            best.name +
+            ' never reached night within the seek budget; using its current (lit) position',
+        )
       }
     }
 
@@ -377,12 +400,18 @@ export function createVerifyKit(handles) {
     let fallback = false
     if (strength > 0) {
       if (strength < STORM_MATURE_THRESHOLD) {
-        console.warn('[planet] verifykit: storm viewpoint using an immature storm after seeking ' + STORM_SEEK_CAP + 's')
+        console.warn(
+          '[planet] verifykit: storm viewpoint using an immature storm after seeking ' + STORM_SEEK_CAP + 's',
+        )
         fallback = true
       }
       camera.position.copy(_stormDirScratch).multiplyScalar(STORM_R)
     } else {
-      console.warn('[planet] verifykit: no active storm found after seeking ' + STORM_SEEK_CAP + 's; using a fallback viewpoint')
+      console.warn(
+        '[planet] verifykit: no active storm found after seeking ' +
+          STORM_SEEK_CAP +
+          's; using a fallback viewpoint',
+      )
       fallback = true
       camera.position.copy(sky.getSunDir(_stormDirScratch)).multiplyScalar(STORM_R)
     }

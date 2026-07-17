@@ -83,7 +83,12 @@ function findSettlementAnchor(world, project) {
 
 const monumentBaseGeo = new THREE.CylinderGeometry(0.3, 0.34, 0.4, 8)
 const monumentShaftGeo = new THREE.CylinderGeometry(0.14, 0.18, 0.48, 8)
-const monumentBrassMat = new THREE.MeshStandardMaterial({ color: 0xb0793a, metalness: 0.55, roughness: 0.35, flatShading: true })
+const monumentBrassMat = new THREE.MeshStandardMaterial({
+  color: 0xb0793a,
+  metalness: 0.55,
+  roughness: 0.35,
+  flatShading: true,
+})
 const monumentFinialMat = new THREE.MeshStandardMaterial({
   color: 0xc98d4a,
   metalness: 0.5,
@@ -138,7 +143,7 @@ function offsetDir(base, bearing, dist, out) {
 // createEvents
 // ---------------------------------------------------------------------------
 
-export function createEvents(world, camera) {
+export function createEvents(world, _camera) {
   const group = new THREE.Group()
   const fireworksGroup = new THREE.Group()
   const monumentsGroup = new THREE.Group()
@@ -176,7 +181,9 @@ export function createEvents(world, camera) {
   // Spawn-time allocation is fine here (bursts are rare, not per-frame) —
   // same rationale storms.js states for its own spawn-time helpers.
   function spawnFireworkBurst(originPos, upDir, accentColor) {
-    const count = FIREWORK_PARTICLES_MIN + Math.floor(Math.random() * (FIREWORK_PARTICLES_MAX - FIREWORK_PARTICLES_MIN + 1))
+    const count =
+      FIREWORK_PARTICLES_MIN +
+      Math.floor(Math.random() * (FIREWORK_PARTICLES_MAX - FIREWORK_PARTICLES_MIN + 1))
     for (let n = 0; n < count; n++) {
       const slot = fwCursor
       fwCursor = (fwCursor + 1) % FIREWORK_POOL_SIZE
@@ -254,14 +261,16 @@ export function createEvents(world, camera) {
     const pal = RACE_PALETTES[anchor.race]
     const accentColor = pal ? new THREE.Color(pal.accent) : DEFAULT_ACCENT_COLOR
 
-    const burstCount = FIREWORK_BURST_MIN + Math.floor(Math.random() * (FIREWORK_BURST_MAX - FIREWORK_BURST_MIN + 1))
+    const burstCount =
+      FIREWORK_BURST_MIN + Math.floor(Math.random() * (FIREWORK_BURST_MAX - FIREWORK_BURST_MIN + 1))
     let fireIn = 0
     for (let i = 0; i < burstCount; i++) {
       const jx = (Math.random() * 2 - 1) * FIREWORK_JITTER_RADIUS
       const jz = (Math.random() * 2 - 1) * FIREWORK_JITTER_RADIUS
       const originPos = groundPos.clone().addScaledVector(_offsetT1, jx).addScaledVector(_offsetT2, jz)
       pendingBursts.push({ fireIn, originPos, upDir: anchor.anchorDir.clone(), accentColor })
-      fireIn += FIREWORK_BURST_STAGGER_MIN + Math.random() * (FIREWORK_BURST_STAGGER_MAX - FIREWORK_BURST_STAGGER_MIN)
+      fireIn +=
+        FIREWORK_BURST_STAGGER_MIN + Math.random() * (FIREWORK_BURST_STAGGER_MAX - FIREWORK_BURST_STAGGER_MIN)
     }
   }
 
@@ -333,7 +342,9 @@ export function createEvents(world, camera) {
   function dispatchEvent(e) {
     const anchor = findSettlementAnchor(world, e.project)
     if (!anchor) {
-      warnSettlementMissing('no settlement found yet for project "' + e.project + '" — dropped a ' + e.kind + ' event')
+      warnSettlementMissing(
+        'no settlement found yet for project "' + e.project + '" — dropped a ' + e.kind + ' event',
+      )
       return
     }
     if (e.kind === 'commit') scheduleCommitFireworks(anchor)

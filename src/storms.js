@@ -154,7 +154,15 @@ function buildPatch(sizeScale, radius = PATCH_RADIUS) {
   const phiLength = PATCH_PHI_LENGTH * sizeScale
   const thetaLength = PATCH_THETA_LENGTH * sizeScale
   const thetaStart = Math.PI / 2 - thetaLength / 2
-  const geo = new THREE.SphereGeometry(radius, PATCH_SEGMENTS, PATCH_SEGMENTS, 0, phiLength, thetaStart, thetaLength)
+  const geo = new THREE.SphereGeometry(
+    radius,
+    PATCH_SEGMENTS,
+    PATCH_SEGMENTS,
+    0,
+    phiLength,
+    thetaStart,
+    thetaLength,
+  )
 
   // SphereGeometry vertex formula: x=-sin(theta)cos(phi), y=cos(theta),
   // z=sin(theta)sin(phi). Patch center is at u=v=0.5 -> theta=PI/2 (always,
@@ -229,7 +237,7 @@ function applySunShading(mat) {
             '  diffuseColor.rgb *= 1.0 + edgeT * 0.08;',
             '  diffuseColor.rgb = min(diffuseColor.rgb, vec3(1.0));', // stay white-dominant, never glow (ART.md 2.5/8)
             '}',
-          ].join('\n')
+          ].join('\n'),
         )
       if (frag === shader.fragmentShader) throw new Error('storms.js: sun-shading injection point not found')
       shader.fragmentShader = frag
@@ -449,7 +457,7 @@ export function createStorms(planet, camera, seed) {
         storm.dir.x * DRIFT_WOBBLE_SCALE + storm.nx,
         storm.dir.y * DRIFT_WOBBLE_SCALE + storm.ny,
         storm.dir.z * DRIFT_WOBBLE_SCALE + storm.nz,
-        3
+        3,
       ) *
       DRIFT_WOBBLE_GAIN *
       DRIFT_RATE *

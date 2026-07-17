@@ -1,0 +1,8 @@
+node_modules/
+dist/
+public/
+gallery/
+spikes/
+docs/
+*.md
+package-lock.json

@@ -73,11 +73,7 @@ export function createBirds(seed) {
       q.setFromRotationMatrix(m)
       for (const b of fl.birds) {
         const u = b.userData
-        b.position
-          .copy(pos)
-          .multiplyScalar(alt)
-          .addScaledVector(fwd, -u.back)
-          .addScaledVector(right, u.side)
+        b.position.copy(pos).multiplyScalar(alt).addScaledVector(fwd, -u.back).addScaledVector(right, u.side)
         b.quaternion.copy(q)
         const flap = Math.sin(t * u.flapSpeed + u.flapPhase) * 0.6
         u.wingL.rotation.z = flap

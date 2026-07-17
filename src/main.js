@@ -114,8 +114,38 @@ const ui = createUI(world, {
   },
 })
 
-window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, dragon, airships, cameraFeel, ui, renderer, composer, controls }
-window.__planet.verify = createVerifyKit({ scene, camera, composer, renderer, controls, planet, sky, world, birds, flora, wind, storms })
+window.__planet = {
+  scene,
+  camera,
+  planet,
+  sky,
+  world,
+  birds,
+  flora,
+  wind,
+  storms,
+  dragon,
+  airships,
+  cameraFeel,
+  ui,
+  renderer,
+  composer,
+  controls,
+}
+window.__planet.verify = createVerifyKit({
+  scene,
+  camera,
+  composer,
+  renderer,
+  controls,
+  planet,
+  sky,
+  world,
+  birds,
+  flora,
+  wind,
+  storms,
+})
 
 const clock = new THREE.Clock()
 const sunDirScratch = new THREE.Vector3()

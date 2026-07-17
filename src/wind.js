@@ -107,7 +107,7 @@ export function createWind(planet, camera, seed) {
             pos.x * WOBBLE_NOISE_SCALE + nx,
             pos.y * WOBBLE_NOISE_SCALE + ny,
             pos.z * WOBBLE_NOISE_SCALE + nz,
-            3
+            3,
           ) *
           WOBBLE_GAIN *
           stepArc
@@ -123,7 +123,7 @@ export function createWind(planet, camera, seed) {
       TUBULAR_SEGMENTS,
       RADIUS,
       RADIAL_SEGMENTS,
-      false
+      false,
     )
     streak.mesh.geometry.setDrawRange(0, 0)
     streak.age = 0

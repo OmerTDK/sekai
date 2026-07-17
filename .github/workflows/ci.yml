@@ -17,6 +17,14 @@ jobs:
 
       - run: npm ci
 
+      # Formatting + lint are enforced from the wave that adopted them
+      # (CONTRIBUTING.md "Formatting/linting"); mechanical, so they run first.
+      - name: Prettier check
+        run: npx prettier --check .
+
+      - name: ESLint
+        run: npx eslint .
+
       # Syntax-only sweep so a bad file fails fast with a precise location,
       # before anything tries to actually import/bundle it.
       - name: node --check src/ server/ electron/

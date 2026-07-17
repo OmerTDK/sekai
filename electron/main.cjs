@@ -127,7 +127,7 @@ async function boot() {
     showError(
       win,
       `Claude Planet could not reach the dev server at ${DEV_URL} after 30s. ` +
-        'Start it manually with "npm run dev" and reload this window (Cmd+R).'
+        'Start it manually with "npm run dev" and reload this window (Cmd+R).',
     )
   }
 }
