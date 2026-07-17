@@ -31,7 +31,15 @@ import {
   boxGeo,
   scaffoldMat,
 } from './buildings.js'
-import { findLandAnchor, findStructureSpot, randomLandNear, tangentBasis, yawedTangent, orientOnSurface, stepToward } from './placement.js'
+import {
+  findLandAnchor,
+  findStructureSpot,
+  randomLandNear,
+  tangentBasis,
+  yawedTangent,
+  orientOnSurface,
+  stepToward,
+} from './placement.js'
 import {
   makeSettlementSprite,
   makeTopicSprite,
@@ -58,13 +66,13 @@ const CONSTRUCTION_NEW_MAX_MS = 5 * 60 * 1000 // session must be this fresh to a
 const LABEL_THROTTLE = 0.3 // seconds between topic-label visibility checks
 const TOPIC_VISIBLE_DIST = 0.5 // camera must be this close (world units) to see a topic label
 
-const AGENT_SPEED = 0.010 // rad/s baseline walking angular speed
+const AGENT_SPEED = 0.01 // rad/s baseline walking angular speed
 const WORKING_MAX_MS = 3 * 60 * 1000
 const AGENT_MAX_MS = 10 * 60 * 1000
 
 const PERSON_HEIGHT = 0.0055
 const BOB_WALK = PERSON_HEIGHT * 0.16
-const BOB_HAMMER = PERSON_HEIGHT * 0.30
+const BOB_HAMMER = PERSON_HEIGHT * 0.3
 const BOB_IDLE = PERSON_HEIGHT * 0.05
 const FOOT_LIFT = PERSON_HEIGHT * 0.05
 
@@ -157,7 +165,9 @@ let warnedStructureClickCb = false
 function warnIngestSkip(reason) {
   if (warnedIngestSkip) return
   warnedIngestSkip = true
-  console.warn('[planet] world.js: session ingest degraded — skipped a malformed session entry (' + reason + ')')
+  console.warn(
+    '[planet] world.js: session ingest degraded — skipped a malformed session entry (' + reason + ')',
+  )
 }
 
 function warnPoll(reason) {
@@ -178,20 +188,28 @@ let warnedAssetsCreate = false
 function warnAssetsLoad(reason) {
   if (warnedAssetsLoad) return
   warnedAssetsLoad = true
-  console.warn('[planet] world.js: building-asset pack unavailable — using the procedural buildKit fallback for all structures (' + reason + ')')
+  console.warn(
+    '[planet] world.js: building-asset pack unavailable — using the procedural buildKit fallback for all structures (' +
+      reason +
+      ')',
+  )
 }
 
 function warnAssetsCreate(reason) {
   if (warnedAssetsCreate) return
   warnedAssetsCreate = true
-  console.warn('[planet] world.js: asset-pack structure visual failed at least once — falling back to procedural buildKit for the affected structure(s) (' + reason + ')')
+  console.warn(
+    '[planet] world.js: asset-pack structure visual failed at least once — falling back to procedural buildKit for the affected structure(s) (' +
+      reason +
+      ')',
+  )
 }
 
 // ---------------------------------------------------------------------------
 // createWorld
 // ---------------------------------------------------------------------------
 
-export function createWorld(planet, camera, domElement, renderer = null, cameraFeel = null) {
+export function createWorld(planet, camera, domElement, renderer = null, cameraFeel = null, sky = null) {
   const group = new THREE.Group()
   const settlementsGroup = new THREE.Group()
   const structuresGroup = new THREE.Group()
@@ -224,7 +242,11 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
     const coords = []
     for (const st of structures.values()) {
       if (!st.timeVisible) continue
-      coords.push(st.structureRoot.position.x + st.dir.x * 0.004, st.structureRoot.position.y + st.dir.y * 0.004, st.structureRoot.position.z + st.dir.z * 0.004)
+      coords.push(
+        st.structureRoot.position.x + st.dir.x * 0.004,
+        st.structureRoot.position.y + st.dir.y * 0.004,
+        st.structureRoot.position.z + st.dir.z * 0.004,
+      )
     }
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(coords), 3))
@@ -254,7 +276,7 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
       return
     }
     try {
-      const api = await mod.loadBuildingAssets(renderer)
+      const api = await mod.loadBuildingAssets(renderer, sky)
       if (api && api.ready) {
         assetsApi = api
         assetsReady = true
@@ -279,7 +301,11 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
   // confirmed against assets.js's actual setVisualMatrix contract comment.
   function pushVisualMatrix(structure) {
     if (!assetsApi || structure.visualHandle == null) return
-    _visMat.compose(structure.structureRoot.position, structure.structureRoot.quaternion, _visScale.setScalar(structure.visualScale))
+    _visMat.compose(
+      structure.structureRoot.position,
+      structure.structureRoot.quaternion,
+      _visScale.setScalar(structure.visualScale),
+    )
     assetsApi.setVisualMatrix(structure.visualHandle, _visMat)
   }
 
@@ -405,9 +431,12 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
     plumePositions[i3 + 2] = st.structureRoot.position.z + st.dir.z * PLUME_EMIT_OFFSET
     tangentBasis(st.dir, _tb1, _tb2)
     const a = Math.random() * Math.PI * 2
-    plumeVelocity[i3] = (_tb1.x * Math.cos(a) + _tb2.x * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.x * PLUME_RISE_SPEED
-    plumeVelocity[i3 + 1] = (_tb1.y * Math.cos(a) + _tb2.y * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.y * PLUME_RISE_SPEED
-    plumeVelocity[i3 + 2] = (_tb1.z * Math.cos(a) + _tb2.z * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.z * PLUME_RISE_SPEED
+    plumeVelocity[i3] =
+      (_tb1.x * Math.cos(a) + _tb2.x * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.x * PLUME_RISE_SPEED
+    plumeVelocity[i3 + 1] =
+      (_tb1.y * Math.cos(a) + _tb2.y * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.y * PLUME_RISE_SPEED
+    plumeVelocity[i3 + 2] =
+      (_tb1.z * Math.cos(a) + _tb2.z * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.z * PLUME_RISE_SPEED
     plumeAge[slot] = 0
     plumeTtl[slot] = PLUME_TTL * (0.85 + Math.random() * 0.3)
     const g = 0.82 + Math.random() * 0.12
@@ -568,7 +597,11 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
     const v = hash01(project + '~lon')
     const lat = Math.asin(clamp(2 * u - 1, -1, 1))
     const lon = 2 * Math.PI * v
-    const base = new THREE.Vector3(Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon))
+    const base = new THREE.Vector3(
+      Math.cos(lat) * Math.cos(lon),
+      Math.sin(lat),
+      Math.cos(lat) * Math.sin(lon),
+    )
 
     const anchorRng = rngFromString(project)
     const anchorDir = findLandAnchor(planet, base, anchorRng)
@@ -589,7 +622,19 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
     hitMesh.scale.setScalar(0.08) // sphereGeo radius 0.5 -> world radius 0.04
     settlementsGroup.add(hitMesh)
 
-    const settlement = { project, anchorDir, groundR, race, name, basenameRaw, labelSprite, hitMesh, structureDirs: [], visibleStructureCount: 0, labelWantVisible: true }
+    const settlement = {
+      project,
+      anchorDir,
+      groundR,
+      race,
+      name,
+      basenameRaw,
+      labelSprite,
+      hitMesh,
+      structureDirs: [],
+      visibleStructureCount: 0,
+      labelWantVisible: true,
+    }
     hitMesh.userData.settlement = settlement
     hitSpheres.push(hitMesh)
     return settlement
@@ -828,7 +873,9 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
 
     const wanderPoints = [structure.dir.clone()]
     for (let i = 0; i < 3; i++) {
-      wanderPoints.push(randomLandNear(planet, settlement.anchorDir, rngFromString(id + '~wander' + i), 0.045))
+      wanderPoints.push(
+        randomLandNear(planet, settlement.anchorDir, rngFromString(id + '~wander' + i), 0.045),
+      )
     }
 
     tangentBasis(structure.dir, _tb1, _tb2)
@@ -868,7 +915,9 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
 
     const wanderPoints = [structure.dir.clone()]
     for (let i = 0; i < 3; i++) {
-      wanderPoints.push(randomLandNear(planet, settlement.anchorDir, rngFromString(seed + '~wander' + i), 0.045))
+      wanderPoints.push(
+        randomLandNear(planet, settlement.anchorDir, rngFromString(seed + '~wander' + i), 0.045),
+      )
     }
     const start = randomLandNear(planet, settlement.anchorDir, rngFromString(seed + '~start'), 0.045)
 
@@ -1181,7 +1230,9 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
           // A misbehaving subscriber shouldn't break click handling.
           if (!warnedStructureClickCb) {
             warnedStructureClickCb = true
-            console.warn('[planet] world.js: structure-click subscriber degraded — a registered callback threw: ' + err)
+            console.warn(
+              '[planet] world.js: structure-click subscriber degraded — a registered callback threw: ' + err,
+            )
           }
         }
       }
@@ -1230,7 +1281,13 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
       // scale by distance to the label itself, so close-ups get signposts,
       // not billboards
       const d = settlement.labelSprite.position.distanceTo(camera.position)
-      applyLabelScale(settlement.labelSprite, d, SETTLEMENT_LABEL_K, SETTLEMENT_LABEL_MIN, SETTLEMENT_LABEL_MAX)
+      applyLabelScale(
+        settlement.labelSprite,
+        d,
+        SETTLEMENT_LABEL_K,
+        SETTLEMENT_LABEL_MIN,
+        SETTLEMENT_LABEL_MAX,
+      )
       // Orbit label declutter: ease opacity toward the throttled selection's
       // target (below) every single frame, so crossing the
       // SETTLEMENT_DECLUTTER_DIST threshold — or a settlement entering/
@@ -1383,5 +1440,23 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
     return true
   }
 
-  return { group, update, stats, list, visit, _tween: tween, onStructureClick, setTimeFilter, getTimeRange }
+  // M-WX: read-only walker iteration for surface-effect modules (footprint
+  // trails). Callback gets (id, dir, race); dir is the LIVE unit-vector the
+  // agent walks on -- treat as read-only, never mutate or retain it.
+  function forEachWalker(fn) {
+    for (const [id, a] of agents) fn(id, a.dir, a.settlement.race)
+  }
+
+  return {
+    group,
+    update,
+    stats,
+    list,
+    visit,
+    _tween: tween,
+    onStructureClick,
+    setTimeFilter,
+    getTimeRange,
+    forEachWalker,
+  }
 }

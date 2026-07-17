@@ -16,6 +16,11 @@ import { createEvents } from './events.js'
 import { createVerifyKit } from './verifykit.js'
 import { createWind } from './wind.js'
 import { createStorms } from './storms.js'
+import { createFloods } from './flood.js'
+import { createSeaIce } from './seaice.js'
+import { createSeaLife } from './sealife.js'
+import { createTrails } from './trails.js'
+import { createWeather } from './weather.js'
 import { createUI } from './ui.js'
 import { clamp, fantasyName } from './util.js'
 
@@ -48,10 +53,10 @@ controls.maxDistance = 9
 
 const cameraFeel = createCameraFeel(planet, camera, controls)
 
-const world = createWorld(planet, camera, renderer.domElement, renderer, cameraFeel)
+const world = createWorld(planet, camera, renderer.domElement, renderer, cameraFeel, sky)
 scene.add(world.group)
 
-const birds = createBirds(SEED)
+const birds = createBirds(planet, SEED)
 scene.add(birds.group)
 
 const flora = createFlora(planet, camera, SEED)
@@ -63,6 +68,9 @@ scene.add(wind.group)
 const storms = createStorms(planet, camera, SEED)
 scene.add(storms.group)
 
+const floods = createFloods(planet, storms, SEED)
+scene.add(floods.group)
+
 const events = createEvents(world, camera)
 scene.add(events.group)
 
@@ -71,6 +79,19 @@ scene.add(dragon.group)
 
 const airships = createAirships(planet, world, SEED)
 scene.add(airships.group)
+
+// M-WX weather & life.
+const seaIce = createSeaIce(planet, SEED)
+scene.add(seaIce.group)
+
+const weather = createWeather(planet, sky, SEED)
+scene.add(weather.group)
+
+const seaLife = createSeaLife(planet, SEED)
+scene.add(seaLife.group)
+
+const trails = createTrails(planet, world, SEED)
+scene.add(trails.group)
 // Git charm: commits become fireworks, merged PRs become monuments.
 async function pollEvents() {
   try {
@@ -114,8 +135,48 @@ const ui = createUI(world, {
   },
 })
 
-window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, dragon, airships, cameraFeel, ui, renderer, composer, controls }
-window.__planet.verify = createVerifyKit({ scene, camera, composer, renderer, controls, planet, sky, world, birds, flora, wind, storms })
+window.__planet = {
+  scene,
+  camera,
+  planet,
+  sky,
+  world,
+  birds,
+  flora,
+  wind,
+  storms,
+  dragon,
+  airships,
+  floods,
+  seaIce,
+  weather,
+  seaLife,
+  trails,
+  cameraFeel,
+  ui,
+  renderer,
+  composer,
+  controls,
+}
+window.__planet.verify = createVerifyKit({
+  scene,
+  camera,
+  composer,
+  renderer,
+  controls,
+  planet,
+  sky,
+  world,
+  birds,
+  flora,
+  wind,
+  storms,
+  floods,
+  seaIce,
+  weather,
+  seaLife,
+  trails,
+})
 
 const clock = new THREE.Clock()
 const sunDirScratch = new THREE.Vector3()
@@ -133,14 +194,19 @@ renderer.setAnimationLoop(() => {
   planet.update(dt)
   sky.update(dt, camera)
   world.update(dt)
-  birds.update(dt)
+  birds.update(dt, camera)
   flora.update(dt)
   wind.update(dt)
   storms.update(dt, sky.getSunDir(sunDirScratch))
   sky.setStormClearing(stormDirScratch, storms.getPrimary(stormDirScratch))
+  floods.update(dt)
   events.update(dt)
   dragon.update(dt, sky.getSunDir(sunDirScratch))
   airships.update(dt)
+  seaIce.update(dt)
+  weather.update(dt, camera)
+  seaLife.update(dt, camera)
+  trails.update(dt)
   ui.update(dt)
   cameraFeel.update(dt)
   controls.update()

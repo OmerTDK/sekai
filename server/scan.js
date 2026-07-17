@@ -6,19 +6,19 @@
 // dev-server poll (~4s), so repeated calls must be cheap — see the in-memory
 // cache below.
 
-import fs from 'node:fs';
-import path from 'node:path';
-import os from 'node:os';
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
 
-const HEAD_BYTES = 256 * 1024; // only read the first 256KB of each file
-const TAIL_BYTES = 64 * 1024; // only read the last 64KB when probing for live activity
-const MIN_BYTES = 1500; // sessions smaller than this are aborted/noise
-const MAX_TOPIC_CHARS = 80;
-const MAX_ACTION_CHARS = 60;
-const MAX_SUBAGENTS = 20; // count is capped/approximate, see extractTailActivity
-const MAX_RESULTS = 250;
-const RECENT_WINDOW_MS = 30 * 60 * 1000; // always keep sessions active in the last 30min
-const LAST_ACTION_WINDOW_MS = 10 * 60 * 1000; // lastAction/subagents only computed for sessions active in the last 10min
+const HEAD_BYTES = 256 * 1024 // only read the first 256KB of each file
+const TAIL_BYTES = 64 * 1024 // only read the last 64KB when probing for live activity
+const MIN_BYTES = 1500 // sessions smaller than this are aborted/noise
+const MAX_TOPIC_CHARS = 80
+const MAX_ACTION_CHARS = 60
+const MAX_SUBAGENTS = 20 // count is capped/approximate, see extractTailActivity
+const MAX_RESULTS = 250
+const RECENT_WINDOW_MS = 30 * 60 * 1000 // always keep sessions active in the last 30min
+const LAST_ACTION_WINDOW_MS = 10 * 60 * 1000 // lastAction/subagents only computed for sessions active in the last 10min
 
 // Cache keyed by absolute file path: { size, topic, project, resolved,
 // tailSize, lastAction, subagents, model }
@@ -29,62 +29,62 @@ const LAST_ACTION_WINDOW_MS = 10 * 60 * 1000; // lastAction/subagents only compu
 // top: they're only (re)computed for sessions currently inside the "active"
 // window, and only when the file's size changed since they were last
 // computed — see extractTailActivity and its call site below.
-const fileCache = new Map();
+const fileCache = new Map()
 
 // Model tiers we recognize, checked by substring against the most recent
 // assistant line's message.model id (e.g. "claude-fable-5-20260101"). Order
 // doesn't matter for correctness — none of these four names is a substring
 // of another — but is kept stable for readability.
-const MODEL_TIERS = ['fable', 'opus', 'sonnet', 'haiku'];
+const MODEL_TIERS = ['fable', 'opus', 'sonnet', 'haiku']
 
 function formatTopic(raw) {
-  if (typeof raw !== 'string') return null;
-  const collapsed = raw.trim().replace(/\s+/g, ' ');
-  if (!collapsed) return null;
-  return collapsed.length > MAX_TOPIC_CHARS ? collapsed.slice(0, MAX_TOPIC_CHARS) : collapsed;
+  if (typeof raw !== 'string') return null
+  const collapsed = raw.trim().replace(/\s+/g, ' ')
+  if (!collapsed) return null
+  return collapsed.length > MAX_TOPIC_CHARS ? collapsed.slice(0, MAX_TOPIC_CHARS) : collapsed
 }
 
 function extractUserText(message) {
-  if (!message || typeof message !== 'object') return null;
-  const content = message.content;
-  if (typeof content === 'string') return content;
+  if (!message || typeof message !== 'object') return null
+  const content = message.content
+  if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     for (const part of content) {
       if (part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string') {
-        return part.text;
+        return part.text
       }
     }
   }
-  return null;
+  return null
 }
 
 function realUserTopic(message) {
-  const raw = extractUserText(message);
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (!trimmed || trimmed.startsWith('<') || trimmed.startsWith('Caveat:')) return null;
-  if (trimmed.startsWith('Base directory for')) return null; // skill-invocation preamble
-  return formatTopic(trimmed);
+  const raw = extractUserText(message)
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed || trimmed.startsWith('<') || trimmed.startsWith('Caveat:')) return null
+  if (trimmed.startsWith('Base directory for')) return null // skill-invocation preamble
+  return formatTopic(trimmed)
 }
 
 // Fallback project path: decode a munged project-dir name (e.g.
 // "-Users-omertdk-Cloover-cloover-dbt") by turning every separator back into
 // a slash. Imperfect for hyphenated real names, fine as a last resort.
 function decodeDirName(dirName) {
-  return dirName.replace(/-/g, '/');
+  return dirName.replace(/-/g, '/')
 }
 
 function readHead(filePath, maxBytes) {
-  const fd = fs.openSync(filePath, 'r');
+  const fd = fs.openSync(filePath, 'r')
   try {
-    const size = fs.fstatSync(fd).size;
-    const len = Math.min(maxBytes, size);
-    if (len <= 0) return '';
-    const buf = Buffer.alloc(len);
-    const bytesRead = fs.readSync(fd, buf, 0, len, 0);
-    return buf.toString('utf8', 0, bytesRead);
+    const size = fs.fstatSync(fd).size
+    const len = Math.min(maxBytes, size)
+    if (len <= 0) return ''
+    const buf = Buffer.alloc(len)
+    const bytesRead = fs.readSync(fd, buf, 0, len, 0)
+    return buf.toString('utf8', 0, bytesRead)
   } finally {
-    fs.closeSync(fd);
+    fs.closeSync(fd)
   }
 }
 
@@ -92,77 +92,77 @@ function readHead(filePath, maxBytes) {
 // topic (per TOPIC RULES) and project cwd. Tolerates anything: unparseable
 // lines/files never throw, they're just skipped.
 function extractTopicAndProject(filePath) {
-  let text;
+  let text
   try {
-    text = readHead(filePath, HEAD_BYTES);
+    text = readHead(filePath, HEAD_BYTES)
   } catch {
-    return { topic: null, project: null };
+    return { topic: null, project: null }
   }
 
-  let summaryTopic = null;
-  let userTopic = null;
-  let project = null;
+  let summaryTopic = null
+  let userTopic = null
+  let project = null
 
   for (const line of text.split('\n')) {
-    if (!line) continue;
-    let obj;
+    if (!line) continue
+    let obj
     try {
-      obj = JSON.parse(line);
+      obj = JSON.parse(line)
     } catch {
-      continue;
+      continue
     }
-    if (!obj || typeof obj !== 'object') continue;
+    if (!obj || typeof obj !== 'object') continue
 
     if (project == null && typeof obj.cwd === 'string' && obj.cwd) {
-      project = obj.cwd;
+      project = obj.cwd
     }
 
     // Rule 1 sources: legacy {type:'summary'} lines and the {type:'ai-title'}
     // lines current Claude Code emits.
     if (summaryTopic == null && (obj.type === 'summary' || obj.type === 'ai-title')) {
-      const t = formatTopic(obj.type === 'summary' ? obj.summary : obj.aiTitle);
-      if (t) summaryTopic = t;
+      const t = formatTopic(obj.type === 'summary' ? obj.summary : obj.aiTitle)
+      if (t) summaryTopic = t
     } else if (summaryTopic == null && userTopic == null && obj.type === 'user' && !obj.isSidechain) {
-      const t = realUserTopic(obj.message);
-      if (t) userTopic = t;
+      const t = realUserTopic(obj.message)
+      if (t) userTopic = t
     }
 
     // Rule 1 always wins over rule 2, so once we have a summary topic and a
     // project we can stop scanning early. Otherwise keep going in case a
     // (higher-priority) summary line shows up later, or cwd is still missing.
-    if (summaryTopic != null && project != null) break;
+    if (summaryTopic != null && project != null) break
   }
 
-  return { topic: summaryTopic ?? userTopic, project };
+  return { topic: summaryTopic ?? userTopic, project }
 }
 
 function clampAction(raw) {
-  const collapsed = String(raw).replace(/\s+/g, ' ').trim();
-  return collapsed.length > MAX_ACTION_CHARS ? collapsed.slice(0, MAX_ACTION_CHARS) : collapsed;
+  const collapsed = String(raw).replace(/\s+/g, ' ').trim()
+  return collapsed.length > MAX_ACTION_CHARS ? collapsed.slice(0, MAX_ACTION_CHARS) : collapsed
 }
 
 // Compact extract from a tool_use input: prefer a file path's basename, then
 // a command's first ~40 chars, then a description field — whatever exists.
 function summarizeToolInput(input) {
-  if (!input || typeof input !== 'object') return null;
-  if (typeof input.file_path === 'string' && input.file_path) return path.basename(input.file_path);
-  if (typeof input.command === 'string' && input.command) return input.command.slice(0, 40);
-  if (typeof input.description === 'string' && input.description) return input.description;
-  return null;
+  if (!input || typeof input !== 'object') return null
+  if (typeof input.file_path === 'string' && input.file_path) return path.basename(input.file_path)
+  if (typeof input.command === 'string' && input.command) return input.command.slice(0, 40)
+  if (typeof input.description === 'string' && input.description) return input.description
+  return null
 }
 
 function readTail(filePath, maxBytes) {
-  const fd = fs.openSync(filePath, 'r');
+  const fd = fs.openSync(filePath, 'r')
   try {
-    const size = fs.fstatSync(fd).size;
-    const len = Math.min(maxBytes, size);
-    if (len <= 0) return { text: '', truncated: false };
-    const start = size - len;
-    const buf = Buffer.alloc(len);
-    const bytesRead = fs.readSync(fd, buf, 0, len, start);
-    return { text: buf.toString('utf8', 0, bytesRead), truncated: start > 0 };
+    const size = fs.fstatSync(fd).size
+    const len = Math.min(maxBytes, size)
+    if (len <= 0) return { text: '', truncated: false }
+    const start = size - len
+    const buf = Buffer.alloc(len)
+    const bytesRead = fs.readSync(fd, buf, 0, len, start)
+    return { text: buf.toString('utf8', 0, bytesRead), truncated: start > 0 }
   } finally {
-    fs.closeSync(fd);
+    fs.closeSync(fd)
   }
 }
 
@@ -172,57 +172,57 @@ function readTail(filePath, maxBytes) {
 // line.
 function findLastAction(lines) {
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (!line) continue;
-    let obj;
+    const line = lines[i]
+    if (!line) continue
+    let obj
     try {
-      obj = JSON.parse(line);
+      obj = JSON.parse(line)
     } catch {
-      continue;
+      continue
     }
-    if (!obj || typeof obj !== 'object' || obj.type !== 'assistant') continue;
-    const content = obj.message && obj.message.content;
-    if (!Array.isArray(content)) continue;
+    if (!obj || typeof obj !== 'object' || obj.type !== 'assistant') continue
+    const content = obj.message && obj.message.content
+    if (!Array.isArray(content)) continue
 
-    let toolUse = null;
-    let text = null;
+    let toolUse = null
+    let text = null
     for (const part of content) {
-      if (!part || typeof part !== 'object') continue;
-      if (toolUse == null && part.type === 'tool_use') toolUse = part;
-      else if (text == null && part.type === 'text' && typeof part.text === 'string') text = part;
+      if (!part || typeof part !== 'object') continue
+      if (toolUse == null && part.type === 'tool_use') toolUse = part
+      else if (text == null && part.type === 'text' && typeof part.text === 'string') text = part
     }
 
     if (toolUse) {
-      const name = typeof toolUse.name === 'string' && toolUse.name ? toolUse.name : 'tool';
-      const summary = summarizeToolInput(toolUse.input);
-      return clampAction(summary ? `⚒ ${name}: ${summary}` : `⚒ ${name}`);
+      const name = typeof toolUse.name === 'string' && toolUse.name ? toolUse.name : 'tool'
+      const summary = summarizeToolInput(toolUse.input)
+      return clampAction(summary ? `⚒ ${name}: ${summary}` : `⚒ ${name}`)
     }
-    if (text) return clampAction(text.text.slice(0, 48));
+    if (text) return clampAction(text.text.slice(0, 48))
   }
-  return null;
+  return null
 }
 
 // Approximate: a plain substring count over raw lines rather than a JSON
 // parse, so it's cheap even on a 64KB tail; can overcount if the literal
 // string appears somewhere other than the isSidechain key (rare in practice).
 function countSubagents(lines) {
-  let count = 0;
+  let count = 0
   for (const line of lines) {
     if (line.includes('"isSidechain":true')) {
-      count++;
-      if (count >= MAX_SUBAGENTS) return MAX_SUBAGENTS;
+      count++
+      if (count >= MAX_SUBAGENTS) return MAX_SUBAGENTS
     }
   }
-  return count;
+  return count
 }
 
 function normalizeModel(raw) {
-  if (typeof raw !== 'string' || !raw) return null;
-  const lower = raw.toLowerCase();
+  if (typeof raw !== 'string' || !raw) return null
+  const lower = raw.toLowerCase()
   for (const tier of MODEL_TIERS) {
-    if (lower.includes(tier)) return tier;
+    if (lower.includes(tier)) return tier
   }
-  return null;
+  return null
 }
 
 // Walks the tail lines backward looking for the most recent assistant line
@@ -233,110 +233,110 @@ function normalizeModel(raw) {
 // this field is for.
 function findModel(lines) {
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (!line) continue;
-    let obj;
+    const line = lines[i]
+    if (!line) continue
+    let obj
     try {
-      obj = JSON.parse(line);
+      obj = JSON.parse(line)
     } catch {
-      continue;
+      continue
     }
-    if (!obj || typeof obj !== 'object' || obj.type !== 'assistant') continue;
-    const model = obj.message && typeof obj.message === 'object' ? obj.message.model : null;
-    if (typeof model === 'string' && model) return normalizeModel(model);
+    if (!obj || typeof obj !== 'object' || obj.type !== 'assistant') continue
+    const model = obj.message && typeof obj.message === 'object' ? obj.message.model : null
+    if (typeof model === 'string' && model) return normalizeModel(model)
   }
-  return null;
+  return null
 }
 
 // Reads the last TAIL_BYTES of the file once and derives lastAction,
 // subagents, and model from it. Never throws: unreadable/unparseable content
 // just yields nulls/zero.
 function extractTailActivity(filePath) {
-  let tail;
+  let tail
   try {
-    tail = readTail(filePath, TAIL_BYTES);
+    tail = readTail(filePath, TAIL_BYTES)
   } catch {
-    return { lastAction: null, subagents: 0, model: null };
+    return { lastAction: null, subagents: 0, model: null }
   }
-  const lines = tail.text.split('\n');
-  if (tail.truncated) lines.shift(); // we started mid-file: first line is a partial line
+  const lines = tail.text.split('\n')
+  if (tail.truncated) lines.shift() // we started mid-file: first line is a partial line
   return {
     lastAction: findLastAction(lines),
     subagents: countSubagents(lines),
     model: findModel(lines),
-  };
+  }
 }
 
 export async function scanSessions(root = path.join(os.homedir(), '.claude', 'projects')) {
-  let dirEntries;
+  let dirEntries
   try {
-    dirEntries = fs.readdirSync(root, { withFileTypes: true });
+    dirEntries = fs.readdirSync(root, { withFileTypes: true })
   } catch {
-    return [];
+    return []
   }
 
-  const now = Date.now();
-  const sessions = [];
+  const now = Date.now()
+  const sessions = []
 
   for (const dirent of dirEntries) {
-    if (!dirent.isDirectory()) continue;
-    const dirPath = path.join(root, dirent.name);
+    if (!dirent.isDirectory()) continue
+    const dirPath = path.join(root, dirent.name)
 
-    let files;
+    let files
     try {
-      files = fs.readdirSync(dirPath);
+      files = fs.readdirSync(dirPath)
     } catch {
-      continue;
+      continue
     }
 
     for (const fileName of files) {
-      if (!fileName.endsWith('.jsonl')) continue;
-      const filePath = path.join(dirPath, fileName);
+      if (!fileName.endsWith('.jsonl')) continue
+      const filePath = path.join(dirPath, fileName)
 
-      let stat;
+      let stat
       try {
-        stat = fs.statSync(filePath);
+        stat = fs.statSync(filePath)
       } catch {
-        continue;
+        continue
       }
-      if (!stat.isFile()) continue;
+      if (!stat.isFile()) continue
 
-      let cached = fileCache.get(filePath);
+      let cached = fileCache.get(filePath)
       if (!cached || (!cached.resolved && cached.size !== stat.size)) {
-        const { topic, project } = extractTopicAndProject(filePath);
+        const { topic, project } = extractTopicAndProject(filePath)
         cached = {
           size: stat.size,
           topic,
           project,
           resolved: topic != null && project != null,
-        };
-        fileCache.set(filePath, cached);
+        }
+        fileCache.set(filePath, cached)
       }
 
-      if (cached.topic == null) continue; // no usable topic: excluded
-      if (stat.size < MIN_BYTES) continue; // too small: aborted/noise
+      if (cached.topic == null) continue // no usable topic: excluded
+      if (stat.size < MIN_BYTES) continue // too small: aborted/noise
 
       // lastAction/subagents are only meaningful (and only ever computed —
       // no tail read at all otherwise) for sessions active in the last 10min;
       // `age >= 0` also guards against a future mtime (clock skew) being
       // misread as "recent".
-      const age = now - stat.mtimeMs;
-      const isRecentlyActive = age >= 0 && age <= LAST_ACTION_WINDOW_MS;
+      const age = now - stat.mtimeMs
+      const isRecentlyActive = age >= 0 && age <= LAST_ACTION_WINDOW_MS
 
-      let lastAction = null;
-      let subagents = 0;
-      let model = null;
+      let lastAction = null
+      let subagents = 0
+      let model = null
       if (isRecentlyActive) {
         if (cached.tailSize !== stat.size) {
-          const activity = extractTailActivity(filePath);
-          cached.tailSize = stat.size;
-          cached.lastAction = activity.lastAction;
-          cached.subagents = activity.subagents;
-          cached.model = activity.model;
+          const activity = extractTailActivity(filePath)
+          cached.tailSize = stat.size
+          cached.lastAction = activity.lastAction
+          cached.subagents = activity.subagents
+          cached.model = activity.model
         }
-        lastAction = cached.lastAction;
-        subagents = cached.subagents;
-        model = cached.model ?? null;
+        lastAction = cached.lastAction
+        subagents = cached.subagents
+        model = cached.model ?? null
       }
 
       sessions.push({
@@ -348,22 +348,22 @@ export async function scanSessions(root = path.join(os.homedir(), '.claude', 'pr
         lastAction,
         subagents,
         model,
-      });
+      })
     }
   }
 
-  sessions.sort((a, b) => b.lastActive - a.lastActive);
+  sessions.sort((a, b) => b.lastActive - a.lastActive)
 
-  if (sessions.length <= MAX_RESULTS) return sessions;
+  if (sessions.length <= MAX_RESULTS) return sessions
 
-  const cutoff = now - RECENT_WINDOW_MS;
-  const head = sessions.slice(0, MAX_RESULTS);
-  const extra = [];
+  const cutoff = now - RECENT_WINDOW_MS
+  const head = sessions.slice(0, MAX_RESULTS)
+  const extra = []
   for (let i = MAX_RESULTS; i < sessions.length; i++) {
     // sessions is sorted desc, so once we drop below the cutoff every
     // subsequent session is also below it.
-    if (sessions[i].lastActive >= cutoff) extra.push(sessions[i]);
-    else break;
+    if (sessions[i].lastActive >= cutoff) extra.push(sessions[i])
+    else break
   }
-  return head.concat(extra);
+  return head.concat(extra)
 }

@@ -281,18 +281,34 @@ export function buildBladeGeometry() {
   const hw = BLADE_WIDTH / 2
   const tw = BLADE_WIDTH * 0.15 // slightly tapered tip, not a perfect point
   const positions = new Float32Array([
-    -hw, 0, 0, // 0 base-left
-    hw, 0, 0, // 1 base-right
-    tw, BLADE_HEIGHT, 0, // 2 tip-right
-    -tw, BLADE_HEIGHT, 0, // 3 tip-left
+    -hw,
+    0,
+    0, // 0 base-left
+    hw,
+    0,
+    0, // 1 base-right
+    tw,
+    BLADE_HEIGHT,
+    0, // 2 tip-right
+    -tw,
+    BLADE_HEIGHT,
+    0, // 3 tip-left
   ])
   const root = new THREE.Color(COLOR_GRASS_ROOT)
   const tip = new THREE.Color(COLOR_GRASS_TIP)
   const colors = new Float32Array([
-    root.r, root.g, root.b,
-    root.r, root.g, root.b,
-    tip.r, tip.g, tip.b,
-    tip.r, tip.g, tip.b,
+    root.r,
+    root.g,
+    root.b,
+    root.r,
+    root.g,
+    root.b,
+    tip.r,
+    tip.g,
+    tip.b,
+    tip.r,
+    tip.g,
+    tip.b,
   ])
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
@@ -349,7 +365,7 @@ function buildGrass(planet, camera, seed) {
           'float gust = 0.6 + 0.4 * sin(dot(worldBase, uGustDir) * 180.0 + uTime * 2.2 + phase * 0.5);',
           'gust += 0.25 * sin(dot(worldBase, uGustDir2) * 55.0 + uTime * 0.7 + phase * 0.3);', // slower, broader layer
           `transformed.x += bend * gust * uWindStrength * ${BLADE_BEND_AMOUNT.toFixed(6)};`,
-        ].join('\n')
+        ].join('\n'),
       )
       if (patched === shader.vertexShader) throw new Error('flora.js: grass shader injection point not found')
       shader.vertexShader = patched
@@ -358,7 +374,10 @@ function buildGrass(planet, camera, seed) {
       grassUniforms = null // fall back to static grass
       if (!warnedGrassWind) {
         warnedGrassWind = true
-        console.warn('[planet] flora.js: grass wind animation degraded — onBeforeCompile shader injection failed, blades render static: ' + err)
+        console.warn(
+          '[planet] flora.js: grass wind animation degraded — onBeforeCompile shader injection failed, blades render static: ' +
+            err,
+        )
       }
     }
   }
@@ -434,7 +453,7 @@ function buildGrass(planet, camera, seed) {
       instColor.setRGB(
         lerp(1, dryMulR, dryT) * valueJitter,
         lerp(1, dryMulG, dryT) * valueJitter,
-        lerp(1, dryMulB, dryT) * valueJitter
+        lerp(1, dryMulB, dryT) * valueJitter,
       )
       grassMesh.setColorAt(count, instColor)
       phaseAttr.array[count] = rng() * Math.PI * 2
@@ -518,7 +537,9 @@ export function buildTreeGeometry() {
   const merged = mergeGeometries(parts, false)
   if (!merged && !warnedTreeMerge) {
     warnedTreeMerge = true
-    console.warn('[planet] flora.js: tree geometry merge degraded — mergeGeometries failed, shipping trunk-only stump geometry (canopy lost)')
+    console.warn(
+      '[planet] flora.js: tree geometry merge degraded — mergeGeometries failed, shipping trunk-only stump geometry (canopy lost)',
+    )
   }
   return { geo: merged || trunkGeo, unitHeight }
 }
@@ -553,7 +574,7 @@ function buildTrees(planet, camera, seed) {
           'float wob = sin(uTime * 1.1 + treePhase) * 0.045;', // treePhase is already in radians ([0, 2pi))
           'transformed.x += sway * wob;',
           'transformed.z += sway * wob * 0.7;',
-        ].join('\n')
+        ].join('\n'),
       )
       if (patched === shader.vertexShader) throw new Error('flora.js: tree shader injection point not found')
       shader.vertexShader = patched
@@ -562,7 +583,10 @@ function buildTrees(planet, camera, seed) {
       treeUniforms = null // fall back to static trees
       if (!warnedTreeSway) {
         warnedTreeSway = true
-        console.warn('[planet] flora.js: tree sway animation degraded — onBeforeCompile shader injection failed, trees render static: ' + err)
+        console.warn(
+          '[planet] flora.js: tree sway animation degraded — onBeforeCompile shader injection failed, trees render static: ' +
+            err,
+        )
       }
     }
   }
@@ -628,7 +652,14 @@ function buildTrees(planet, camera, seed) {
   return {
     mesh: treeMesh,
     update,
-    blobData: { count, dirX: blobDirX, dirY: blobDirY, dirZ: blobDirZ, groundH: blobGroundH, radius: blobRadius },
+    blobData: {
+      count,
+      dirX: blobDirX,
+      dirY: blobDirY,
+      dirZ: blobDirZ,
+      groundH: blobGroundH,
+      radius: blobRadius,
+    },
   }
 }
 
@@ -715,7 +746,14 @@ function buildRocks(planet, camera, seed) {
   return {
     mesh: rockMesh,
     update,
-    blobData: { count, dirX: blobDirX, dirY: blobDirY, dirZ: blobDirZ, groundH: blobGroundH, radius: blobRadius },
+    blobData: {
+      count,
+      dirX: blobDirX,
+      dirY: blobDirY,
+      dirZ: blobDirZ,
+      groundH: blobGroundH,
+      radius: blobRadius,
+    },
   }
 }
 

@@ -249,7 +249,9 @@ export function createUI(world, hooks) {
 
   function signatureOf(data) {
     // Cheap order-independent change signature over the fields rows depend on.
-    const parts = data.map((s) => s.project + '|' + s.name + '|' + s.basename + '|' + s.race + '|' + s.structures + '|' + s.agents)
+    const parts = data.map(
+      (s) => s.project + '|' + s.name + '|' + s.basename + '|' + s.race + '|' + s.structures + '|' + s.agents,
+    )
     parts.sort()
     return parts.join('\n')
   }
@@ -259,7 +261,9 @@ export function createUI(world, hooks) {
   // first, then by structure count. `limit` (optional) caps the result count.
   function filterAndRank(data, query, limit) {
     const q = query.trim().toLowerCase()
-    let rows = q ? data.filter((s) => s.name.toLowerCase().includes(q) || s.basename.toLowerCase().includes(q)) : data.slice()
+    let rows = q
+      ? data.filter((s) => s.name.toLowerCase().includes(q) || s.basename.toLowerCase().includes(q))
+      : data.slice()
     rows.sort((a, b) => {
       const activeA = a.agents > 0 ? 1 : 0
       const activeB = b.agents > 0 ? 1 : 0
@@ -440,7 +444,9 @@ export function createUI(world, hooks) {
     inspectorType.textContent = [info.type, tierLabel].filter(Boolean).join(' · ')
 
     const when = Number.isFinite(info.lastActive) ? new Date(info.lastActive) : null
-    inspectorDate.textContent = when ? when.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—'
+    inspectorDate.textContent = when
+      ? when.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+      : '—'
 
     inspectorSize.textContent = humanizeBytes(info.bytes)
     inspectorSessionId.textContent = info.id ? 'session ' + info.id : ''
@@ -456,7 +462,8 @@ export function createUI(world, hooks) {
 
   inspectorResumeBtn.addEventListener('click', () => {
     if (!inspectorInfo) return
-    if (typeof safeHooks.resumeSession === 'function') safeHooks.resumeSession(inspectorInfo.id, inspectorInfo.project)
+    if (typeof safeHooks.resumeSession === 'function')
+      safeHooks.resumeSession(inspectorInfo.id, inspectorInfo.project)
     inspectorResumeBtn.disabled = true
     inspectorResumeBtn.textContent = 'opening terminal…'
     if (resumeResetTimer) clearTimeout(resumeResetTimer)
@@ -671,7 +678,10 @@ export function createUI(world, hooks) {
 
   function updatePlayButton() {
     timelinePlayBtn.textContent = playing ? '⏸' : '▶'
-    timelinePlayBtn.setAttribute('aria-label', playing ? 'Pause time-lapse playback' : 'Play time-lapse playback')
+    timelinePlayBtn.setAttribute(
+      'aria-label',
+      playing ? 'Pause time-lapse playback' : 'Play time-lapse playback',
+    )
   }
 
   function stopPlay() {

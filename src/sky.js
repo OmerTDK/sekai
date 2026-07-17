@@ -48,7 +48,10 @@ export function createSky(seed) {
     corona = createCoronaSprite()
     group.add(corona)
   } catch (err) {
-    console.warn('[planet] sky: corona degraded — sprite failed to build, eclipses will render without the corona flourish', err)
+    console.warn(
+      '[planet] sky: corona degraded — sprite failed to build, eclipses will render without the corona flourish',
+      err,
+    )
     corona = null // corona is a flourish — the sun/eclipse lighting still works without it
   }
 
@@ -68,7 +71,10 @@ export function createSky(seed) {
     aurora = createAurora(seed)
     group.add(aurora.group)
   } catch (err) {
-    console.warn('[planet] sky: aurora degraded — curtains failed to build, night sky will render without aurora', err)
+    console.warn(
+      '[planet] sky: aurora degraded — curtains failed to build, night sky will render without aurora',
+      err,
+    )
     aurora = null
   }
 
@@ -78,7 +84,10 @@ export function createSky(seed) {
     meteors = createMeteors(seed)
     group.add(meteors.group)
   } catch (err) {
-    console.warn('[planet] sky: meteors degraded — shooting-star pool failed to build, no meteors this session', err)
+    console.warn(
+      '[planet] sky: meteors degraded — shooting-star pool failed to build, no meteors this session',
+      err,
+    )
     meteors = null
   }
 
@@ -203,10 +212,46 @@ export function createSky(seed) {
     stormClearUniforms.uStormOn.value = strength
   }
 
+  // M-WX weather hook (B3, pinned contract): CPU-side cloud-cover sample at
+  // an arbitrary world DIRECTION, 0..1, read from the lower deck's own
+  // already-baked coverage field (see makeCloudTexture/createClouds) — NO
+  // GPU readback, no new noise calls. Mirrors the lower shell's live drift
+  // (rotateOnWorldAxis in update() above) via its current quaternion, the
+  // SAME world-dir -> shell-local -> UV path update() already uses for
+  // uSunUV/cloud-shadow (see localDirToUV's doc comment) — so "is it cloudy
+  // here" always agrees with what's actually rendered overhead, moving deck
+  // included. Cheap (one quaternion invert + one vector rotate per call).
+  let _coverageWarned = false
+  const _coverQuatScratch = new THREE.Quaternion()
+  const _coverDirScratch = new THREE.Vector3()
+  const _coverUVScratch = new THREE.Vector2()
+  function sampleCloudCover(dir) {
+    const cov = clouds.lowerCoverage
+    if (!cov) {
+      if (!_coverageWarned) {
+        _coverageWarned = true
+        console.warn('[planet] sky: cloud coverage data unavailable — sampleCloudCover always returns 0')
+      }
+      return 0
+    }
+    _coverQuatScratch.copy(clouds.lowerMesh.quaternion).invert()
+    _coverDirScratch.copy(dir).normalize().applyQuaternion(_coverQuatScratch)
+    localDirToUV(_coverDirScratch, _coverUVScratch)
+    const w = clouds.lowerCoverageWidth
+    const h = clouds.lowerCoverageHeight
+    // Invert localDirToUV's own u = 1 - x/(w-1), v = 1 - y/(h-1) mapping
+    // (see that function's doc comment) back to the field's row-major (x,y).
+    const xf = (1 - _coverUVScratch.x) % 1
+    const yf = 1 - _coverUVScratch.y
+    const x = clamp(Math.round(xf * (w - 1)), 0, w - 1)
+    const y = clamp(Math.round(yf * (h - 1)), 0, h - 1)
+    return cov[y * w + x]
+  }
+
   // skyboxBakeMs: debug/verification handle only (read via
   // window.__planet.sky.skyboxBakeMs) — confirms the ≤1.5s bake budget
   // without adding a new console.log convention (this codebase only warns).
-  return { group, update, getSunDir, setStormClearing, skyboxBakeMs: skybox.bakeMs }
+  return { group, update, getSunDir, setStormClearing, sampleCloudCover, skyboxBakeMs: skybox.bakeMs }
 }
 
 // ---------------------------------------------------------------- helpers --
@@ -429,7 +474,13 @@ function buildSkyboxTexture(seed) {
 
   const bakeMs = performance.now() - t0
   if (bakeMs > SKYBOX_BAKE_BUDGET_MS) {
-    console.warn('[planet] sky: baked skybox generation took ' + bakeMs.toFixed(0) + 'ms, over the ' + SKYBOX_BAKE_BUDGET_MS + 'ms budget')
+    console.warn(
+      '[planet] sky: baked skybox generation took ' +
+        bakeMs.toFixed(0) +
+        'ms, over the ' +
+        SKYBOX_BAKE_BUDGET_MS +
+        'ms budget',
+    )
   }
   return { texture: tex, bakeMs }
 }
@@ -584,7 +635,7 @@ function createBrightStars(seed) {
       [0.6, 'rgba(255,255,255,0.25)'],
       [1, 'rgba(255,255,255,0)'],
     ],
-    64
+    64,
   )
   const mat = new THREE.PointsMaterial({
     size: 3,
@@ -625,7 +676,7 @@ function createNebulae(seed) {
         [0.4, `rgba(${rgb},0.4)`],
         [1, `rgba(${rgb},0)`],
       ],
-      128
+      128,
     )
     const mat = new THREE.SpriteMaterial({
       map,
@@ -692,7 +743,7 @@ function createSunSprite() {
       [0.45, 'rgba(255,214,140,0.35)'],
       [1, 'rgba(255,200,120,0)'],
     ],
-    128
+    128,
   )
   const mat = new THREE.SpriteMaterial({
     map,
@@ -719,7 +770,7 @@ function createCoronaSprite() {
       [0.55, 'rgba(255,190,120,0.45)'],
       [1, 'rgba(255,180,100,0)'],
     ],
-    128
+    128,
   )
   const mat = new THREE.SpriteMaterial({
     map,
@@ -755,21 +806,27 @@ function warpedCloudField(noise3, dir, lat, cfg) {
     sx * cfg.warpScale + 2.1,
     sy * cfg.warpScale - 6.4,
     sz * cfg.warpScale + 4.9,
-    cfg.warpOctaves, 2.05, 0.5
+    cfg.warpOctaves,
+    2.05,
+    0.5,
   )
   const r = fbm(
     noise3,
     sx * cfg.warpScale + q * cfg.warpStrength - 3.7,
     sy * cfg.warpScale + q * cfg.warpStrength + 8.1,
     sz * cfg.warpScale + q * cfg.warpStrength - 1.3,
-    cfg.warpOctaves, 2.05, 0.5
+    cfg.warpOctaves,
+    2.05,
+    0.5,
   )
   const n = fbm(
     noise3,
     sx * cfg.scale + r * cfg.warpStrength2,
     sy * cfg.scale + r * cfg.warpStrength2,
     sz * cfg.scale + r * cfg.warpStrength2,
-    cfg.octaves, 2.05, 0.5
+    cfg.octaves,
+    2.05,
+    0.5,
   )
 
   // Equatorial belt + mirrored mid-latitude storm tracks with subtropical
@@ -777,7 +834,10 @@ function warpedCloudField(noise3, dir, lat, cfg) {
   // cosine that carves the subtropical dip / storm-track bump, seeded phase
   // so the bands sit differently from planet to planet.
   const latN = lat / (Math.PI / 2)
-  const band = 0.5 + cfg.bandAmp1 * Math.cos(latN * Math.PI) + cfg.bandAmp2 * Math.cos(latN * Math.PI * 3 + cfg.bandPhase)
+  const band =
+    0.5 +
+    cfg.bandAmp1 * Math.cos(latN * Math.PI) +
+    cfg.bandAmp2 * Math.cos(latN * Math.PI * 3 + cfg.bandPhase)
 
   return clamp(n * 0.5 + 0.5 + (band - cfg.bandBias) * cfg.bandStrength, 0, 1)
 }
@@ -810,7 +870,13 @@ function calibrateThreshold(field, edge, target) {
 /** Builds one cloud layer's alpha texture on a 2048x1024 equirect canvas.
  * Samples the warped/banded field (see warpedCloudField) once per texel at
  * the sphere DIRECTION, auto-calibrates the coverage threshold against
- * `cfg.targetCoverage` (see calibrateThreshold), then rasterizes. */
+ * `cfg.targetCoverage` (see calibrateThreshold), then rasterizes. Returns
+ * the texture PLUS the same coverage values already computed for it (0..1,
+ * row-major, same width/height) — M-WX weather reads this CPU-side via
+ * sampleCloudCover() below instead of re-deriving coverage or doing a GPU
+ * readback; `field` is reused in place for this (each entry overwritten
+ * with its own post-threshold alpha right after it's read, so this adds no
+ * extra allocation over the pre-M-WX version of this function). */
 function makeCloudTexture(noise3, cfg) {
   const { width, height, edge, targetCoverage } = cfg
   const dir = new THREE.Vector3()
@@ -849,13 +915,14 @@ function makeCloudTexture(noise3, cfg) {
     data[idx + 1] = g
     data[idx + 2] = g
     data[idx + 3] = 255
+    field[i] = a // reuse: field[i] is only read once above, safe to overwrite with the final 0..1 coverage
   }
   ctx.putImageData(img, 0, 0)
 
   const tex = new THREE.CanvasTexture(canvas)
   tex.wrapS = THREE.RepeatWrapping
   tex.wrapT = THREE.ClampToEdgeWrapping
-  return tex
+  return { tex, coverage: field, width, height }
 }
 
 // Shared by both cloud shells: the hurricane clears a moat in the ambient
@@ -919,11 +986,14 @@ function applyStormClearing(mat) {
       Object.assign(shader.uniforms, sunShadeUniforms)
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vCloudWorld;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCloudWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;')
+        .replace(
+          '#include <begin_vertex>',
+          '#include <begin_vertex>\nvCloudWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;',
+        )
       const frag = shader.fragmentShader
         .replace(
           '#include <common>',
-          '#include <common>\nuniform vec3 uStormDir;\nuniform float uStormOn;\nuniform vec2 uSunUV;\nvarying vec3 vCloudWorld;'
+          '#include <common>\nuniform vec3 uStormDir;\nuniform float uStormOn;\nuniform vec2 uSunUV;\nvarying vec3 vCloudWorld;',
         )
         .replace(
           '#include <alphamap_fragment>',
@@ -937,7 +1007,7 @@ function applyStormClearing(mat) {
             '}',
             '{',
             '  // M-SKY 2.5D shading: a second alphaMap sample offset TOWARD the',
-            '  // sun (in this shell\'s own UV space, uSunUV - see update()) fakes',
+            "  // sun (in this shell's own UV space, uSunUV - see update()) fakes",
             '  // a bit of cloud thickness without a real raymarch. High density',
             '  // both here AND toward the sun -> this fragment sits on the',
             '  // shadowed base of a thicker mass; low density toward the sun but',
@@ -956,7 +1026,7 @@ function applyStormClearing(mat) {
             '  diffuseColor.rgb *= 1.0 + edgeT * 0.08;',
             '  diffuseColor.rgb = min(diffuseColor.rgb, vec3(1.0));', // stay white-dominant, never glow (ART.md 2.5/8)
             '}',
-          ].join('\n')
+          ].join('\n'),
         )
       if (frag === shader.fragmentShader) throw new Error('sky.js: cloud moat injection point not found')
       shader.fragmentShader = frag
@@ -972,7 +1042,7 @@ function createClouds(seed) {
   const height = 1024
 
   const lowerNoise = makeNoise3D(seed + ':clouds-lower')
-  const lowerTex = makeCloudTexture(lowerNoise, {
+  const lowerBake = makeCloudTexture(lowerNoise, {
     width,
     height,
     // Broken cumulus fields + frontal filaments: smaller cells, sharper
@@ -994,6 +1064,7 @@ function createClouds(seed) {
     // upper deck's 0.09 below).
     targetCoverage: 0.2,
   })
+  const lowerTex = lowerBake.tex
   const lowerMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.075, 64, 32),
     new THREE.MeshStandardMaterial({
@@ -1004,11 +1075,11 @@ function createClouds(seed) {
       roughness: 1,
       metalness: 0,
       opacity: 0.88,
-    })
+    }),
   )
 
   const upperNoise = makeNoise3D(seed + ':clouds-upper')
-  const upperTex = makeCloudTexture(upperNoise, {
+  const upperBake = makeCloudTexture(upperNoise, {
     width,
     height,
     // Thin elongated cirrus streaks: strong longitudinal stretch, very soft
@@ -1030,6 +1101,7 @@ function createClouds(seed) {
     // M-SKY coverage cut: 0.13 -> ~0.09 (ART.md band 15-25% total).
     targetCoverage: 0.09,
   })
+  const upperTex = upperBake.tex
   const upperMesh = new THREE.Mesh(
     new THREE.SphereGeometry(1.09, 64, 32),
     new THREE.MeshStandardMaterial({
@@ -1040,7 +1112,7 @@ function createClouds(seed) {
       roughness: 1,
       metalness: 0,
       opacity: 0.5,
-    })
+    }),
   )
 
   const lowerSunUniforms = applyStormClearing(lowerMesh.material)
@@ -1062,6 +1134,13 @@ function createClouds(seed) {
     upperRate: -0.0035, // retrograde
     lowerSunUniforms,
     upperSunUniforms,
+    // M-WX weather hook: the lower deck's own baked coverage field (see
+    // makeCloudTexture) — precipitation gates off THIS deck only (broken
+    // cumulus/frontal filaments), never the upper cirrus deck, which
+    // physically doesn't rain. Read CPU-side by sampleCloudCover() below.
+    lowerCoverage: lowerBake.coverage,
+    lowerCoverageWidth: lowerBake.width,
+    lowerCoverageHeight: lowerBake.height,
   }
 }
 
@@ -1073,7 +1152,11 @@ function createLights() {
   const target = new THREE.Object3D() // stays at the origin: the planet
   sun.target = target
 
-  const hemi = new THREE.HemisphereLight(new THREE.Color('#9db8ff'), new THREE.Color('#3a3128'), HEMI_BASE_INTENSITY)
+  const hemi = new THREE.HemisphereLight(
+    new THREE.Color('#9db8ff'),
+    new THREE.Color('#3a3128'),
+    HEMI_BASE_INTENSITY,
+  )
 
   // Cool "moonlight" fill from the anti-solar direction so the night side
   // reads silvery-blue instead of black. Kept in opposition in update().
@@ -1176,9 +1259,7 @@ function createMoons(seed) {
     const pivot = new THREE.Object3D()
     const tiltAxis = new THREE.Vector3(rng() - 0.5, 0, rng() - 0.5).normalize()
     const tiltAngle =
-      index === 0
-        ? lerp(SUN_DECLINATION + 0.01, SUN_DECLINATION + 0.08, rng())
-        : lerp(0.15, 0.55, rng())
+      index === 0 ? lerp(SUN_DECLINATION + 0.01, SUN_DECLINATION + 0.08, rng()) : lerp(0.15, 0.55, rng())
     pivot.quaternion.setFromAxisAngle(tiltAxis, tiltAngle)
     pivot.rotateY(rng() * Math.PI * 2) // random starting phase
 
@@ -1218,7 +1299,15 @@ function buildAuroraCurtain(seed, poleSign, ringIndex, uniforms) {
 
   for (let i = 0; i < cols; i++) {
     const theta = (i / AURORA_STEPS) * Math.PI * 2
-    const wob = fbm(noise3, Math.cos(theta) * waveFreq, Math.sin(theta) * waveFreq, ringIndex * 4.1 + 2.3, 3, 2.15, 0.5)
+    const wob = fbm(
+      noise3,
+      Math.cos(theta) * waveFreq,
+      Math.sin(theta) * waveFreq,
+      ringIndex * 4.1 + 2.3,
+      3,
+      2.15,
+      0.5,
+    )
     const angRadius = angRadius0 + wob * waveAmp
     const sinA = Math.sin(angRadius)
     const cosA = Math.cos(angRadius)

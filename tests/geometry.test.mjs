@@ -37,7 +37,10 @@ function assertFinitePositions(geo, label) {
   const pos = geo.attributes && geo.attributes.position
   ok(!!pos, label + ': geometry has no position attribute')
   for (let i = 0; i < pos.array.length; i++) {
-    ok(Number.isFinite(pos.array[i]), label + ': position component at index ' + i + ' is not finite (' + pos.array[i] + ')')
+    ok(
+      Number.isFinite(pos.array[i]),
+      label + ': position component at index ' + i + ' is not finite (' + pos.array[i] + ')',
+    )
   }
 }
 
@@ -49,7 +52,12 @@ function assertNonDegenerateBox(box, label) {
       Number.isFinite(box.max.x) &&
       Number.isFinite(box.max.y) &&
       Number.isFinite(box.max.z),
-    label + ': bounding box is not finite (min=' + JSON.stringify(box.min) + ' max=' + JSON.stringify(box.max) + ')'
+    label +
+      ': bounding box is not finite (min=' +
+      JSON.stringify(box.min) +
+      ' max=' +
+      JSON.stringify(box.max) +
+      ')',
   )
   const size = new THREE.Vector3()
   box.getSize(size)
@@ -65,8 +73,14 @@ function assertNonDegenerateBox(box, label) {
 // ---------------------------------------------------------------------------
 {
   const { geo, unitHeight } = buildTreeGeometry()
-  ok(geo.attributes.position.count > 150, 'tree geometry: expected > 150 vertices (stump regression), got ' + geo.attributes.position.count)
-  ok(Number.isFinite(unitHeight) && unitHeight > 0, 'tree geometry: unitHeight must be a finite positive number, got ' + unitHeight)
+  ok(
+    geo.attributes.position.count > 150,
+    'tree geometry: expected > 150 vertices (stump regression), got ' + geo.attributes.position.count,
+  )
+  ok(
+    Number.isFinite(unitHeight) && unitHeight > 0,
+    'tree geometry: unitHeight must be a finite positive number, got ' + unitHeight,
+  )
   geo.computeBoundingBox()
   assertNonDegenerateBox(geo.boundingBox, 'tree geometry')
   assertFinitePositions(geo, 'tree geometry')
@@ -77,7 +91,10 @@ function assertNonDegenerateBox(box, label) {
 // ---------------------------------------------------------------------------
 {
   const rockGeo = buildRockGeometry()
-  ok(rockGeo.attributes.position.count > 0, 'rock geometry: expected > 0 vertices, got ' + rockGeo.attributes.position.count)
+  ok(
+    rockGeo.attributes.position.count > 0,
+    'rock geometry: expected > 0 vertices, got ' + rockGeo.attributes.position.count,
+  )
   rockGeo.computeBoundingBox()
   assertNonDegenerateBox(rockGeo.boundingBox, 'rock geometry')
   assertFinitePositions(rockGeo, 'rock geometry')
@@ -89,7 +106,10 @@ function assertNonDegenerateBox(box, label) {
 // ---------------------------------------------------------------------------
 {
   const bladeGeo = buildBladeGeometry()
-  ok(bladeGeo.attributes.position.count > 0, 'blade geometry: expected > 0 vertices, got ' + bladeGeo.attributes.position.count)
+  ok(
+    bladeGeo.attributes.position.count > 0,
+    'blade geometry: expected > 0 vertices, got ' + bladeGeo.attributes.position.count,
+  )
   assertFinitePositions(bladeGeo, 'blade geometry')
 }
 
@@ -165,5 +185,5 @@ console.log(
     KIT_TYPES.length * RACES.length +
     ' direct kit builders; ' +
     KIT_TYPES.length * RACES.length * TIERS.length +
-    ' buildKit type/race/tier combos)'
+    ' buildKit type/race/tier combos)',
 )

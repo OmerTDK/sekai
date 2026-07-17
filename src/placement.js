@@ -96,11 +96,19 @@ export function findLandAnchor(planet, base, rng) {
   for (let i = 0; i <= ANCHOR_SEARCH_TRIES; i++) {
     if (planet.isLand(dir) && planet.sampleHeight(dir) < MAX_BUILD_HEIGHT) return dir
     if (i === ANCHOR_SEARCH_TRIES) break
-    dir.set(dir.x + (rng() - 0.5) * ANCHOR_STEP, dir.y + (rng() - 0.5) * ANCHOR_STEP, dir.z + (rng() - 0.5) * ANCHOR_STEP).normalize()
+    dir
+      .set(
+        dir.x + (rng() - 0.5) * ANCHOR_STEP,
+        dir.y + (rng() - 0.5) * ANCHOR_STEP,
+        dir.z + (rng() - 0.5) * ANCHOR_STEP,
+      )
+      .normalize()
   }
   if (!warnedLandAnchorFallback) {
     warnedLandAnchorFallback = true
-    console.warn('[planet] world.js: settlement anchor placement degraded — exhausted search budget, using best-effort location (may be underwater or above build height)')
+    console.warn(
+      '[planet] world.js: settlement anchor placement degraded — exhausted search budget, using best-effort location (may be underwater or above build height)',
+    )
   }
   return dir // best-effort last (island worlds happen)
 }
@@ -132,7 +140,9 @@ export function findStructureSpot(planet, anchorDir, rng, siblings) {
   }
   if (!warnedStructureSpotFallback) {
     warnedStructureSpotFallback = true
-    console.warn('[planet] world.js: structure placement degraded — exhausted search budget, using fallback spot (may overlap a sibling or sit on unsuitable ground)')
+    console.warn(
+      '[planet] world.js: structure placement degraded — exhausted search budget, using fallback spot (may overlap a sibling or sit on unsuitable ground)',
+    )
   }
   return fallback || anchorDir.clone()
 }
@@ -149,7 +159,9 @@ export function randomLandNear(planet, center, rng, maxRadius) {
   }
   if (!warnedLandNearFallback) {
     warnedLandNearFallback = true
-    console.warn('[planet] world.js: agent wander-point placement degraded — exhausted search budget, using fallback location (may be underwater or above build height)')
+    console.warn(
+      '[planet] world.js: agent wander-point placement degraded — exhausted search budget, using fallback location (may be underwater or above build height)',
+    )
   }
   return fallback || center.clone()
 }

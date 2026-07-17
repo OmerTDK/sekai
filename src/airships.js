@@ -37,7 +37,7 @@ import { findLandAnchor, tangentBasis, orientOnSurface, stepToward } from './pla
 // gitinfo.js's own comment on small threshold/color constants being
 // duplicated, not exported, across this codebase).
 const BRASS = 0xb0793a
-const COPPER = 0xc98d4a // kept alongside BRASS for a future second-tone bolt-on; unused solo today
+const _COPPER = 0xc98d4a // kept alongside BRASS for a future second-tone bolt-on; unused solo today
 const COLOR_WOOD = 0x8a6242
 const COLOR_DARK = 0x2a2420
 const COLOR_STONE = 0x8a8274
@@ -67,7 +67,7 @@ const DEPART_ANGLE = 0.045 // rad from each mast where cast-off/approach hands o
 const TURNAROUND_MIN = 20
 const TURNAROUND_MAX = 40
 
-const BANK_MAX = 0.30 // rad, cap on the "slight banking on course corrections"
+const BANK_MAX = 0.3 // rad, cap on the "slight banking on course corrections"
 const BANK_GAIN = 3.2
 const BANK_SMOOTH = 2.2 // per-second exponential-approach rate toward the target bank
 
@@ -87,7 +87,7 @@ const TRAIL_POOL_SIZE = 150
 const TRAIL_EMIT_INTERVAL = 0.15 // seconds between puffs, per cruising ship
 const TRAIL_TTL = 2.0 // seconds a puff lives
 const TRAIL_RISE_SPEED = 0.006
-const TRAIL_BACK_SPEED = 0.010
+const TRAIL_BACK_SPEED = 0.01
 const TRAIL_DRIFT_SPEED = 0.0012
 const TRAIL_SIZE = 6
 const TRAIL_PEAK_ALPHA = 0.4
@@ -121,7 +121,7 @@ function warnDegenerateGeometry(reason) {
   console.warn(
     '[planet] airships.js: degenerate great-circle geometry — ' +
       reason +
-      ' (fell back to an arbitrary tangent; only expected for near-antipodal settlement/mast pairs)'
+      ' (fell back to an arbitrary tangent; only expected for near-antipodal settlement/mast pairs)',
   )
 }
 
@@ -247,7 +247,9 @@ function deriveRoutes(world) {
   const candidates = [] // { a, b, weight }
   for (const members of byParent.values()) {
     if (members.length < 2) continue
-    const qualifying = members.filter((s) => s.structures >= MIN_ROUTE_STRUCTURES).sort((a, b) => b.structures - a.structures)
+    const qualifying = members
+      .filter((s) => s.structures >= MIN_ROUTE_STRUCTURES)
+      .sort((a, b) => b.structures - a.structures)
     if (qualifying.length < 2) continue
     const hub = qualifying[0]
     for (let i = 1; i < qualifying.length; i++) {
@@ -256,7 +258,9 @@ function deriveRoutes(world) {
   }
 
   if (candidates.length === 0) {
-    const bySize = settlements.filter((s) => s.structures >= MIN_ROUTE_STRUCTURES).sort((a, b) => b.structures - a.structures)
+    const bySize = settlements
+      .filter((s) => s.structures >= MIN_ROUTE_STRUCTURES)
+      .sort((a, b) => b.structures - a.structures)
     if (bySize.length >= 2) {
       candidates.push({ a: bySize[0], b: bySize[1], weight: bySize[0].structures + bySize[1].structures })
     }
@@ -293,10 +297,16 @@ function cachedMat(key, factory) {
 }
 
 function clothMat(key, color) {
-  return cachedMat(key, () => new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.82, metalness: 0.03 }))
+  return cachedMat(
+    key,
+    () => new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.82, metalness: 0.03 }),
+  )
 }
 function metalMat(key, color) {
-  return cachedMat(key, () => new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.32, metalness: 0.75 }))
+  return cachedMat(
+    key,
+    () => new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.32, metalness: 0.75 }),
+  )
 }
 
 const cylGeo = () => geom('airship_cyl8', () => new THREE.CylinderGeometry(0.5, 0.5, 1, 8))
@@ -522,7 +532,14 @@ export function createAirships(planet, world, seed) {
     const visual = buildMastVisual()
     visual.scale.setScalar(MAST_HEIGHT)
     mastsGroup.add(visual)
-    return { project: settlement.project, race: settlement.race, dir, groundR, facing: new THREE.Vector3(1, 0, 0), visual }
+    return {
+      project: settlement.project,
+      race: settlement.race,
+      dir,
+      groundR,
+      facing: new THREE.Vector3(1, 0, 0),
+      visual,
+    }
   }
 
   // --- ship lifecycle ---------------------------------------------------------

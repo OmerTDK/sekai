@@ -185,4 +185,61 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
   their walk-bob/foot-lift offset — confirmed by direct position diffing
   against the paired agent's own visual group.
 
+## 2026-07-17 — M-WX: the world comes alive (weather & life, PR #6)
+
+Six sonnet builders in parallel on a fresh `wave/m-wx` worktree, each owning
+one file, wired together by the architect. The wave that added weather and
+wildlife to Aemunis.
+
+- `m-wx-01-polar-seaice-snow.jpg` — **polar sea ice + snowfall**, the money
+  shot for two features at once (`seaice.js` + `weather.js`). The matte
+  white-blue freeze mask caps the pole with a torn, organic edge (noise
+  matched to the terrain's own polar-snow band, not a clean latitude line),
+  teal shelf edges, branching pressure cracks, and drifting floes; camera-
+  local snow streaks fall across it. The sea-ice builder live-drove its own
+  module in-browser and caught two bugs a static review would miss: floes
+  rendering solid black (a `vertexColors:true` material with no `color`
+  attribute → WebGL's default-zero attribute), and cracks invisible because
+  their noise-threshold band sat past the 99.8th percentile of the actual
+  `ridged()` output (recalibrated against 20k empirical samples).
+- `m-wx-02-landfall-flood.jpg` — **hurricane landfall flooding** (`flood.js`).
+  Storm forced onto the Camtdbtmodelburg coast (via a scoped `getPrimary`
+  override for the capture); the desaturated green-teal storm-water sheet
+  rises into the low coastal ground over ~10s, its per-fragment shoreline
+  driven by a per-vertex terrain-height attribute resampled at 2Hz so it
+  fills inlets and hugs the coast rather than floating as a disc. A worker
+  is still logging "Review bank transaction model refactoring" at the
+  flooded shore — the covenant holds: weather happens *around* the session
+  record, never destroying it. Drains over ~30s, wet-shore ring lingers ~60s.
+- `m-wx-03-living-planet-hurricane.jpg` — **Aemunis whole**, all six M-WX
+  modules live at once: hurricane eye spiralling on the lit side, polar ice
+  caps, drifting weather cells, 161 articulated birds and whale/dolphin pods
+  in the seas (too small to resolve at this orbit distance — see the close
+  shots), galaxy backdrop. The full living world.
+- Also shipped this wave (not re-screenshotted; verified live + by draw-call
+  and frame-budget measurement): **articulated birds** (`birds.js`, full
+  rewrite — 54-vertex bodies, GPU wing-flap hinge via per-instance phase
+  attributes, V-formation/gull/forest habits, 1 draw call for ~150 birds,
+  replacing the day-one 2-triangle silhouettes); **whales & dolphins**
+  (`sealife.js` — surfacing cycles with spout puffs, fluke-up dives, 1-in-6
+  full breach + splash ring, coastal dolphin porpoise arcs, 3 draw calls,
+  proven height-bounded via a 667s headless run); **footprint trails**
+  (`trails.js` — 600-instance decal ring behind snow-walkers, 25s fade,
+  snow-detection matched to the terrain's own thresholds, 1 draw call).
+- **Gate metrics** (verify-kit, this wave): all 5 viewpoints resolve, no
+  fallbacks; draw calls 52–113/viewpoint; worst-case frame budget 11.4ms /
+  88fps at `ground-sunlit` (gate: ≤18ms / ≥55fps), the rest 134–970fps;
+  determinism law clean (no `Math.random`/`Date.now` in any world-state
+  path); all module scratch allocated once at factory scope, none per-frame.
+- **Integration bug caught by the sweep** (`fix(verifykit)`): the birds
+  contract gained a `camera` param this wave, but verify-kit's `seekTime`
+  still called `birds.update(dt)` with the old signature — the storm
+  viewpoint's time-seek threw on `camera.position`. Fixed by threading camera
+  through and pumping the new M-WX modules in the fast-forward loop so
+  `seekTime` stays a faithful mirror of the render loop. (Also a live
+  reminder of the M0 background-throttle gotcha: `sampleFps` waits on
+  `requestAnimationFrame`, which Chrome suspends in a backgrounded tab, so
+  the sweep hangs at the fps step — the frame budget above was measured by
+  timing back-to-back renders instead, immune to throttling.)
+
 

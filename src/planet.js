@@ -182,7 +182,15 @@ export function createPlanet(seed) {
     const wx2 = x + wx * WARP_STRENGTH
     const wy2 = y + wy * WARP_STRENGTH
     const wz2 = z + wz * WARP_STRENGTH
-    const raw = fbm(nContinent, wx2 * CONTINENT_SCALE, wy2 * CONTINENT_SCALE, wz2 * CONTINENT_SCALE, 5, 2.0, 0.5)
+    const raw = fbm(
+      nContinent,
+      wx2 * CONTINENT_SCALE,
+      wy2 * CONTINENT_SCALE,
+      wz2 * CONTINENT_SCALE,
+      5,
+      2.0,
+      0.5,
+    )
     const mainland = smoothstep(CONTINENT_LO, CONTINENT_HI, raw)
 
     const nearShore = 1 - smoothstep(0.0, NEARSHORE_WIDTH, Math.abs(raw - NEARSHORE_CENTER))
@@ -218,13 +226,29 @@ export function createPlanet(seed) {
     const continent = continentField(x, y, z)
     const belt = beltField(x, y, z)
 
-    const ridgeRaw = ridged(nMountain, x * MOUNTAIN_SCALE, y * MOUNTAIN_SCALE, z * MOUNTAIN_SCALE, 5, 2.3, 0.6)
+    const ridgeRaw = ridged(
+      nMountain,
+      x * MOUNTAIN_SCALE,
+      y * MOUNTAIN_SCALE,
+      z * MOUNTAIN_SCALE,
+      5,
+      2.3,
+      0.6,
+    )
     const ridgeSharp = Math.pow(ridgeRaw, RIDGE_SHARPNESS)
     const mountains = ridgeSharp * belt * continent // chains, masked to land
     const valleyCarve = (1 - ridgeRaw) * belt * continent
 
     const detail = fbm(nDetail, x * DETAIL_SCALE, y * DETAIL_SCALE, z * DETAIL_SCALE, 3, 2.0, 0.5)
-    const floor = fbm(nOceanFloor, x * OCEAN_FLOOR_SCALE, y * OCEAN_FLOOR_SCALE, z * OCEAN_FLOOR_SCALE, 4, 2.0, 0.5)
+    const floor = fbm(
+      nOceanFloor,
+      x * OCEAN_FLOOR_SCALE,
+      y * OCEAN_FLOOR_SCALE,
+      z * OCEAN_FLOOR_SCALE,
+      4,
+      2.0,
+      0.5,
+    )
     const coastShelf = smoothstep(COAST_SHELF_LO, COAST_SHELF_HI, continent)
 
     let h = SEA_LEVEL
@@ -252,7 +276,8 @@ export function createPlanet(seed) {
     const h = sampleHeight(dir)
     out.h = h
     out.landT = clamp((h - SEA_LEVEL) / LAND_COLOR_RANGE, 0, 1)
-    out.moisture = fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 2, 2.0, 0.5) * 0.5 + 0.5
+    out.moisture =
+      fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 2, 2.0, 0.5) * 0.5 + 0.5
     const { slope } = estimateSlopeAndConcavity(x, y, z, h)
     out.slope = clamp(slope / ROCK_SLOPE_HI, 0, 1)
     const capNoiseVal = fbm(nCap, x * CAP_SCALE, y * CAP_SCALE, z * CAP_SCALE, 3, 2.0, 0.5)
@@ -324,7 +349,8 @@ export function createPlanet(seed) {
       const landT = clamp((h - SEA_LEVEL) / LAND_COLOR_RANGE, 0, 1)
       // 2 octaves only: high-frequency moisture flips biomes per vertex,
       // which reads as triangle mosaic. Low-freq -> continent-scale biomes.
-      const moisture = fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 2, 2.0, 0.5) * 0.5 + 0.5
+      const moisture =
+        fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 2, 2.0, 0.5) * 0.5 + 0.5
 
       // Moisture axis: desert -> savanna -> grassland -> forest.
       const lushT = smoothstep(0.32, 0.6, moisture)
@@ -511,9 +537,14 @@ export function createPlanet(seed) {
         (err) => {
           if (!warnedNormalMapLoad) {
             warnedNormalMapLoad = true
-            console.warn('[planet] planet.js: detail normal-map load failed, ground renders without normal perturbation (' + url + '): ' + err)
+            console.warn(
+              '[planet] planet.js: detail normal-map load failed, ground renders without normal perturbation (' +
+                url +
+                '): ' +
+                err,
+            )
           }
-        }
+        },
       )
     }
   }
@@ -526,11 +557,11 @@ export function createPlanet(seed) {
       shader.vertexShader = shader.vertexShader
         .replace(
           '#include <common>',
-          '#include <common>\nattribute vec4 biomeW;\nvarying vec4 vBiomeW;\nvarying vec3 vDetailPos;\nvarying vec3 vObjNormal;'
+          '#include <common>\nattribute vec4 biomeW;\nvarying vec4 vBiomeW;\nvarying vec3 vDetailPos;\nvarying vec3 vObjNormal;',
         )
         .replace(
           '#include <begin_vertex>',
-          '#include <begin_vertex>\nvDetailPos = position;\nvObjNormal = normal;\nvBiomeW = biomeW;'
+          '#include <begin_vertex>\nvDetailPos = position;\nvObjNormal = normal;\nvBiomeW = biomeW;',
         )
       const frag = shader.fragmentShader
         .replace(
@@ -577,7 +608,7 @@ export function createPlanet(seed) {
             '  tz = vec3(tz.xy + n.xy, abs(tz.z) * n.z);',
             '  return normalize(tx.zxy * bw.x + ty.xzy * bw.y + tz.xyz * bw.z);',
             '}',
-          ].join('\n')
+          ].join('\n'),
         )
         .replace(
           '#include <color_fragment>',
@@ -631,7 +662,7 @@ export function createPlanet(seed) {
             '    diffuseColor.rgb = clamp(diffuseColor.rgb, 0.0, 1.0);',
             '  }',
             '}',
-          ].join('\n')
+          ].join('\n'),
         )
         .replace(
           '#include <normal_fragment_maps>',
@@ -658,7 +689,7 @@ export function createPlanet(seed) {
             '    normal = normalize(normalMatrix * blendedObjN);',
             '  }',
             '}',
-          ].join('\n')
+          ].join('\n'),
         )
       if (frag === shader.fragmentShader) throw new Error('planet.js: splat injection point not found')
       shader.fragmentShader = frag
@@ -667,7 +698,10 @@ export function createPlanet(seed) {
       terrainMat.userData.shaderError = String(err)
       if (!warnedTerrainSplat) {
         warnedTerrainSplat = true
-        console.warn('[planet] planet.js: terrain detail-texture splat degraded — onBeforeCompile injection failed, ground renders without triplanar detail textures, normal perturbation, or the mid-zoom macro layer: ' + err)
+        console.warn(
+          '[planet] planet.js: terrain detail-texture splat degraded — onBeforeCompile injection failed, ground renders without triplanar detail textures, normal perturbation, or the mid-zoom macro layer: ' +
+            err,
+        )
       }
     }
 
@@ -694,7 +728,7 @@ export function createPlanet(seed) {
             'uniform sampler2D uCloudTex;',
             'uniform mat3 uCloudMat;',
             'uniform float uCloudShadowOn;',
-          ].join('\n')
+          ].join('\n'),
         )
         .replace(
           '#include <roughnessmap_fragment>',
@@ -714,14 +748,18 @@ export function createPlanet(seed) {
             '    diffuseColor.rgb *= 1.0 - shadowT * 0.18;',
             '  }',
             '}',
-          ].join('\n')
+          ].join('\n'),
         )
-      if (frag2 === shader.fragmentShader) throw new Error('planet.js: cloud-shadow injection point not found')
+      if (frag2 === shader.fragmentShader)
+        throw new Error('planet.js: cloud-shadow injection point not found')
       shader.fragmentShader = frag2
     } catch (err) {
       if (!warnedCloudShadow) {
         warnedCloudShadow = true
-        console.warn('[planet] planet.js: cloud-shadow-on-terrain degraded — onBeforeCompile injection failed, ground renders without moving cloud shadows: ' + err)
+        console.warn(
+          '[planet] planet.js: cloud-shadow-on-terrain degraded — onBeforeCompile injection failed, ground renders without moving cloud shadows: ' +
+            err,
+        )
       }
     }
   }
@@ -880,7 +918,10 @@ export function createPlanet(seed) {
       waterUniforms = null // fall back to the pre-M-LD static, vertex-tinted water
       if (!warnedOceanShader) {
         warnedOceanShader = true
-        console.warn('[planet] planet.js: ocean fresnel/depth-band/swell styling degraded — onBeforeCompile shader injection failed, water renders as flat vertex-tinted color with no swell: ' + err)
+        console.warn(
+          '[planet] planet.js: ocean fresnel/depth-band/swell styling degraded — onBeforeCompile shader injection failed, water renders as flat vertex-tinted color with no swell: ' +
+            err,
+        )
       }
     }
   }

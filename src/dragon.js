@@ -156,12 +156,17 @@ function findLairSpot(planet, seed) {
 // gap that reads as the entrance, plus a few brass hoard glints scattered
 // just inside it.
 // ---------------------------------------------------------------------------
-function buildLairMarker(planet, seed, lairDir, forwardHint) {
+function buildLairMarker(planet, seed, lairDir, _forwardHint) {
   const group = new THREE.Group()
   const rng = rngFromString(seed + ':dragon-lair-deco')
 
   const rockGeo = buildRockGeometry()
-  const rockMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 1, metalness: 0 })
+  const rockMat = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    flatShading: true,
+    roughness: 1,
+    metalness: 0,
+  })
   const t1 = new THREE.Vector3()
   const t2 = new THREE.Vector3()
   tangentBasis(lairDir, t1, t2)
@@ -316,83 +321,91 @@ export function createDragon(planet, world, seed) {
     for (const [bone, q] of boneBindQuats) bone.quaternion.copy(q)
   }
 
-  new GLTFLoader().loadAsync(MODEL_URL).then((gltf) => {
-    const scene = gltf.scene
-    recolorDragonMaterials(scene)
-    const bones = []
-    scene.traverse((obj) => {
-      if (!obj.isBone) return
-      if (obj.name === 'Head') headBone = obj
-      bones.push(obj)
-    })
+  new GLTFLoader()
+    .loadAsync(MODEL_URL)
+    .then((gltf) => {
+      const scene = gltf.scene
+      recolorDragonMaterials(scene)
+      const bones = []
+      scene.traverse((obj) => {
+        if (!obj.isBone) return
+        if (obj.name === 'Head') headBone = obj
+        bones.push(obj)
+      })
 
-    const clip = gltf.animations.find((a) => /flying/i.test(a.name)) || gltf.animations[0]
-    if (clip) {
-      mixer = new THREE.AnimationMixer(scene)
-      flyClipDuration = clip.duration || 1
-      flyAction = mixer.clipAction(clip)
-      flyAction.play()
-      flyAction.setEffectiveWeight(1)
+      const clip = gltf.animations.find((a) => /flying/i.test(a.name)) || gltf.animations[0]
+      if (clip) {
+        mixer = new THREE.AnimationMixer(scene)
+        flyClipDuration = clip.duration || 1
+        flyAction = mixer.clipAction(clip)
+        flyAction.play()
+        flyAction.setEffectiveWeight(1)
 
-      // Single sampling pass over the Flying clip: track the widest
-      // horizontal span (wingspan, for WINGSPAN scaling below) AND the
-      // narrowest (the "folded" reference pose for perched). Measured in
-      // local model space, before this scene is parented into the live
-      // graph.
-      const box = new THREE.Box3()
-      const size = new THREE.Vector3()
-      let maxSpan = 0
-      let minSpan = Infinity
-      let minSpanTime = 0
-      const SAMPLES = 24
-      for (let i = 0; i < SAMPLES; i++) {
-        const t = (flyClipDuration * i) / SAMPLES
-        flyAction.time = t
+        // Single sampling pass over the Flying clip: track the widest
+        // horizontal span (wingspan, for WINGSPAN scaling below) AND the
+        // narrowest (the "folded" reference pose for perched). Measured in
+        // local model space, before this scene is parented into the live
+        // graph.
+        const box = new THREE.Box3()
+        const size = new THREE.Vector3()
+        let maxSpan = 0
+        let minSpan = Infinity
+        let minSpanTime = 0
+        const SAMPLES = 24
+        for (let i = 0; i < SAMPLES; i++) {
+          const t = (flyClipDuration * i) / SAMPLES
+          flyAction.time = t
+          mixer.update(0)
+          scene.updateMatrixWorld(true)
+          box.setFromObject(scene)
+          box.getSize(size)
+          const span = Math.max(size.x, size.z)
+          maxSpan = Math.max(maxSpan, span)
+          if (span < minSpan) {
+            minSpan = span
+            minSpanTime = t
+          }
+        }
+
+        flyAction.time = minSpanTime
         mixer.update(0)
+        for (const bone of bones) boneBindQuats.set(bone, bone.quaternion.clone())
+
+        flyAction.time = 0
+        flyAction.setEffectiveWeight(0)
+        restoreBindPose()
+        scaleFactor = maxSpan > 1e-6 ? WINGSPAN / maxSpan : 1
+      } else {
+        // Shouldn't happen (the stripped GLB keeps exactly one clip) — warn
+        // loudly and fall back to a plain bbox so the dragon still appears
+        // at a sane size instead of silently vanishing.
+        console.warn('[planet] dragon.js: no animation clip in dragon.glb — flight animation disabled')
         scene.updateMatrixWorld(true)
-        box.setFromObject(scene)
+        const box = new THREE.Box3().setFromObject(scene)
+        const size = new THREE.Vector3()
         box.getSize(size)
         const span = Math.max(size.x, size.z)
-        maxSpan = Math.max(maxSpan, span)
-        if (span < minSpan) {
-          minSpan = span
-          minSpanTime = t
-        }
+        scaleFactor = span > 1e-6 ? WINGSPAN / span : 1
       }
 
-      flyAction.time = minSpanTime
-      mixer.update(0)
-      for (const bone of bones) boneBindQuats.set(bone, bone.quaternion.clone())
-
-      flyAction.time = 0
-      flyAction.setEffectiveWeight(0)
-      restoreBindPose()
-      scaleFactor = maxSpan > 1e-6 ? WINGSPAN / maxSpan : 1
-    } else {
-      // Shouldn't happen (the stripped GLB keeps exactly one clip) — warn
-      // loudly and fall back to a plain bbox so the dragon still appears
-      // at a sane size instead of silently vanishing.
-      console.warn('[planet] dragon.js: no animation clip in dragon.glb — flight animation disabled')
-      scene.updateMatrixWorld(true)
-      const box = new THREE.Box3().setFromObject(scene)
-      const size = new THREE.Vector3()
-      box.getSize(size)
-      const span = Math.max(size.x, size.z)
-      scaleFactor = span > 1e-6 ? WINGSPAN / span : 1
-    }
-
-    modelRoot = new THREE.Group()
-    modelRoot.name = 'dragonModelRoot'
-    modelRoot.scale.setScalar(scaleFactor)
-    modelRoot.add(scene)
-    dragonPivot.add(modelRoot)
-    ready = true
-  }).catch((err) => {
-    if (!warnedLoadFailed) {
-      warnedLoadFailed = true
-      console.warn('[planet] dragon.js: failed to load ' + MODEL_URL + ' — the dragon will not appear: ' + (err && err.message))
-    }
-  })
+      modelRoot = new THREE.Group()
+      modelRoot.name = 'dragonModelRoot'
+      modelRoot.scale.setScalar(scaleFactor)
+      modelRoot.add(scene)
+      dragonPivot.add(modelRoot)
+      ready = true
+    })
+    .catch((err) => {
+      if (!warnedLoadFailed) {
+        warnedLoadFailed = true
+        console.warn(
+          '[planet] dragon.js: failed to load ' +
+            MODEL_URL +
+            ' — the dragon will not appear: ' +
+            (err && err.message),
+        )
+      }
+    })
 
   // --- state machine ------------------------------------------------------
   // stateTimer is "seconds spent in the current state" and is also used
@@ -610,7 +623,8 @@ export function createDragon(planet, world, seed) {
   }
 
   function soaringAltitude() {
-    const alt = FLIGHT_ALT_MID + Math.sin(soarWobblePhase) * FLIGHT_ALT_WOBBLE + Math.sin(bobPhase) * BOB_AMPLITUDE
+    const alt =
+      FLIGHT_ALT_MID + Math.sin(soarWobblePhase) * FLIGHT_ALT_WOBBLE + Math.sin(bobPhase) * BOB_AMPLITUDE
     return clamp(alt, FLIGHT_ALT_MIN, FLIGHT_ALT_MAX)
   }
 
@@ -630,7 +644,9 @@ export function createDragon(planet, world, seed) {
       // skip the flourish rather than throw.
       if (!warnedNoHeadBone) {
         warnedNoHeadBone = true
-        console.warn('[planet] dragon.js: no "Head" bone found on the dragon rig — skipping the idle head-turn flourish')
+        console.warn(
+          '[planet] dragon.js: no "Head" bone found on the dragon rig — skipping the idle head-turn flourish',
+        )
       }
       return
     }
