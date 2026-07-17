@@ -180,11 +180,16 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
      swoop) → owner verdict.
 - **Exit:** ART.md approved + committed; one verdict recorded per packet;
   M3/M5 JIT plans MUST cite ART.md as binding art direction.
-- **Follow-on (user ask 2026-07-17, sequenced AFTER the verdicts so packet
-  lighting stays comparable):** environment-lighting pass — PMREM env from
-  our own sky, per-material envMapIntensity (water/snow/windows subtle,
-  metals stronger — brass already scoped in assets.js), never the naive
-  global wash; evaluate 2K ground textures at the same time.
+- **Follow-on — the "surface crispness pass" (user asks 2026-07-17: blurry
+  surface / HD textures / cube maps / POM; sequenced AFTER the verdicts so
+  packet lighting stays comparable), ships WITH the M-LD implementation wave:**
+  (1) environment-lighting — PMREM env from our own sky, per-material
+  envMapIntensity, never the naive global wash; (2) detail normal maps from
+  the ambientCG sets (per-pixel relief is the #1 anti-blur lever);
+  (3) extend/replace the splat detail fade so mid-zoom (1.7R+) isn't raw
+  vertex-color gradients — evaluate a mid-frequency macro texture layer;
+  (4) 2K ground textures eval. POM stays in E2's ladder (needs the normal-map
+  rung proven first).
 - **Est:** 4 builder-runs. Runs parallel-safe with M2 integration
   (spikes/ + docs/ only).
 
