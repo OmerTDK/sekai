@@ -154,6 +154,29 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
 - The fast-joy detour (b) is rejected; do not build WebGL2 throwaway
   versions of scattering/ocean.
 
+### M-LD — Look Development (added 2026-07-17, Omer's call: the aesthetic
+### layer was complaint-driven, never designed; fix that before the engine work)
+- **Why:** every user frustration to date was in the vibed visual layer
+  (triangles ×2, grass, clouds), zero in the designed data layer. M5's better
+  engines would just render an undesigned world more crisply.
+- **Scope (all spikes + one doc; verdict packets like S5):**
+  1. `docs/ART.md` — reference board distilled into WRITTEN rules: palette
+     grade, shape language, terrain character (coast drama, fjords,
+     archipelagos, silhouettes), water feel, cloud feel, camera feel.
+     Sources: BotW, Sable, Monument Valley, Outer Wilds, Bad North, ISS
+     photography. Owner-approved before it becomes binding.
+  2. Terrain recipe comparison — 4-5 seeded height-function variants
+     (baseline / fjord-warped coasts / archipelago-rich / dramatic-relief /
+     mesa-plateau) screenshotted at matched viewpoints → owner verdict.
+  3. Water treatment comparison — 3 variants → owner verdict.
+  4. Camera-feel prototypes — 2-3 near-surface behaviors captured as GIFs
+     (terrain-following floor, zoom curve + FOV shift, cinematic visit
+     swoop) → owner verdict.
+- **Exit:** ART.md approved + committed; one verdict recorded per packet;
+  M3/M5 JIT plans MUST cite ART.md as binding art direction.
+- **Est:** 4 builder-runs. Runs parallel-safe with M2 integration
+  (spikes/ + docs/ only).
+
 ### M3 — TSL port (kill the shader hacks) [gate S1]
 - **S1 spike (retargeted):** port the TREE-SWAY material first — it is the
   live InstancedMesh + custom-attribute case (18k instances), not the
