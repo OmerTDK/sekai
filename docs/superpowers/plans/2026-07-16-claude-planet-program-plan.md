@@ -555,3 +555,39 @@ simulation is ADDITIVE and always heals — never destroys session structures.
 - Recommended first cut once appetite allows: **Herald + living-construction/
   health + prosperity/ruins** (highest soul-per-effort), THEN the E-SIM rung-1
   skirmish theater for spectacle.
+
+### World-sim expansion (Omer, 2026-07-17 — "more focused on world sim now")
+- **DESIGN SHIFT — NPC civilizations independent of sessions.** Omer: "create
+  civilizations even if no related sessions." The world gains a SECOND layer:
+  seeded, autonomous NPC civs that exist for the world's own richness, coexisting
+  with the session-settlements. Covenant still holds for session structures; NPC
+  civs are fully seed-deterministic and sim-owned (born, grow, war, fall, resettle
+  — all replayable from world seed + sim clock). This is the backbone the rest of
+  the world-sim hangs off.
+- **Distinct civ archetypes** (Omer: "diff types of civilizations across the
+  world"): desert nomad caravans, seafaring port cities, mountain/dwarven holds,
+  elven forest communes, steampunk industrial metropolises, cliff monasteries —
+  each unique architecture/palette/units/behavior. Session-settlements can align
+  to an archetype from project traits; NPC civs fill the rest of the map.
+- **Geology/disasters** (Omer: volcanoes, earthquakes): active volcanoes (eruption
+  plume + lava glow + ash; can birth new land, additively); earthquakes (screen
+  shake + terrain ripple + structures wobble, never break); + tsunamis, wildfires
+  (burn scars regrow), blizzards/sandstorms/tornadoes by region. Disaster-triggers
+  can fire on real events (deploy→eruption, force-push→quake).
+- **Active trade routes** (Omer): animated caravans + ships continuously plying
+  sea-lanes/roads between related civs; goods flow; trade-hub cities grow rich;
+  piracy + navy escorts on the lanes. Ties to the roads/bridges + economy layer.
+- **Fast-rotating sun / time controls** (Omer: "fast rotating sun so I can see the
+  dark side light up"): a sun-speed control (and pause/fast-forward/rewind of the
+  whole sim) so the terminator sweeps and the night side lights up (city lights,
+  aurora, forge-glow). Trivial to prototype (sun already orbits); a headline of the
+  god-controls wave. Also: moon phases + tides.
+- **Further:** resource nodes (ore/fish/timber) driving where civs settle and fight;
+  per-civ **wonders** (great library/colossus/lighthouse/sky-fortress) rising over
+  sim-time; **technology eras** (medieval→steampunk→beyond, airships/factories
+  appear as civs advance); pilgrimages/festivals; plagues+recovery; refugee
+  migration after wars/disasters; a **"chronicle of ages"** time machine that
+  fast-forwards centuries of history (extends the existing time-lapse).
+- **Sequencing note:** built on the MIGRATED engine (post-M3) so new visual work is
+  TSL from the start — no second port, per CHOICE-1. World-sim is a large arc;
+  scope a dedicated program (its own milestones) when it's promoted from backlog.
