@@ -16,6 +16,21 @@ export default defineConfig({
             res.end(JSON.stringify({ error: String(e) }))
           }
         })
+        server.middlewares.use('/api/resume', async (req, res) => {
+          if (req.method !== 'POST') {
+            res.statusCode = 405
+            res.end()
+            return
+          }
+          try {
+            const { handleResume } = await import('./server/resume.js')
+            handleResume(req, res)
+          } catch (e) {
+            res.statusCode = 500
+            res.setHeader('content-type', 'application/json')
+            res.end(JSON.stringify({ error: String(e) }))
+          }
+        })
       },
     },
   ],
