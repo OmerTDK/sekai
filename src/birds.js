@@ -40,7 +40,19 @@
 //
 // Contract (pinned): createBirds(planet, seed) -> { group, update(dt, camera) }.
 import * as THREE from 'three/webgpu'
-import { attribute, cos, Fn, min, mod, positionGeometry, sin, smoothstep, uniform, vec3 } from 'three/tsl'
+import {
+  attribute,
+  cos,
+  Fn,
+  min,
+  mod,
+  positionGeometry,
+  positionLocal,
+  sin,
+  smoothstep,
+  uniform,
+  vec3,
+} from 'three/tsl'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { rngFromString, makeNoise3D, clamp, lerp } from './util.js'
 import { tangentBasis } from './placement.js'
@@ -427,6 +439,19 @@ export function createBirds(planet, seed) {
   const { geo, hingeX } = buildBirdGeometry()
   geo.setAttribute('flapWave', new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY * 3), 3)) // phase, rate, amp
   geo.setAttribute('flapCycle', new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY * 3), 3)) // offset, len, flapFrac
+  // Per-instance orientation basis: columns 0 and 1 (right·scale, up·scale) of
+  // each bird's LIVE instance matrix. flora bakes its analogous swayRight/swayFwd
+  // ONCE at scatter time because its props never move; birds re-orient every
+  // frame, so these are rewritten each frame in the flight loop (writeBasis, called
+  // from stepVFlock/stepCircleFlock alongside setMatrixAt). positionNode uses them
+  // to rotate the geometry-space wing-flap displacement into each bird's current
+  // world frame. DynamicDrawUsage: rewritten every frame, exactly like instanceMatrix.
+  const birdRightBuf = new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY * 3), 3)
+  const birdUpBuf = new THREE.InstancedBufferAttribute(new Float32Array(CAPACITY * 3), 3)
+  birdRightBuf.setUsage(THREE.DynamicDrawUsage)
+  birdUpBuf.setUsage(THREE.DynamicDrawUsage)
+  geo.setAttribute('birdRight', birdRightBuf)
+  geo.setAttribute('birdUp', birdUpBuf)
 
   const material = new THREE.MeshStandardNodeMaterial({
     vertexColors: true,
@@ -444,6 +469,8 @@ export function createBirds(planet, seed) {
   const wingSideAttr = attribute('wingSide', 'float') // per-vertex: -1/0/+1, welds hinge root
   const flapWaveAttr = attribute('flapWave', 'vec3') // per-instance: x=phase, y=rate, z=amp
   const flapCycleAttr = attribute('flapCycle', 'vec3') // per-instance: x=offset, y=len, z=flapFraction
+  const birdRightAttr = attribute('birdRight', 'vec3') // per-instance: right·scale column of the live instance matrix
+  const birdUpAttr = attribute('birdUp', 'vec3') // per-instance: up·scale column of the live instance matrix
 
   // Flap-angle envelope: cyclePos walks 0..cycleLen (flapCycle.y); env ramps up/down
   // (smoothstep edges) across the flapFraction-sized flap window and sits at 0 — wings
@@ -473,8 +500,22 @@ export function createBirds(planet, seed) {
     { p: 'vec3', angle: 'float', return: 'vec3' },
   )
 
-  // Local, pre-instance space — the renderer applies instanceMatrix after positionNode.
-  material.positionNode = birdFlapRotate(positionGeometry, birdFlapAngle())
+  // positionNode FULLY REPLACES positionLocal, and by the time it is evaluated the
+  // renderer has ALREADY baked the per-instance transform INTO positionLocal
+  // (positionLocal = instanceMatrix * positionGeometry — see three's Instance.js
+  // `instance()` then NodeMaterial.setupPosition). Building the flap from raw
+  // `positionGeometry` (as the first port did) therefore discarded every bird's
+  // placement + orientation and collapsed the whole flock onto the origin. Correct
+  // composition, matching the classic GLSL `instanceMatrix * flapRotate(position)`:
+  // since flapRotate(g) = g + flapDelta,
+  //   instanceMatrix * (g + flapDelta) = positionLocal + (rotation·scale)·flapDelta.
+  // flapDelta is the wing sweep in geometry space; birdFlapRotate is an in-plane
+  // (x,y) hinge rotation about z (it returns the input z untouched), so flapDelta.z
+  // is identically 0 — only the instance's right (col0) and up (col1) basis vectors
+  // are needed to carry it into world space. Those columns are refreshed each frame
+  // by writeBasis(), so this stays correct as birds fly and bank.
+  const flapDelta = birdFlapRotate(positionGeometry, birdFlapAngle()).sub(positionGeometry)
+  material.positionNode = positionLocal.add(birdRightAttr.mul(flapDelta.x)).add(birdUpAttr.mul(flapDelta.y))
 
   const mesh = new THREE.InstancedMesh(geo, material, CAPACITY)
   mesh.count = 0
@@ -485,6 +526,8 @@ export function createBirds(planet, seed) {
   const sizes = new Float32Array(CAPACITY)
   const flapWaveArr = geo.attributes.flapWave.array
   const flapCycleArr = geo.attributes.flapCycle.array
+  const birdRightArr = geo.attributes.birdRight.array
+  const birdUpArr = geo.attributes.birdUp.array
   const _tintColor = new THREE.Color()
   let count = 0
   let warnedCapacity = false
@@ -536,6 +579,21 @@ export function createBirds(planet, seed) {
   const _zAxis = new THREE.Vector3(0, 0, 1)
   let simTime = 0
 
+  // Bakes columns 0 (right·scale) and 1 (up·scale) of the bird's just-composed
+  // instance matrix into the per-instance basis attributes — the live-frame
+  // equivalent of flora's scatter-time swayRight/swayFwd bake, refreshed every
+  // frame because birds re-orient constantly. Reading from the composed _instMat
+  // (not the raw makeBasis vectors) captures the roll/bank and scale exactly.
+  function writeBasis(idx) {
+    const b = idx * 3
+    birdRightArr[b] = _instMat.elements[0]
+    birdRightArr[b + 1] = _instMat.elements[1]
+    birdRightArr[b + 2] = _instMat.elements[2]
+    birdUpArr[b] = _instMat.elements[4]
+    birdUpArr[b + 1] = _instMat.elements[5]
+    birdUpArr[b + 2] = _instMat.elements[6]
+  }
+
   function stepVFlock(fl, dt) {
     fl.angle += fl.speed * dt
     _leaderDir.copy(fl.start).applyAxisAngle(fl.axis, fl.angle)
@@ -563,6 +621,7 @@ export function createBirds(planet, seed) {
       _scaleVec.setScalar(sizes[m.instanceIndex])
       _instMat.compose(_instPos, _instQuat, _scaleVec)
       mesh.setMatrixAt(m.instanceIndex, _instMat)
+      writeBasis(m.instanceIndex)
     }
   }
 
@@ -597,6 +656,7 @@ export function createBirds(planet, seed) {
       _scaleVec.setScalar(sizes[m.instanceIndex])
       _instMat.compose(_instPos, _instQuat, _scaleVec)
       mesh.setMatrixAt(m.instanceIndex, _instMat)
+      writeBasis(m.instanceIndex)
     }
   }
 
@@ -613,6 +673,8 @@ export function createBirds(planet, seed) {
     for (const fl of gullFlocks) stepCircleFlock(fl, dt)
     for (const fl of forestFlocks) stepCircleFlock(fl, dt)
     mesh.instanceMatrix.needsUpdate = true
+    geo.attributes.birdRight.needsUpdate = true
+    geo.attributes.birdUp.needsUpdate = true
   }
 
   return { group, update }
