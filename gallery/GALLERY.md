@@ -41,3 +41,19 @@ The `screenshot-17842*.jpg` files are chronological. Highlights:
 
 - `screenshot-…-38/39/41.jpg` — **the fjord world arrives**: M-LD terrain B+C+D + hybrid water live (39 = the fjord-and-coast-glow money shot).
 - `screenshot-…-42.jpg` — new Aemunis from orbit, all 250 buildings on the GLTF asset path.
+- `m25-airships-01-cruising.jpg` — M2.5 airships verify: a dirigible cruising
+  the `/Users/omertdk/Cloover/*` trade-cluster route at altitude, brass rib
+  rings + gondola visible against daylight cloud deck.
+- `m25-airships-02-moored.jpg` — same ship moments later, moored nose-first
+  at its dock mast (altitude locked to `groundR + MAST_HEIGHT` exactly) next
+  to Clooverdbtfolorien's forge glow.
+- `m25-dragon-01-perched.jpg` — M2.5 dragon verify: the resident dragon
+  perched at its lair (tallest-peak lattice scan landed it on a polar
+  massif this seed), cave-mouth rock arc + brass hoard glints visible at
+  its feet, wings folded via the Flying clip's own narrowest-span frame
+  (the rig's raw bind pose turned out fully spread, not folded — worth
+  flagging for anyone reusing this asset).
+- `m25-dragon-02-banking.jpg` — same dragon moments later, mid-patrol,
+  banked hard into a turn over icy terrain — wings, tail and tucked legs
+  all read clearly against the sky; a settlement's speech bubble is
+  visible below for scale.
