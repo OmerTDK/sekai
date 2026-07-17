@@ -164,6 +164,14 @@ function buildPatchOffsets() {
 const PATCH_OFFSETS = buildPatchOffsets()
 
 // ---------------------------------------------------------------------------
+// Silent-fallback rule: every graceful-degradation path warns exactly once
+// (module-level flags, since onBeforeCompile can re-run on shader recompile).
+// ---------------------------------------------------------------------------
+let warnedGrassWind = false
+let warnedTreeSway = false
+let warnedTreeMerge = false
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 // User verdict: individual grass blades read as visual noise on this planet's
@@ -191,7 +199,7 @@ export function createFlora(planet, camera, seed) {
 // ---------------------------------------------------------------------------
 // Grass
 // ---------------------------------------------------------------------------
-function buildBladeGeometry() {
+export function buildBladeGeometry() {
   const hw = BLADE_WIDTH / 2
   const tw = BLADE_WIDTH * 0.15 // slightly tapered tip, not a perfect point
   const positions = new Float32Array([
@@ -270,6 +278,10 @@ function buildGrass(planet, camera, seed) {
       grassUniforms = shader.uniforms
     } catch (err) {
       grassUniforms = null // fall back to static grass
+      if (!warnedGrassWind) {
+        warnedGrassWind = true
+        console.warn('[planet] flora.js: grass wind animation degraded — onBeforeCompile shader injection failed, blades render static: ' + err)
+      }
     }
   }
 
@@ -399,7 +411,7 @@ function buildGrass(planet, camera, seed) {
 // ---------------------------------------------------------------------------
 // Trees
 // ---------------------------------------------------------------------------
-function buildTreeGeometry() {
+export function buildTreeGeometry() {
   const trunkTopR = 0.05
   const trunkBottomR = 0.078
   const trunkH = 0.42
@@ -425,8 +437,12 @@ function buildTreeGeometry() {
   // differently, so force ALL parts non-indexed — toNonIndexed() is a no-op
   // (plus a console warn) on geometry that already qualifies.
   const parts = [trunkGeo, canopyLowGeo, canopyHighGeo].map((g) => (g.index ? g.toNonIndexed() : g))
-  const merged = mergeGeometries(parts, false) || trunkGeo
-  return { geo: merged, unitHeight }
+  const merged = mergeGeometries(parts, false)
+  if (!merged && !warnedTreeMerge) {
+    warnedTreeMerge = true
+    console.warn('[planet] flora.js: tree geometry merge degraded — mergeGeometries failed, shipping trunk-only stump geometry (canopy lost)')
+  }
+  return { geo: merged || trunkGeo, unitHeight }
 }
 
 function buildTrees(planet, camera, seed) {
@@ -466,6 +482,10 @@ function buildTrees(planet, camera, seed) {
       treeUniforms = shader.uniforms
     } catch (err) {
       treeUniforms = null // fall back to static trees
+      if (!warnedTreeSway) {
+        warnedTreeSway = true
+        console.warn('[planet] flora.js: tree sway animation degraded — onBeforeCompile shader injection failed, trees render static: ' + err)
+      }
     }
   }
 
@@ -514,9 +534,14 @@ function buildTrees(planet, camera, seed) {
 // ---------------------------------------------------------------------------
 // Rocks
 // ---------------------------------------------------------------------------
-function buildRocks(planet, camera, seed) {
+export function buildRockGeometry() {
   const rockGeo = new THREE.DodecahedronGeometry(1, 0)
   paintFlatColor(rockGeo, COLOR_ROCK)
+  return rockGeo
+}
+
+function buildRocks(planet, camera, seed) {
+  const rockGeo = buildRockGeometry()
 
   const rockMat = new THREE.MeshStandardMaterial({
     vertexColors: true,

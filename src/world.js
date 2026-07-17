@@ -45,6 +45,23 @@ const TOPIC_LABEL_MIN = 0.0045
 const TOPIC_LABEL_MAX = 0.028
 const TOPIC_LABEL_REF_DIST = 1.15 // representative "up close" distance used to size topic labels once
 
+const BUBBLE_MAX_CHARS = 42 // speech-bubble text truncation
+const BUBBLE_VISIBLE_DIST = 0.35 // camera must be this close (world units) to see a speech bubble
+const BUBBLE_OFFSET = 0.004 // world units above the agent's ground position
+
+const SPARK_POOL_SIZE = 120 // shared additive-particle budget for ALL agents' hammer sparks
+const SPARK_BURST_MIN = 5
+const SPARK_BURST_MAX = 8
+const SPARK_TTL = 0.55 // seconds a spark particle lives
+const SPARK_GRAVITY = 0.015 // gravity-lite pull back toward the surface, world units/s^2
+const SPARK_COOLDOWN_MIN = 0.35 // seconds between bursts from the same hammering agent
+const SPARK_COOLDOWN_RANGE = 0.25
+
+const MINION_MAX = 6 // subagent workers rendered per session, even if the real count is higher
+const MINION_SCALE = 0.5 // half-size vs a normal worker
+
+const STRUCT_HIT_RADIUS = 0.012 // invisible click-target sphere radius per structure
+
 // ---------------------------------------------------------------------------
 // Races, palettes, naming
 // ---------------------------------------------------------------------------
@@ -235,12 +252,40 @@ function orientOnSurface(object, dir, forwardHint) {
   object.quaternion.setFromRotationMatrix(_basisMat)
 }
 
+// ---------------------------------------------------------------------------
+// Silent-fallback rule: every graceful-degradation path warns exactly once
+// (module-level flags — these searches run per-settlement/per-structure and
+// the ingest/poll paths repeat every 4s, so a plain warn would spam).
+// ---------------------------------------------------------------------------
+let warnedLandAnchorFallback = false
+let warnedStructureSpotFallback = false
+let warnedLandNearFallback = false
+let warnedIngestSkip = false
+let warnedPoll = false
+let warnedStructureClickCb = false
+
+function warnIngestSkip(reason) {
+  if (warnedIngestSkip) return
+  warnedIngestSkip = true
+  console.warn('[planet] world.js: session ingest degraded — skipped a malformed session entry (' + reason + ')')
+}
+
+function warnPoll(reason) {
+  if (warnedPoll) return
+  warnedPoll = true
+  console.warn('[planet] world.js: session poll degraded — ' + reason)
+}
+
 function findLandAnchor(planet, base, rng) {
   const dir = base.clone()
   for (let i = 0; i <= ANCHOR_SEARCH_TRIES; i++) {
     if (planet.isLand(dir) && planet.sampleHeight(dir) < MAX_BUILD_HEIGHT) return dir
     if (i === ANCHOR_SEARCH_TRIES) break
     dir.set(dir.x + (rng() - 0.5) * ANCHOR_STEP, dir.y + (rng() - 0.5) * ANCHOR_STEP, dir.z + (rng() - 0.5) * ANCHOR_STEP).normalize()
+  }
+  if (!warnedLandAnchorFallback) {
+    warnedLandAnchorFallback = true
+    console.warn('[planet] world.js: settlement anchor placement degraded — exhausted search budget, using best-effort location (may be underwater or above build height)')
   }
   return dir // best-effort last (island worlds happen)
 }
@@ -270,6 +315,10 @@ function findStructureSpot(planet, anchorDir, rng, siblings) {
       radius = Math.min(radius * 1.15, 0.14)
     }
   }
+  if (!warnedStructureSpotFallback) {
+    warnedStructureSpotFallback = true
+    console.warn('[planet] world.js: structure placement degraded — exhausted search budget, using fallback spot (may overlap a sibling or sit on unsuitable ground)')
+  }
   return fallback || anchorDir.clone()
 }
 
@@ -282,6 +331,10 @@ function randomLandNear(planet, center, rng, maxRadius) {
     sphericalOffset(out, center, bearing, dist)
     if (!fallback) fallback = out.clone()
     if (planet.isLand(out) && planet.sampleHeight(out) < MAX_BUILD_HEIGHT) return out.clone()
+  }
+  if (!warnedLandNearFallback) {
+    warnedLandNearFallback = true
+    console.warn('[planet] world.js: agent wander-point placement degraded — exhausted search budget, using fallback location (may be underwater or above build height)')
   }
   return fallback || center.clone()
 }
@@ -455,6 +508,68 @@ function refreshTopicSprite(sprite, text) {
   sprite.userData.aspect = aspect
 }
 
+// Small rounded speech-bubble with a tail pointing down at the speaker.
+// Text is untrusted (session lastAction) — canvas fillText only, same as topics.
+function buildBubbleCanvas(text) {
+  const size = 22
+  const padX = 14
+  const padY = 9
+  const tail = 7
+
+  const meas = document.createElement('canvas').getContext('2d')
+  meas.font = '600 ' + size + 'px ' + LABEL_FONT
+  const w = meas.measureText(text).width
+
+  const width = Math.ceil(w + padX * 2)
+  const bodyH = Math.ceil(size + padY * 2)
+  const height = bodyH + tail
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+
+  ctx.fillStyle = 'rgba(20,18,26,0.75)'
+  roundRectPath(ctx, 1, 1, width - 2, bodyH - 2, 10)
+  ctx.fill()
+  ctx.beginPath()
+  ctx.moveTo(width / 2 - tail, bodyH - 2)
+  ctx.lineTo(width / 2 + tail, bodyH - 2)
+  ctx.lineTo(width / 2, bodyH - 2 + tail)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.fillStyle = '#f6ecd9'
+  ctx.font = '600 ' + size + 'px ' + LABEL_FONT
+  ctx.fillText(text, width / 2, padY)
+
+  return { canvas, aspect: width / height }
+}
+
+function makeBubbleSprite(text) {
+  const { canvas, aspect } = buildBubbleCanvas(text)
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  const material = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })
+  const sprite = new THREE.Sprite(material)
+  sprite.center.set(0.5, 0)
+  sprite.userData.aspect = aspect
+  sprite.renderOrder = 2
+  return sprite
+}
+
+function refreshBubbleSprite(sprite, text) {
+  const { canvas, aspect } = buildBubbleCanvas(text)
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  sprite.material.map.dispose()
+  sprite.material.map = tex
+  sprite.material.needsUpdate = true
+  sprite.userData.aspect = aspect
+}
+
 function applyLabelScale(sprite, dist, k, min, max) {
   const s = clamp(dist * k, min, max)
   const aspect = sprite.userData.aspect || 2
@@ -466,7 +581,7 @@ function applyLabelScale(sprite, dist, k, min, max) {
 // "local unit" space (roughly 1 unit tall); the caller applies the tier scale.
 // ---------------------------------------------------------------------------
 
-function buildTower(race) {
+export function buildTower(race) {
   const g = new THREE.Group()
   let y = 0
   part(g, cylGeo(), stoneMat(), 0, y + 0.05, 0, 0.62, 0.10, 0.62)
@@ -482,7 +597,7 @@ function buildTower(race) {
   return g
 }
 
-function buildHall(race) {
+export function buildHall(race) {
   const g = new THREE.Group()
   let y = 0
   part(g, boxGeo(), stoneMat(), 0, y + 0.03, 0, 0.95, 0.06, 0.62)
@@ -497,7 +612,7 @@ function buildHall(race) {
   return g
 }
 
-function buildFarm(race, rng) {
+export function buildFarm(race, rng) {
   const g = new THREE.Group()
   const hutW = 0.3
   part(g, boxGeo(), woodMat(), -0.28, 0.16, -0.05, hutW, 0.32, hutW)
@@ -512,7 +627,7 @@ function buildFarm(race, rng) {
   return g
 }
 
-function buildBarracks(race) {
+export function buildBarracks(race) {
   const g = new THREE.Group()
   let y = 0
   part(g, boxGeo(), stoneMat(), 0, y + 0.03, 0, 1.0, 0.06, 0.4)
@@ -527,7 +642,7 @@ function buildBarracks(race) {
   return g
 }
 
-function buildObservatory(race) {
+export function buildObservatory(race) {
   const g = new THREE.Group()
   let y = 0
   const baseH = 0.3
@@ -542,7 +657,7 @@ function buildObservatory(race) {
   return g
 }
 
-function buildLibrary(race) {
+export function buildLibrary(race) {
   const g = new THREE.Group()
   let y = 0
   part(g, boxGeo(), stoneMat(), 0, y + 0.03, 0, 0.86, 0.06, 0.6)
@@ -557,7 +672,7 @@ function buildLibrary(race) {
   return g
 }
 
-function buildForge(race, rng) {
+export function buildForge(race, rng) {
   const g = new THREE.Group()
   const hutW = 0.6
   part(g, boxGeo(), stoneMat(), 0, 0.2, 0, hutW, 0.4, 0.44)
@@ -570,7 +685,7 @@ function buildForge(race, rng) {
   return g
 }
 
-function buildKit(type, race, tier, rng) {
+export function buildKit(type, race, tier, rng) {
   let g
   if (type === 'tower') g = buildTower(race)
   else if (type === 'hall') g = buildHall(race)
@@ -675,14 +790,99 @@ export function createWorld(planet, camera, domElement) {
   }
   group.add(settlementsGroup, structuresGroup, agentsGroup)
 
+  // Hammer sparks: one shared additive-particle pool for every agent's
+  // hammering animation, round-robin allocated so a burst never allocates.
+  const sparkPositions = new Float32Array(SPARK_POOL_SIZE * 3)
+  const sparkColors = new Float32Array(SPARK_POOL_SIZE * 3)
+  const sparkVelocity = new Float32Array(SPARK_POOL_SIZE * 3)
+  const sparkDown = new Float32Array(SPARK_POOL_SIZE * 3)
+  const sparkAge = new Float32Array(SPARK_POOL_SIZE)
+  const sparkTtl = new Float32Array(SPARK_POOL_SIZE) // 0 = free/dead slot
+  let sparkCursor = 0
+  const sparkGeo = new THREE.BufferGeometry()
+  sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPositions, 3))
+  sparkGeo.setAttribute('color', new THREE.BufferAttribute(sparkColors, 3))
+  const sparkPointsMat = new THREE.PointsMaterial({
+    color: 0xffb347,
+    size: 3,
+    sizeAttenuation: false,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  })
+  const sparkPoints = new THREE.Points(sparkGeo, sparkPointsMat)
+  sparkPoints.renderOrder = 2
+  sparkPoints.frustumCulled = false // pool slots can sit anywhere on the planet
+  agentsGroup.add(sparkPoints)
+
+  function spawnSparkBurst(originPos, normalDir) {
+    const count = SPARK_BURST_MIN + Math.floor(Math.random() * (SPARK_BURST_MAX - SPARK_BURST_MIN + 1))
+    tangentBasis(normalDir, _tb1, _tb2)
+    for (let n = 0; n < count; n++) {
+      const slot = sparkCursor
+      sparkCursor = (sparkCursor + 1) % SPARK_POOL_SIZE
+      const i3 = slot * 3
+      sparkPositions[i3] = originPos.x
+      sparkPositions[i3 + 1] = originPos.y
+      sparkPositions[i3 + 2] = originPos.z
+      const a = Math.random() * Math.PI * 2
+      const spread = 0.0025 + Math.random() * 0.004
+      const up = 0.004 + Math.random() * 0.003
+      const tx = _tb1.x * Math.cos(a) + _tb2.x * Math.sin(a)
+      const ty = _tb1.y * Math.cos(a) + _tb2.y * Math.sin(a)
+      const tz = _tb1.z * Math.cos(a) + _tb2.z * Math.sin(a)
+      sparkVelocity[i3] = tx * spread + normalDir.x * up
+      sparkVelocity[i3 + 1] = ty * spread + normalDir.y * up
+      sparkVelocity[i3 + 2] = tz * spread + normalDir.z * up
+      sparkDown[i3] = -normalDir.x
+      sparkDown[i3 + 1] = -normalDir.y
+      sparkDown[i3 + 2] = -normalDir.z
+      sparkAge[slot] = 0
+      sparkTtl[slot] = SPARK_TTL * (0.7 + Math.random() * 0.6)
+      sparkColors[i3] = 1
+      sparkColors[i3 + 1] = 1
+      sparkColors[i3 + 2] = 1
+    }
+  }
+
+  function updateSparks(dt) {
+    for (let slot = 0; slot < SPARK_POOL_SIZE; slot++) {
+      const t = sparkTtl[slot]
+      if (t <= 0) continue
+      const a = sparkAge[slot] + dt
+      const i3 = slot * 3
+      if (a >= t) {
+        sparkTtl[slot] = 0
+        sparkColors[i3] = sparkColors[i3 + 1] = sparkColors[i3 + 2] = 0
+        continue
+      }
+      sparkAge[slot] = a
+      sparkVelocity[i3] += sparkDown[i3] * SPARK_GRAVITY * dt
+      sparkVelocity[i3 + 1] += sparkDown[i3 + 1] * SPARK_GRAVITY * dt
+      sparkVelocity[i3 + 2] += sparkDown[i3 + 2] * SPARK_GRAVITY * dt
+      sparkPositions[i3] += sparkVelocity[i3] * dt
+      sparkPositions[i3 + 1] += sparkVelocity[i3 + 1] * dt
+      sparkPositions[i3 + 2] += sparkVelocity[i3 + 2] * dt
+      const fade = 1 - a / t
+      sparkColors[i3] = sparkColors[i3 + 1] = sparkColors[i3 + 2] = fade
+    }
+    sparkGeo.attributes.position.needsUpdate = true
+    sparkGeo.attributes.color.needsUpdate = true
+  }
+
   const stats = { settlements: 0, structures: 0, agents: 0 }
 
   const settlements = new Map() // project -> settlement record
   const structures = new Map() // session id -> structure record
   const agents = new Map() // session id -> agent record
+  const minions = new Map() // session id -> array of half-size subagent-worker records
   const knownIds = new Set() // every session id ever observed
   const constructingSet = new Set() // structure records currently growing in
-  const hitSpheres = [] // invisible raycast targets for click-to-visit
+  const hitSpheres = [] // invisible raycast targets for click-to-visit (settlements)
+  const structureHitSpheres = [] // invisible raycast targets for click-to-visit (structures)
+  const structureClickCallbacks = [] // subscribers registered via onStructureClick()
 
   let simTime = 0
   let pollTimer = 0
@@ -736,7 +936,7 @@ export function createWorld(planet, camera, domElement) {
 
   // --- structure --------------------------------------------------------------
 
-  function createStructureRecord(id, settlement, topic, bytes, animate) {
+  function createStructureRecord(id, settlement, topic, bytes, lastActive, animate) {
     const rng = rngFromString(id)
     const dir = findStructureSpot(planet, settlement.anchorDir, rng, settlement.structureDirs)
     const groundR = planet.sampleHeight(dir)
@@ -771,6 +971,13 @@ export function createWorld(planet, camera, domElement) {
 
     structuresGroup.add(structureRoot)
 
+    // Invisible click target for the structure inspector (onStructureClick).
+    const hitMesh = new THREE.Mesh(sphereGeo(), hitMat())
+    hitMesh.visible = false
+    hitMesh.position.copy(dir).multiplyScalar(groundR)
+    hitMesh.scale.setScalar(STRUCT_HIT_RADIUS * 2) // sphereGeo radius 0.5 -> world radius STRUCT_HIT_RADIUS
+    structuresGroup.add(hitMesh)
+
     const structure = {
       id,
       dir,
@@ -779,20 +986,26 @@ export function createWorld(planet, camera, domElement) {
       tier,
       bytes,
       topic,
+      lastActive,
+      settlement,
       finalScale,
       structureRoot,
       kitGroup,
       scaffold,
       topicSprite,
+      hitMesh,
       constructing: !!animate,
       constructionT: 0,
     }
+    hitMesh.userData.structure = structure
+    structureHitSpheres.push(hitMesh)
     settlement.structureDirs.push(dir)
     if (animate) constructingSet.add(structure)
     return structure
   }
 
-  function updateStructureData(structure, topic, bytes) {
+  function updateStructureData(structure, topic, bytes, lastActive) {
+    structure.lastActive = lastActive
     if (topic !== structure.topic) {
       structure.topic = topic
       refreshTopicSprite(structure.topicSprite, truncateText(topic, 44))
@@ -841,6 +1054,39 @@ export function createWorld(planet, camera, domElement) {
       arrivedHome: false,
       lastActive: Date.now(),
       bobPhase: rng() * Math.PI * 2,
+      lastAction: null,
+      bubbleSprite: null,
+      bubbleText: '',
+      sparkCooldown: Math.random() * SPARK_COOLDOWN_MIN,
+    }
+  }
+
+  function createMinionRecord(id, index, settlement, structure) {
+    const seed = id + '~minion' + index
+    const rng = rngFromString(seed)
+    const visual = buildPersonGroup(settlement.race)
+    const visualGroup = new THREE.Group()
+    visualGroup.add(visual)
+    agentsGroup.add(visualGroup)
+
+    const wanderPoints = [structure.dir.clone()]
+    for (let i = 0; i < 3; i++) {
+      wanderPoints.push(randomLandNear(planet, settlement.anchorDir, rngFromString(seed + '~wander' + i), 0.045))
+    }
+    const start = randomLandNear(planet, settlement.anchorDir, rngFromString(seed + '~start'), 0.045)
+
+    tangentBasis(structure.dir, _tb1, _tb2)
+
+    return {
+      group: visualGroup,
+      dir: start.clone(),
+      forward: _tb1.clone(),
+      targetDir: wanderPoints[1].clone(),
+      targetIsHome: false,
+      wanderPoints,
+      rng,
+      pauseTimer: rng() * 2,
+      bobPhase: rng() * Math.PI * 2,
     }
   }
 
@@ -869,11 +1115,13 @@ export function createWorld(planet, camera, domElement) {
     if (phase !== 'despawn' && agent.fadeScale < 1) agent.fadeScale = Math.min(1, agent.fadeScale + dt * 2)
 
     let bob = 0
+    let hammering = false
 
     if (phase === 'hammer') {
       const arrived = stepToward(agent.dir, home, AGENT_SPEED * dt * 2.2)
       if (arrived) {
         bob = Math.sin(simTime * 20 + agent.bobPhase) * BOB_HAMMER
+        hammering = true
       } else {
         updateAgentForward(agent, home)
         bob = Math.sin(simTime * 9 + agent.bobPhase) * BOB_WALK
@@ -882,6 +1130,7 @@ export function createWorld(planet, camera, domElement) {
       if (agent.pauseTimer > 0) {
         agent.pauseTimer -= dt
         bob = Math.sin(simTime * 20 + agent.bobPhase) * BOB_HAMMER
+        hammering = true
       } else {
         const arrived = stepToward(agent.dir, agent.targetDir, AGENT_SPEED * dt)
         if (arrived) {
@@ -912,7 +1161,64 @@ export function createWorld(planet, camera, domElement) {
     orientOnSurface(agent.group, agent.dir, agent.forward)
     agent.group.scale.setScalar(PERSON_HEIGHT * agent.fadeScale)
 
+    if (hammering) {
+      agent.sparkCooldown -= dt
+      if (agent.sparkCooldown <= 0) {
+        agent.sparkCooldown = SPARK_COOLDOWN_MIN + Math.random() * SPARK_COOLDOWN_RANGE
+        spawnSparkBurst(agent.group.position, agent.dir)
+      }
+    }
+
+    updateAgentBubble(agent, phase)
+
     return phase === 'despawn' && agent.arrivedHome && agent.fadeScale <= 0.001
+  }
+
+  // Speech bubble: only while WORKING and only when the camera is close.
+  // Canvas is redrawn only when the text actually changes.
+  function updateAgentBubble(agent, phase) {
+    const text = phase === 'work' ? agent.lastAction : null
+    if (!text) {
+      if (agent.bubbleSprite) agent.bubbleSprite.visible = false
+      return
+    }
+    if (!agent.bubbleSprite) {
+      agent.bubbleSprite = makeBubbleSprite(truncateText(text, BUBBLE_MAX_CHARS))
+      agent.bubbleText = text
+      agentsGroup.add(agent.bubbleSprite)
+    } else if (text !== agent.bubbleText) {
+      agent.bubbleText = text
+      refreshBubbleSprite(agent.bubbleSprite, truncateText(text, BUBBLE_MAX_CHARS))
+    }
+    const sprite = agent.bubbleSprite
+    sprite.position.copy(agent.group.position).addScaledVector(agent.dir, BUBBLE_OFFSET)
+    const dist = camera.position.distanceTo(sprite.position)
+    const near = dist < BUBBLE_VISIBLE_DIST
+    sprite.visible = near
+    if (near) applyLabelScale(sprite, dist, TOPIC_LABEL_K, TOPIC_LABEL_MIN, TOPIC_LABEL_MAX)
+  }
+
+  // Subagent minions: lightweight, always-wandering, no work/hammer/despawn
+  // phases of their own — existence is driven purely by ingest()'s pool sync.
+  function updateMinion(m, dt) {
+    let bob
+    if (m.pauseTimer > 0) {
+      m.pauseTimer -= dt
+      bob = Math.sin(simTime * 9 + m.bobPhase) * BOB_IDLE
+    } else {
+      const arrived = stepToward(m.dir, m.targetDir, AGENT_SPEED * dt)
+      if (arrived) {
+        pickNextTarget(m)
+        m.pauseTimer = 0.5 + m.rng() * 1.5
+      } else {
+        updateAgentForward(m, m.targetDir)
+      }
+      bob = Math.sin(simTime * 9 + m.bobPhase) * BOB_WALK
+    }
+    const groundR = planet.sampleHeight(m.dir)
+    m.group.position.copy(m.dir).multiplyScalar(groundR + FOOT_LIFT * MINION_SCALE + bob * MINION_SCALE)
+    orientOnSurface(m.group, m.dir, m.forward)
+    m.group.scale.setScalar(PERSON_HEIGHT * MINION_SCALE)
   }
 
   // --- data ingest --------------------------------------------------------------
@@ -922,13 +1228,21 @@ export function createWorld(planet, camera, domElement) {
     for (let i = 0; i < sessions.length; i++) {
       try {
         const s = sessions[i]
-        if (!s || typeof s.id !== 'string' || !s.id) continue
-        if (typeof s.project !== 'string' || !s.project) continue
+        if (!s || typeof s.id !== 'string' || !s.id) {
+          warnIngestSkip('missing/invalid id')
+          continue
+        }
+        if (typeof s.project !== 'string' || !s.project) {
+          warnIngestSkip('missing/invalid project')
+          continue
+        }
         const id = s.id
         const project = s.project
         const topic = typeof s.topic === 'string' ? s.topic : ''
         const lastActive = Number.isFinite(s.lastActive) ? s.lastActive : now
         const bytes = Number.isFinite(s.bytes) ? s.bytes : 0
+        const lastAction = typeof s.lastAction === 'string' && s.lastAction ? s.lastAction : null
+        const subagents = Number.isFinite(s.subagents) ? clamp(Math.floor(s.subagents), 0, 20) : 0
 
         let settlement = settlements.get(project)
         if (!settlement) {
@@ -941,10 +1255,10 @@ export function createWorld(planet, camera, domElement) {
           const isNew = !knownIds.has(id)
           knownIds.add(id)
           const animate = isNew && now - lastActive < CONSTRUCTION_NEW_MAX_MS
-          structure = createStructureRecord(id, settlement, topic, bytes, animate)
+          structure = createStructureRecord(id, settlement, topic, bytes, lastActive, animate)
           structures.set(id, structure)
         } else {
-          updateStructureData(structure, topic, bytes)
+          updateStructureData(structure, topic, bytes, lastActive)
         }
 
         if (now - lastActive < AGENT_MAX_MS) {
@@ -954,9 +1268,25 @@ export function createWorld(planet, camera, domElement) {
             agents.set(id, agent)
           }
           agent.lastActive = lastActive
+          agent.lastAction = lastAction
+        }
+
+        const wantMinions = Math.min(subagents, MINION_MAX)
+        let minionPool = minions.get(id)
+        if (!minionPool) {
+          minionPool = []
+          minions.set(id, minionPool)
+        }
+        while (minionPool.length < wantMinions) {
+          minionPool.push(createMinionRecord(id, minionPool.length, settlement, structure))
+        }
+        while (minionPool.length > wantMinions) {
+          const m = minionPool.pop()
+          agentsGroup.remove(m.group)
         }
       } catch (e) {
         // Keep the world stable even if one session entry is malformed.
+        warnIngestSkip('exception: ' + e)
       }
     }
   }
@@ -964,11 +1294,15 @@ export function createWorld(planet, camera, domElement) {
   async function poll() {
     try {
       const res = await fetch('/api/sessions')
-      if (!res || !res.ok) return
+      if (!res || !res.ok) {
+        warnPoll('bad response' + (res ? ' (status ' + res.status + ')' : ''))
+        return
+      }
       const data = await res.json()
       if (Array.isArray(data)) ingest(data)
     } catch (e) {
       // Server may briefly 500 — ignore silently, try again next poll.
+      warnPoll('fetch/parse failed: ' + e)
     }
   }
   poll()
@@ -994,6 +1328,38 @@ export function createWorld(planet, camera, domElement) {
     const rect = domElement.getBoundingClientRect()
     ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1)
     raycaster.setFromCamera(ndc, camera)
+
+    // Structures are tested first: a hit opens the inspector and never
+    // triggers the settlement fly-to underneath it.
+    const structHits = raycaster.intersectObjects(structureHitSpheres, false)
+    const structure = structHits.length ? structHits[0].object.userData.structure : null
+    if (structure) {
+      const st = structure.settlement
+      const payload = {
+        id: structure.id,
+        project: st ? st.project : null,
+        topic: structure.topic,
+        bytes: structure.bytes,
+        lastActive: structure.lastActive,
+        type: structure.type,
+        tier: structure.tier,
+        settlementName: st ? st.name : null,
+        race: st ? st.race : null,
+      }
+      for (let i = 0; i < structureClickCallbacks.length; i++) {
+        try {
+          structureClickCallbacks[i](payload)
+        } catch (err) {
+          // A misbehaving subscriber shouldn't break click handling.
+          if (!warnedStructureClickCb) {
+            warnedStructureClickCb = true
+            console.warn('[planet] world.js: structure-click subscriber degraded — a registered callback threw: ' + err)
+          }
+        }
+      }
+      return
+    }
+
     const hits = raycaster.intersectObjects(hitSpheres, false)
     if (!hits.length) return
     const settlement = hits[0].object.userData.settlement
@@ -1004,6 +1370,10 @@ export function createWorld(planet, camera, domElement) {
     tween.to.copy(settlement.anchorDir).multiplyScalar(Math.max(1.3, 0.45 * currentDist))
     tween.t = 0
     tween.active = true
+  }
+
+  function onStructureClick(cb) {
+    if (typeof cb === 'function') structureClickCallbacks.push(cb)
   }
 
   domElement.addEventListener('pointerdown', onPointerDown)
@@ -1064,9 +1434,20 @@ export function createWorld(planet, camera, domElement) {
       const remove = updateAgent(agent, dt, nowMs)
       if (remove) {
         agentsGroup.remove(agent.group)
+        if (agent.bubbleSprite) {
+          agentsGroup.remove(agent.bubbleSprite)
+          agent.bubbleSprite.material.map.dispose()
+          agent.bubbleSprite.material.dispose()
+        }
         agents.delete(id)
       }
     }
+
+    for (const pool of minions.values()) {
+      for (let i = 0; i < pool.length; i++) updateMinion(pool[i], dt)
+    }
+
+    updateSparks(dt)
 
     if (tween.active) {
       tween.t += dt / TWEEN_DURATION
@@ -1109,5 +1490,5 @@ export function createWorld(planet, camera, domElement) {
     return true
   }
 
-  return { group, update, stats, list, visit, _tween: tween }
+  return { group, update, stats, list, visit, _tween: tween, onStructureClick }
 }

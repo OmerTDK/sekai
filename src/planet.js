@@ -76,6 +76,13 @@ const OCEAN_EMISSIVE = 0x123a5e
 const OCEAN_SHALLOW_MUL = [1.06, 1.16, 1.14]
 const OCEAN_DEEP_MUL = [1, 1, 1]
 
+// ---------------------------------------------------------------------------
+// Silent-fallback rule: every graceful-degradation path warns exactly once
+// (module-level flags, since onBeforeCompile can re-run on shader recompile).
+// ---------------------------------------------------------------------------
+let warnedTerrainSplat = false
+let warnedOceanSwell = false
+
 export function createPlanet(seed) {
   // --- deterministic noise fields, all namespaced off the same seed -------
   const nContinent = makeNoise3D(seed + ':continents')
@@ -420,6 +427,10 @@ export function createPlanet(seed) {
       terrainMat.userData.shader = shader // debug/inspection handle
     } catch (err) {
       terrainMat.userData.shaderError = String(err)
+      if (!warnedTerrainSplat) {
+        warnedTerrainSplat = true
+        console.warn('[planet] planet.js: terrain detail-texture splat degraded — onBeforeCompile injection failed, ground renders without triplanar detail textures: ' + err)
+      }
     }
   }
 
@@ -488,6 +499,10 @@ export function createPlanet(seed) {
       waterUniforms = shader.uniforms
     } catch (err) {
       waterUniforms = null // fall back to static water
+      if (!warnedOceanSwell) {
+        warnedOceanSwell = true
+        console.warn('[planet] planet.js: ocean swell animation degraded — onBeforeCompile shader injection failed, water renders static: ' + err)
+      }
     }
   }
 

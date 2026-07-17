@@ -1,5 +1,13 @@
 # M0 Execution Plan — Land Batch-1 + Safety Net
 
+> **STATUS: COMPLETE (2026-07-17).** All tasks done, all exit criteria met
+> with evidence: tests green (scan + resume + 1599 geometry asserts), verify
+> sweep passed (console clean, determinism hash 3825360526 identical across
+> reloads, 2.6ms/frame, drawCalls baseline 1548@orbit), eclipses measured
+> ~6/3h with 0/20 dead seeds, Electron hidden-throttling disproven
+> (~600fps hidden, timers exact), resume endpoint verified live + 400 on
+> malicious input. M1 verified in the same pass.
+
 > Program plan: `2026-07-16-claude-planet-program-plan.md` (v1.0, signed off).
 > Builders: sonnet subagents on disjoint files. Architect owns package.json,
 > vite.config.js, electron/main.cjs, src/main.js, launcher, integration, merge.

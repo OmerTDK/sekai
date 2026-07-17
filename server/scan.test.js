@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { scanSessions } from './scan.js';
+import { validateResumeInput } from './resume.js';
 
 const MIN_BYTES = 1500;
 
@@ -29,6 +30,7 @@ function buildJsonl(lines, minBytes) {
 }
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scan-test-'));
+let homeTestDir; // created inside the resume.js validation block below, cleaned up in `finally`
 
 try {
   // --- Project dir A: caveat-wrapped first user line, then a real one ---
@@ -135,19 +137,73 @@ try {
   const tTiny = new Date('2026-07-08T12:00:00.000Z');
   fs.utimesSync(tinyFile, tTiny, tTiny);
 
+  // --- Project dir C: an "active" session (mtime = now) whose tail carries
+  // a couple of sidechain lines and ends on an assistant tool_use, to
+  // exercise lastAction + subagents.
+  const dirC = path.join(root, '-Users-test-repoC');
+  fs.mkdirSync(dirC, { recursive: true });
+
+  const activeLines = [
+    line({
+      type: 'user',
+      isSidechain: false,
+      message: { content: 'Refactor the wind simulation to use a fixed timestep' },
+      cwd: '/Users/test/repoC',
+      sessionId: 'active-session',
+      timestamp: '2026-07-16T18:00:00.000Z',
+    }),
+    line({
+      type: 'user',
+      isSidechain: true,
+      message: { content: 'sidechain kickoff' },
+      cwd: '/Users/test/repoC',
+      sessionId: 'active-session',
+      timestamp: '2026-07-16T18:00:05.000Z',
+    }),
+    line({
+      type: 'assistant',
+      isSidechain: true,
+      message: { content: [{ type: 'text', text: 'Working inside the subagent' }] },
+      cwd: '/Users/test/repoC',
+      sessionId: 'active-session',
+      timestamp: '2026-07-16T18:00:10.000Z',
+    }),
+    line({
+      type: 'assistant',
+      isSidechain: false,
+      message: {
+        content: [
+          { type: 'text', text: 'Updating the simulation step now.' },
+          {
+            type: 'tool_use',
+            name: 'Edit',
+            input: { file_path: '/Users/test/repoC/src/wind.js', old_string: 'x', new_string: 'y' },
+          },
+        ],
+      },
+      cwd: '/Users/test/repoC',
+      sessionId: 'active-session',
+      timestamp: '2026-07-16T18:00:15.000Z',
+    }),
+  ];
+  const activeFile = path.join(dirC, 'active-session.jsonl');
+  fs.writeFileSync(activeFile, buildJsonl(activeLines, MIN_BYTES + 500));
+  const tActive = new Date(); // "now": must land inside the 10-minute active window
+  fs.utimesSync(activeFile, tActive, tActive);
+
   // --- First call ---
   const results1 = await scanSessions(root);
 
   assert.strictEqual(
     results1.length,
-    4,
-    `expected 4 sessions, got ${results1.length}: ${JSON.stringify(results1.map((s) => s.id))}`
+    5,
+    `expected 5 sessions, got ${results1.length}: ${JSON.stringify(results1.map((s) => s.id))}`
   );
 
   const ids1 = results1.map((s) => s.id);
   assert.deepStrictEqual(
     ids1,
-    ['caveat-session', 'garbage-session', 'aititle-session', 'summary-session'],
+    ['active-session', 'caveat-session', 'garbage-session', 'aititle-session', 'summary-session'],
     'sessions must be sorted by lastActive desc'
   );
 
@@ -192,13 +248,83 @@ try {
     assert.strictEqual(typeof s.lastActive, 'number');
     assert.strictEqual(typeof s.bytes, 'number');
     assert.ok(s.bytes >= MIN_BYTES);
+    assert.ok(s.lastAction === null || typeof s.lastAction === 'string', 'lastAction must be null or a string');
+    if (typeof s.lastAction === 'string') {
+      assert.ok(!/[\n\r]/.test(s.lastAction), 'lastAction must be a single line');
+      assert.ok(s.lastAction.length <= 60, 'lastAction must be capped at 60 chars');
+    }
+    assert.strictEqual(typeof s.subagents, 'number');
+    assert.ok(s.subagents >= 0 && s.subagents <= 20, 'subagents must be within [0,20]');
   }
+
+  // lastAction/subagents: only the "active" (mtime within 10min) session gets
+  // a tail read at all.
+  assert.ok(
+    typeof byId1['active-session'].lastAction === 'string' && byId1['active-session'].lastAction.length > 0,
+    'the active session must have a non-empty lastAction'
+  );
+  assert.ok(
+    byId1['active-session'].lastAction.includes('Edit'),
+    `lastAction must mention the tool name, got: ${byId1['active-session'].lastAction}`
+  );
+  assert.ok(
+    byId1['active-session'].subagents >= 2,
+    `active session must count at least 2 sidechain lines, got ${byId1['active-session'].subagents}`
+  );
+
+  assert.strictEqual(
+    byId1['garbage-session'].lastAction,
+    null,
+    'an old (non-active) session must have lastAction null'
+  );
+  assert.strictEqual(
+    byId1['garbage-session'].subagents,
+    0,
+    'an old (non-active) session must have subagents 0 (its tail is never read)'
+  );
 
   // --- Second call: must exercise the cache and return identical results ---
   const results2 = await scanSessions(root);
   assert.deepStrictEqual(results2, results1, 'second (cached) call must return identical results');
 
   console.log('scan.test.js: all assertions passed (%d sessions)', results1.length);
+
+  // --- server/resume.js: pure-validation tests (never spawns osascript) ---
+  homeTestDir = fs.mkdtempSync(path.join(os.homedir(), '.claude-planet-resume-test-'));
+  const VALID_ID = 'a1b2c3d4-e5f6-47a8-b9c0-1234567890ab';
+
+  const ok = validateResumeInput({ id: VALID_ID, project: homeTestDir });
+  assert.strictEqual(ok.error, undefined, 'a valid id + an existing directory under $HOME must validate');
+  assert.strictEqual(ok.id, VALID_ID);
+  assert.strictEqual(ok.project, path.resolve(homeTestDir));
+
+  assert.ok(
+    validateResumeInput({ id: 'not-an-id!!', project: homeTestDir }).error,
+    'an id with non hex/dash characters must be rejected'
+  );
+  assert.ok(
+    validateResumeInput({ id: 'short', project: homeTestDir }).error,
+    'an id under 8 chars must be rejected'
+  );
+  assert.ok(
+    validateResumeInput({ id: VALID_ID, project: path.join(homeTestDir, 'does-not-exist') }).error,
+    'a nonexistent project directory must be rejected'
+  );
+
+  const notADir = path.join(homeTestDir, 'file.txt');
+  fs.writeFileSync(notADir, 'x');
+  assert.ok(
+    validateResumeInput({ id: VALID_ID, project: notADir }).error,
+    'a project path that is a file, not a directory, must be rejected'
+  );
+
+  assert.ok(
+    validateResumeInput({ id: VALID_ID, project: root }).error,
+    'a project directory outside the home directory must be rejected'
+  );
+
+  console.log('resume.test: all validation assertions passed');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
+  if (homeTestDir) fs.rmSync(homeTestDir, { recursive: true, force: true });
 }

@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Syntax-only sweep so a bad file fails fast with a precise location,
+      # before anything tries to actually import/bundle it.
+      - name: node --check src/ server/ electron/
+        run: find src server electron -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      # Called directly (not via `npm test`) so this job works whether or not
+      # package.json's "test" script has been wired to run these yet.
+      - name: Scanner tests
+        run: node server/scan.test.js
+
+      - name: Geometry sanity tests
+        run: node tests/geometry.test.mjs
+
+      - name: Build
+        run: npm run build

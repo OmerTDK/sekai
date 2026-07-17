@@ -9,6 +9,7 @@ import { createSky } from './sky.js'
 import { createWorld } from './world.js'
 import { createBirds } from './birds.js'
 import { createFlora } from './flora.js'
+import { createVerifyKit } from './verifykit.js'
 import { createWind } from './wind.js'
 import { createStorms } from './storms.js'
 import { createUI } from './ui.js'
@@ -71,9 +72,22 @@ addEventListener('resize', () => {
 })
 
 // Dev handle for poking the live scene from the console.
-const ui = createUI(world)
+const ui = createUI(world, {
+  resumeSession(id, project) {
+    fetch('/api/resume', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id, project }),
+    }).catch(() => {})
+  },
+  setPhotoMode(on) {
+    controls.autoRotate = on
+    controls.autoRotateSpeed = 0.25
+  },
+})
 
 window.__planet = { scene, camera, planet, sky, world, birds, flora, wind, storms, ui, renderer, composer, controls }
+window.__planet.verify = createVerifyKit({ scene, camera, composer, renderer, controls, planet, sky, world, birds, flora, wind, storms })
 
 const clock = new THREE.Clock()
 const sunDirScratch = new THREE.Vector3()

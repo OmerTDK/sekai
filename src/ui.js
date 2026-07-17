@@ -1,7 +1,10 @@
 // Sidebar + legend UI: a settlement browser (filter, click-to-visit) and a
 // collapsible legend explaining race glyphs/colors and building types.
+// Also: a building-inspector card (click a structure in the scene), a cmd-k
+// jump-to-settlement palette, and a photo-mode toggle for clean screenshots.
 // Pure DOM — no THREE here. The world module is only touched through its
-// public contract: world.stats / world.list() / world.visit(project).
+// public contract: world.stats / world.list() / world.visit(project) /
+// world.onStructureClick(cb) (optional — guarded, may not exist).
 //
 // All DOM is created and owned by this module inside a single container
 // appended to document.body; index.html only supplies the CSS for it.
@@ -22,11 +25,19 @@ const BUILDING_LEGEND = [
   ['tower', 'everything else'],
 ]
 
+// Mirror of src/world.js's pickTier() bands, in plain language for the inspector.
+const TIER_LABELS = { 1: 'humble', 2: 'established', 3: 'grand' }
+
 const REFRESH_INTERVAL = 2 // seconds between throttled settlement-row refreshes
 const STORAGE_KEY = 'planet-sidebar-collapsed'
 const FLASH_MS = 450
+const RESUME_RESET_MS = 2000 // ms the inspector's "opening terminal…" button state is held
 
-export function createUI(world) {
+export function createUI(world, hooks) {
+  // hooks may be undefined (or partially populated) — always guard with a
+  // typeof check before invoking either callback.
+  const safeHooks = hooks || {}
+
   // --- shell ------------------------------------------------------------
 
   const root = document.createElement('div')
@@ -240,16 +251,23 @@ export function createUI(world) {
     return parts.join('\n')
   }
 
-  function sortedFiltered() {
-    const q = filterInput.value.trim().toLowerCase()
-    let rows = q ? latestData.filter((s) => s.name.toLowerCase().includes(q) || s.basename.toLowerCase().includes(q)) : latestData.slice()
+  // Shared by the sidebar list and the cmd-k palette: filter by name/basename
+  // (case-insensitive substring), settlements with active agents ranked
+  // first, then by structure count. `limit` (optional) caps the result count.
+  function filterAndRank(data, query, limit) {
+    const q = query.trim().toLowerCase()
+    let rows = q ? data.filter((s) => s.name.toLowerCase().includes(q) || s.basename.toLowerCase().includes(q)) : data.slice()
     rows.sort((a, b) => {
       const activeA = a.agents > 0 ? 1 : 0
       const activeB = b.agents > 0 ? 1 : 0
       if (activeA !== activeB) return activeB - activeA
       return b.structures - a.structures
     })
-    return rows
+    return typeof limit === 'number' ? rows.slice(0, limit) : rows
+  }
+
+  function sortedFiltered() {
+    return filterAndRank(latestData, filterInput.value)
   }
 
   function fillRow(row, s) {
@@ -332,6 +350,282 @@ export function createUI(world) {
     refreshAccum = 0
     refreshFromWorld()
   }
+
+  // --- building inspector (right-side card, shown via world.onStructureClick) -
+
+  const inspectorCard = document.createElement('div')
+  inspectorCard.id = 'inspector-card'
+  root.appendChild(inspectorCard)
+
+  const inspectorTitle = document.createElement('div')
+  inspectorTitle.className = 'inspector-title'
+  inspectorCard.appendChild(inspectorTitle)
+
+  const inspectorSettlementRow = document.createElement('div')
+  inspectorSettlementRow.className = 'inspector-settlement-row'
+  const inspectorGlyph = document.createElement('span')
+  inspectorGlyph.className = 'inspector-glyph'
+  const inspectorSettlementName = document.createElement('span')
+  inspectorSettlementName.className = 'inspector-settlement-name'
+  inspectorSettlementRow.appendChild(inspectorGlyph)
+  inspectorSettlementRow.appendChild(inspectorSettlementName)
+  inspectorCard.appendChild(inspectorSettlementRow)
+
+  const inspectorType = document.createElement('div')
+  inspectorType.className = 'inspector-detail'
+  inspectorCard.appendChild(inspectorType)
+
+  const inspectorDate = document.createElement('div')
+  inspectorDate.className = 'inspector-detail'
+  inspectorCard.appendChild(inspectorDate)
+
+  const inspectorSize = document.createElement('div')
+  inspectorSize.className = 'inspector-detail'
+  inspectorCard.appendChild(inspectorSize)
+
+  const inspectorSessionId = document.createElement('div')
+  inspectorSessionId.className = 'inspector-session-id'
+  inspectorCard.appendChild(inspectorSessionId)
+
+  const inspectorActions = document.createElement('div')
+  inspectorActions.className = 'inspector-actions'
+  inspectorCard.appendChild(inspectorActions)
+
+  const inspectorResumeBtn = document.createElement('button')
+  inspectorResumeBtn.type = 'button'
+  inspectorResumeBtn.className = 'inspector-btn inspector-resume-btn'
+  inspectorResumeBtn.textContent = 'Resume session'
+  inspectorActions.appendChild(inspectorResumeBtn)
+
+  const inspectorCloseBtn = document.createElement('button')
+  inspectorCloseBtn.type = 'button'
+  inspectorCloseBtn.className = 'inspector-btn inspector-close-btn'
+  inspectorCloseBtn.textContent = 'Close'
+  inspectorActions.appendChild(inspectorCloseBtn)
+
+  let inspectorInfo = null
+  let resumeResetTimer = null
+
+  function humanizeBytes(bytes) {
+    const n = Number.isFinite(bytes) ? bytes : 0
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+    return (n / (1024 * 1024)).toFixed(2) + ' MB'
+  }
+
+  function resetResumeButton() {
+    if (resumeResetTimer) {
+      clearTimeout(resumeResetTimer)
+      resumeResetTimer = null
+    }
+    inspectorResumeBtn.disabled = false
+    inspectorResumeBtn.textContent = 'Resume session'
+  }
+
+  function openInspector(info) {
+    if (!info) return
+    inspectorInfo = info
+    resetResumeButton() // cancel any pending "opening terminal…" reset from a previous structure
+
+    inspectorTitle.textContent = info.topic || '(untitled)'
+
+    inspectorGlyph.textContent = RACE_GLYPHS[info.race] || '?'
+    inspectorGlyph.style.color = RACE_COLORS[info.race] || '#cfd8e3'
+    inspectorSettlementName.textContent = info.settlementName || ''
+
+    const tierLabel = TIER_LABELS[info.tier] || ''
+    inspectorType.textContent = [info.type, tierLabel].filter(Boolean).join(' · ')
+
+    const when = Number.isFinite(info.lastActive) ? new Date(info.lastActive) : null
+    inspectorDate.textContent = when ? when.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—'
+
+    inspectorSize.textContent = humanizeBytes(info.bytes)
+    inspectorSessionId.textContent = info.id ? 'session ' + info.id : ''
+
+    inspectorCard.classList.add('open') // re-opening while already open just swaps the content in place
+  }
+
+  function closeInspector() {
+    inspectorCard.classList.remove('open')
+    inspectorInfo = null
+    resetResumeButton()
+  }
+
+  inspectorResumeBtn.addEventListener('click', () => {
+    if (!inspectorInfo) return
+    if (typeof safeHooks.resumeSession === 'function') safeHooks.resumeSession(inspectorInfo.id, inspectorInfo.project)
+    inspectorResumeBtn.disabled = true
+    inspectorResumeBtn.textContent = 'opening terminal…'
+    if (resumeResetTimer) clearTimeout(resumeResetTimer)
+    resumeResetTimer = setTimeout(resetResumeButton, RESUME_RESET_MS)
+  })
+
+  inspectorCloseBtn.addEventListener('click', closeInspector)
+
+  if (typeof world.onStructureClick === 'function') {
+    world.onStructureClick(openInspector)
+  }
+
+  // --- cmd-k palette (search + jump to a settlement) -------------------------
+
+  const cmdkOverlay = document.createElement('div')
+  cmdkOverlay.id = 'cmdk-overlay'
+  cmdkOverlay.setAttribute('role', 'dialog')
+  cmdkOverlay.setAttribute('aria-modal', 'true')
+  root.appendChild(cmdkOverlay)
+
+  const cmdkBox = document.createElement('div')
+  cmdkBox.className = 'cmdk-box'
+  cmdkOverlay.appendChild(cmdkBox)
+
+  const cmdkInput = document.createElement('input')
+  cmdkInput.type = 'search'
+  cmdkInput.className = 'cmdk-input'
+  cmdkInput.placeholder = 'Jump to a settlement…'
+  cmdkInput.autocomplete = 'off'
+  cmdkInput.spellcheck = false
+  cmdkInput.setAttribute('aria-label', 'Jump to settlement')
+  cmdkBox.appendChild(cmdkInput)
+
+  const cmdkResults = document.createElement('div')
+  cmdkResults.className = 'cmdk-results'
+  cmdkBox.appendChild(cmdkResults)
+
+  const cmdkEmpty = document.createElement('div')
+  cmdkEmpty.className = 'settlement-empty'
+  cmdkEmpty.textContent = 'no matches'
+  cmdkBox.appendChild(cmdkEmpty)
+
+  let paletteOpen = false
+  let paletteSnapshot = [] // world.list() snapshot taken at open — results are re-derived from this per keystroke, never re-fetched
+  let paletteRows = []
+  let paletteSelected = 0
+
+  function renderPaletteResults() {
+    paletteRows = filterAndRank(paletteSnapshot, cmdkInput.value, 12)
+    cmdkResults.textContent = ''
+    for (let i = 0; i < paletteRows.length; i++) {
+      const row = rowTemplate.cloneNode(true) // reuse the sidebar row template/styling
+      fillRow(row, paletteRows[i])
+      row.classList.add('cmdk-row')
+      if (i === paletteSelected) row.classList.add('selected')
+      cmdkResults.appendChild(row)
+    }
+    cmdkEmpty.classList.toggle('hidden', paletteRows.length > 0)
+  }
+
+  function highlightPaletteSelection() {
+    const rows = cmdkResults.children
+    for (let i = 0; i < rows.length; i++) rows[i].classList.toggle('selected', i === paletteSelected)
+  }
+
+  function movePaletteSelection(delta) {
+    if (!paletteRows.length) return
+    paletteSelected = (paletteSelected + delta + paletteRows.length) % paletteRows.length
+    highlightPaletteSelection()
+  }
+
+  function selectPaletteActive() {
+    const s = paletteRows[paletteSelected]
+    if (!s) return
+    world.visit(s.project)
+    closePalette()
+  }
+
+  function openPalette() {
+    paletteSnapshot = world.list()
+    paletteSelected = 0
+    cmdkInput.value = ''
+    paletteOpen = true
+    cmdkOverlay.classList.add('open')
+    renderPaletteResults()
+    cmdkInput.focus()
+  }
+
+  function closePalette() {
+    paletteOpen = false
+    cmdkOverlay.classList.remove('open')
+    cmdkInput.blur()
+  }
+
+  cmdkOverlay.addEventListener('click', (e) => {
+    if (e.target === cmdkOverlay) closePalette() // backdrop click, not the box itself
+  })
+
+  cmdkResults.addEventListener('click', (e) => {
+    const row = e.target.closest('.cmdk-row')
+    if (!row || !row.dataset.project) return
+    world.visit(row.dataset.project)
+    closePalette()
+  })
+
+  cmdkInput.addEventListener('input', () => {
+    paletteSelected = 0
+    renderPaletteResults()
+  })
+
+  // --- photo mode (hide chrome for clean screenshots) -------------------------
+
+  const photoBtn = document.createElement('button')
+  photoBtn.type = 'button'
+  photoBtn.id = 'photo-mode-btn'
+  photoBtn.title = 'Photo mode (h)'
+  photoBtn.setAttribute('aria-label', 'Toggle photo mode')
+  photoBtn.textContent = '📷'
+  root.appendChild(photoBtn)
+
+  let photoMode = false
+
+  function setPhotoModeState(on) {
+    photoMode = on
+    document.body.classList.toggle('photo-mode', on)
+    if (typeof safeHooks.setPhotoMode === 'function') safeHooks.setPhotoMode(on)
+  }
+
+  photoBtn.addEventListener('click', () => setPhotoModeState(!photoMode))
+
+  // --- global keyboard shortcuts: cmd/ctrl+k, escape, h ------------------------
+
+  function isTypingInField(target) {
+    if (!target) return false
+    return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const key = e.key
+
+    if ((key === 'k' || key === 'K') && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      if (paletteOpen) closePalette()
+      else openPalette()
+      return
+    }
+
+    if (key === 'Escape') {
+      if (paletteOpen) closePalette()
+      else if (inspectorCard.classList.contains('open')) closeInspector()
+      else if (photoMode) setPhotoModeState(false)
+      return
+    }
+
+    if (paletteOpen) {
+      if (key === 'ArrowDown') {
+        e.preventDefault()
+        movePaletteSelection(1)
+      } else if (key === 'ArrowUp') {
+        e.preventDefault()
+        movePaletteSelection(-1)
+      } else if (key === 'Enter') {
+        e.preventDefault()
+        selectPaletteActive()
+      }
+      return
+    }
+
+    if ((key === 'h' || key === 'H') && !isTypingInField(e.target)) {
+      e.preventDefault()
+      setPhotoModeState(!photoMode)
+    }
+  })
 
   return { update }
 }

@@ -11,15 +11,24 @@ import path from 'node:path';
 import os from 'node:os';
 
 const HEAD_BYTES = 256 * 1024; // only read the first 256KB of each file
+const TAIL_BYTES = 64 * 1024; // only read the last 64KB when probing for live activity
 const MIN_BYTES = 1500; // sessions smaller than this are aborted/noise
 const MAX_TOPIC_CHARS = 80;
+const MAX_ACTION_CHARS = 60;
+const MAX_SUBAGENTS = 20; // count is capped/approximate, see extractTailActivity
 const MAX_RESULTS = 250;
 const RECENT_WINDOW_MS = 30 * 60 * 1000; // always keep sessions active in the last 30min
+const LAST_ACTION_WINDOW_MS = 10 * 60 * 1000; // lastAction/subagents only computed for sessions active in the last 10min
 
-// Cache keyed by absolute file path: { size, topic, project, resolved }
+// Cache keyed by absolute file path: { size, topic, project, resolved,
+// tailSize, lastAction, subagents }
 // Once topic+project are both found they never change for a given file, so
 // we never re-read its content again (stat only). Otherwise we only re-read
-// when the file's size has changed since the last attempt.
+// when the file's size has changed since the last attempt. The tail-derived
+// fields (tailSize/lastAction/subagents) are a separate cheap layer on top:
+// they're only (re)computed for sessions currently inside the "active"
+// window, and only when the file's size changed since they were last
+// computed — see extractTailActivity and its call site below.
 const fileCache = new Map();
 
 function formatTopic(raw) {
@@ -121,6 +130,104 @@ function extractTopicAndProject(filePath) {
   return { topic: summaryTopic ?? userTopic, project };
 }
 
+function clampAction(raw) {
+  const collapsed = String(raw).replace(/\s+/g, ' ').trim();
+  return collapsed.length > MAX_ACTION_CHARS ? collapsed.slice(0, MAX_ACTION_CHARS) : collapsed;
+}
+
+// Compact extract from a tool_use input: prefer a file path's basename, then
+// a command's first ~40 chars, then a description field — whatever exists.
+function summarizeToolInput(input) {
+  if (!input || typeof input !== 'object') return null;
+  if (typeof input.file_path === 'string' && input.file_path) return path.basename(input.file_path);
+  if (typeof input.command === 'string' && input.command) return input.command.slice(0, 40);
+  if (typeof input.description === 'string' && input.description) return input.description;
+  return null;
+}
+
+function readTail(filePath, maxBytes) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(maxBytes, size);
+    if (len <= 0) return { text: '', truncated: false };
+    const start = size - len;
+    const buf = Buffer.alloc(len);
+    const bytesRead = fs.readSync(fd, buf, 0, len, start);
+    return { text: buf.toString('utf8', 0, bytesRead), truncated: start > 0 };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Walks the tail lines backward looking for the most recent meaningful
+// assistant activity: an assistant tool_use wins over a plain text part, and
+// lines with neither (e.g. thinking-only) are skipped in favor of an earlier
+// line.
+function findLastAction(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line) continue;
+    let obj;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!obj || typeof obj !== 'object' || obj.type !== 'assistant') continue;
+    const content = obj.message && obj.message.content;
+    if (!Array.isArray(content)) continue;
+
+    let toolUse = null;
+    let text = null;
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue;
+      if (toolUse == null && part.type === 'tool_use') toolUse = part;
+      else if (text == null && part.type === 'text' && typeof part.text === 'string') text = part;
+    }
+
+    if (toolUse) {
+      const name = typeof toolUse.name === 'string' && toolUse.name ? toolUse.name : 'tool';
+      const summary = summarizeToolInput(toolUse.input);
+      return clampAction(summary ? `⚒ ${name}: ${summary}` : `⚒ ${name}`);
+    }
+    if (text) return clampAction(text.text.slice(0, 48));
+  }
+  return null;
+}
+
+// Approximate: a plain substring count over raw lines rather than a JSON
+// parse, so it's cheap even on a 64KB tail; can overcount if the literal
+// string appears somewhere other than the isSidechain key (rare in practice).
+function countSubagents(lines) {
+  let count = 0;
+  for (const line of lines) {
+    if (line.includes('"isSidechain":true')) {
+      count++;
+      if (count >= MAX_SUBAGENTS) return MAX_SUBAGENTS;
+    }
+  }
+  return count;
+}
+
+// Reads the last TAIL_BYTES of the file once and derives both lastAction and
+// subagents from it. Never throws: unreadable/unparseable content just
+// yields nulls/zero.
+function extractTailActivity(filePath) {
+  let tail;
+  try {
+    tail = readTail(filePath, TAIL_BYTES);
+  } catch {
+    return { lastAction: null, subagents: 0 };
+  }
+  const lines = tail.text.split('\n');
+  if (tail.truncated) lines.shift(); // we started mid-file: first line is a partial line
+  return {
+    lastAction: findLastAction(lines),
+    subagents: countSubagents(lines),
+  };
+}
+
 export async function scanSessions(root = path.join(os.homedir(), '.claude', 'projects')) {
   let dirEntries;
   try {
@@ -170,12 +277,34 @@ export async function scanSessions(root = path.join(os.homedir(), '.claude', 'pr
       if (cached.topic == null) continue; // no usable topic: excluded
       if (stat.size < MIN_BYTES) continue; // too small: aborted/noise
 
+      // lastAction/subagents are only meaningful (and only ever computed —
+      // no tail read at all otherwise) for sessions active in the last 10min;
+      // `age >= 0` also guards against a future mtime (clock skew) being
+      // misread as "recent".
+      const age = now - stat.mtimeMs;
+      const isRecentlyActive = age >= 0 && age <= LAST_ACTION_WINDOW_MS;
+
+      let lastAction = null;
+      let subagents = 0;
+      if (isRecentlyActive) {
+        if (cached.tailSize !== stat.size) {
+          const activity = extractTailActivity(filePath);
+          cached.tailSize = stat.size;
+          cached.lastAction = activity.lastAction;
+          cached.subagents = activity.subagents;
+        }
+        lastAction = cached.lastAction;
+        subagents = cached.subagents;
+      }
+
       sessions.push({
         id: path.basename(fileName, '.jsonl'),
         project: cached.project || decodeDirName(dirent.name),
         topic: cached.topic,
         lastActive: stat.mtimeMs,
         bytes: stat.size,
+        lastAction,
+        subagents,
       });
     }
   }
