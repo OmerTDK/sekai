@@ -16,6 +16,16 @@ export default defineConfig({
             res.end(JSON.stringify({ error: String(e) }))
           }
         })
+        server.middlewares.use('/api/events', async (req, res) => {
+          res.setHeader('content-type', 'application/json')
+          try {
+            const { gitEvents } = await import('./server/gitinfo.js')
+            res.end(JSON.stringify(await gitEvents()))
+          } catch (e) {
+            res.statusCode = 500
+            res.end(JSON.stringify({ error: String(e) }))
+          }
+        })
         server.middlewares.use('/api/resume', async (req, res) => {
           if (req.method !== 'POST') {
             res.statusCode = 405

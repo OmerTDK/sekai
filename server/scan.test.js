@@ -172,6 +172,7 @@ try {
       type: 'assistant',
       isSidechain: false,
       message: {
+        model: 'claude-fable-5',
         content: [
           { type: 'text', text: 'Updating the simulation step now.' },
           {
@@ -255,6 +256,10 @@ try {
     }
     assert.strictEqual(typeof s.subagents, 'number');
     assert.ok(s.subagents >= 0 && s.subagents <= 20, 'subagents must be within [0,20]');
+    assert.ok(
+      s.model === null || ['fable', 'opus', 'sonnet', 'haiku'].includes(s.model),
+      `model must be null or a known tier, got: ${s.model}`
+    );
   }
 
   // lastAction/subagents: only the "active" (mtime within 10min) session gets
@@ -271,6 +276,11 @@ try {
     byId1['active-session'].subagents >= 2,
     `active session must count at least 2 sidechain lines, got ${byId1['active-session'].subagents}`
   );
+  assert.strictEqual(
+    byId1['active-session'].model,
+    'fable',
+    `active session must normalize message.model "claude-fable-5-20260101" to "fable", got: ${byId1['active-session'].model}`
+  );
 
   assert.strictEqual(
     byId1['garbage-session'].lastAction,
@@ -281,6 +291,11 @@ try {
     byId1['garbage-session'].subagents,
     0,
     'an old (non-active) session must have subagents 0 (its tail is never read)'
+  );
+  assert.strictEqual(
+    byId1['garbage-session'].model,
+    null,
+    'an old (non-active) session must have model null (its tail is never read)'
   );
 
   // --- Second call: must exercise the cache and return identical results ---

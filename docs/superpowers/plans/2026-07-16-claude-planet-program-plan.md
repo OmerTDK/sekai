@@ -62,6 +62,10 @@ material port on the WebGL bridge → WebGPURenderer flip → visual flagships.
   `Math.random`/`Date.now` in world-state code).
 - **Dependency pinning:** three.js pinned EXACT (0.185.1); version bumps are
   deliberate, one per milestone gate at most.
+- **Gallery rule (user, 2026-07-17):** every verdict packet, milestone
+  screenshot, and GIF is copied into `gallery/YYYY-MM-DD/` (with a line in
+  gallery/GALLERY.md) before its PR merges — screenshots are born in temp
+  dirs that macOS deletes; the gallery is the project's memory book.
 - **Budget honesty:** estimates below are sonnet builder-runs (observed
   median ~130k tokens, hard runs 190–290k). Architect integration time
   historically ≈ builder time — budgets are ranges, not promises; WIP cap =
@@ -154,6 +158,57 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
 - The fast-joy detour (b) is rejected; do not build WebGL2 throwaway
   versions of scattering/ocean.
 
+### M-LD — Look Development (added 2026-07-17, Omer's call: the aesthetic
+### layer was complaint-driven, never designed; fix that before the engine work)
+- **Why:** every user frustration to date was in the vibed visual layer
+  (triangles ×2, grass, clouds), zero in the designed data layer. M5's better
+  engines would just render an undesigned world more crisply.
+- **Scope (all spikes + one doc; verdict packets like S5):**
+  1. `docs/ART.md` — reference board distilled into WRITTEN rules: palette
+     grade, shape language, terrain character (coast drama, fjords,
+     archipelagos, silhouettes), water feel, cloud feel, camera feel.
+     Sources: BotW, Sable, Monument Valley, Outer Wilds, Bad North, ISS
+     photography. Owner-approved before it becomes binding.
+  2. Terrain recipe comparison — VERDICT RECORDED (Omer, 2026-07-17):
+     **B+C+D — fjord-warped coasts + archipelago arcs + dramatic relief.**
+     Integration consequences (bind the implementation): HEIGHT_MAX
+     1.045→1.06 with LAND_COLOR_RANGE recomputed; cloud shells 1.055/1.07 →
+     ~1.075/1.09; storm patch 1.062 → ~1.08; atmosphere 1.09 → ~1.11; bird
+     altitude band raised above new peaks; settlement layout WILL reshuffle
+     (isLand changes at coasts — accepted, pre-1.0 world). Mesa (E) rejected
+     as underdelivering. Implementation ships in the single M-LD wave after
+     the water + camera verdicts, so the look upgrades land coherently.
+  3. Water — VERDICT (Omer, 2026-07-17): **hybrid 2+3, stylized-leaning** —
+     graded-fresnel depth base (sapphire→turquoise, coast glow band) with
+     posterized stylized band accents at shorelines; owner "really liked the
+     stylized look" — err graphic when tuning. Min-elevation camera clamp
+     near water adopted (spike lesson).
+  4. Camera — VERDICT (Omer, 2026-07-17): **swoop for visits + skim near
+     ground** (parameters as measured in the GIF packet: easeInOutCubic,
+     arc 0.35·sin(πt), FOV 45→52→45; skim floor sampleHeight+0.008,
+     smoothing gain 0.12, roll 0.18 rad).
+  5. Technique audit (2026-07-17) — adopted top-5: banner sway (rides M3
+     tree-sway PR), blob contact shadows, orbit tilt-shift DoF, path +
+     farmland decals, night light-pools (M2/M-LD wave, additive-safe).
+     Tone-touching items (near-camera shadow map, SSAO, LUT grades,
+     vignette-tune) sequenced AFTER the M-LD wave ships, one variable at a
+     time. Motion blur = anti-rule. Outline/ink stylization = owner
+     question, default SKIP. Fog stopgap killed (CHOICE-1 conflict).
+- **Exit:** ART.md approved + committed; one verdict recorded per packet;
+  M3/M5 JIT plans MUST cite ART.md as binding art direction.
+- **Follow-on — the "surface crispness pass" (user asks 2026-07-17: blurry
+  surface / HD textures / cube maps / POM; sequenced AFTER the verdicts so
+  packet lighting stays comparable), ships WITH the M-LD implementation wave:**
+  (1) environment-lighting — PMREM env from our own sky, per-material
+  envMapIntensity, never the naive global wash; (2) detail normal maps from
+  the ambientCG sets (per-pixel relief is the #1 anti-blur lever);
+  (3) extend/replace the splat detail fade so mid-zoom (1.7R+) isn't raw
+  vertex-color gradients — evaluate a mid-frequency macro texture layer;
+  (4) 2K ground textures eval. POM stays in E2's ladder (needs the normal-map
+  rung proven first).
+- **Est:** 4 builder-runs. Runs parallel-safe with M2 integration
+  (spikes/ + docs/ only).
+
 ### M3 — TSL port (kill the shader hacks) [gate S1]
 - **S1 spike (retargeted):** port the TREE-SWAY material first — it is the
   live InstancedMesh + custom-attribute case (18k instances), not the
@@ -209,10 +264,17 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
 - **Exit:** rivers/valleys visible; determinism hash stable across reloads;
   placement unchanged for unchanged seed+bake. **Est:** 4–5 runs.
 ### E2 (was M6) — terrain close-up detail [epilogue; spike-first]
-- **S6 spike:** try cheap paths first (base-mesh density bump, min-zoom
-  clamp, detail normal-mapping) and MEASURE memory baseline. Full cube-
-  sphere quadtree LOD ONLY if the spike fails Omer's eye. Depends on E1 if
-  erosion landed (explicit edge: E2 → E1's sampler).
+- **S6 spike:** try cheap paths first, in this order (user ask 2026-07-17:
+  "tessellation or the technique that imitates it" = parallax occlusion
+  mapping): (1) detail normal maps from the ambientCG height/normal sets we
+  already source, (2) parallax occlusion mapping on the ground splat
+  (per-pixel heightmap ray-march — fake relief, zero new triangles, fades
+  with altitude like the existing detail), (3) base-mesh density bump,
+  (4) min-zoom clamp. MEASURE memory + frame-time at each rung. True
+  tessellation stages don't exist in WebGL/WebGPU — full cube-sphere
+  quadtree LOD is the only real-subdivision path, built ONLY if the spike
+  rungs fail Omer's eye. Depends on E1 if erosion landed (explicit edge:
+  E2 → E1's sampler).
 - **Est:** spike 1 run; full LOD (if needed) 8–12 runs.
 ### E3 (was M7a) — packaged .app (electron-builder, unsigned). **Est:** 2–3 runs.
 ### E4 (was M8) — living world: ruins, migration caravans, seasons, volcano,
@@ -239,7 +301,7 @@ Epilogue: E1(erosion) ─→ E2(LOD, needs E1's sampler if E1 landed)
 | S1 | TSL bridge on LIVE instanced custom-attr material (tree-sway)? | parity, fps −≤10%, coexists, no recompile hitch | M3 start |
 | S2 | WebGPURenderer full-scene parity? | fps ≥ baseline−10%, nothing missing | M4 start |
 | S4 | BatchedMesh @ 20k GLTF instances? | ≥55fps, ≤~30 civ draw calls | M2 start |
-| S5 | Medieval GLTF + steampunk bolt-ons look intentional? Kenney vs Quaternius clash? | Omer approves 1-house screenshot | M2 first hour |
+| S5 | RESOLVED 2026-07-17 (GO — mix): Kenney base for all standard buildings, Quaternius reserved for grand tier-3 landmarks. Constraints from the spike: drop/downsize Quaternius PBR textures (17MB → tint-or-512px, fix dark faces), chunkier gear mounts (gears illegible oblique), tame pipe glow, scoped env-map for metals, everything batched per S4. | — | done |
 | S6 | Cheap terrain close-up fixes beat LOD? | Omer's eye at street level | E2 start |
 
 ## 5. Risk register

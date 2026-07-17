@@ -409,7 +409,7 @@ function createNebulae(seed) {
 // ------------------------------------------------------------ atmosphere --
 
 function createAtmosphere() {
-  const geo = new THREE.SphereGeometry(1.09, 64, 48)
+  const geo = new THREE.SphereGeometry(1.11, 64, 48)
   const mat = new THREE.ShaderMaterial({
     uniforms: {
       glowColor: { value: new THREE.Color('#7db8ff') },
@@ -687,7 +687,7 @@ function createClouds(seed) {
     targetCoverage: 0.27,
   })
   const lowerMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(1.055, 64, 32),
+    new THREE.SphereGeometry(1.075, 64, 32),
     new THREE.MeshStandardMaterial({
       color: 0xffffff,
       alphaMap: lowerTex,
@@ -722,7 +722,7 @@ function createClouds(seed) {
     targetCoverage: 0.13,
   })
   const upperMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(1.07, 64, 32),
+    new THREE.SphereGeometry(1.09, 64, 32),
     new THREE.MeshStandardMaterial({
       color: 0xffffff,
       alphaMap: upperTex,
@@ -884,7 +884,7 @@ function createMoons(seed) {
 // ------------------------------------------------------------------ aurora --
 
 const AURORA_STEPS = 128
-const AURORA_SHELL_R0 = 1.1
+const AURORA_SHELL_R0 = 1.12
 const AURORA_SHELL_R1 = AURORA_SHELL_R0 + 0.05
 const AURORA_BASE_ANG_RADIUS = 0.35 // radians from the pole
 

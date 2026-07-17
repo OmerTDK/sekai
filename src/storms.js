@@ -135,7 +135,7 @@ function makeHurricaneTexture(rng, texSeed, spinSign) {
 // ---------------------------------------------------------------------------
 // Mesh: a curved sphere-surface patch so the storm hugs the planet.
 // ---------------------------------------------------------------------------
-const PATCH_RADIUS = 1.062 // between the two cloud shells (1.055 / 1.07)
+const PATCH_RADIUS = 1.08 // between the two cloud shells (1.075 / 1.09)
 const PATCH_SEGMENTS = 64
 const PATCH_PHI_LENGTH = 0.95 // planet-scale monster, like the ISS reference
 const PATCH_THETA_LENGTH = 0.95

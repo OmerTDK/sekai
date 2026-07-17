@@ -243,6 +243,9 @@ export function createUI(world, hooks) {
 
   let latestData = []
   let lastSignature = null // null (not '') so the very first refresh always renders
+  // Declared here (not down in the time-lapse section) so refreshFromWorld —
+  // which fires synchronously below, before that section runs — can read it.
+  let timeLapseOn = false
 
   function signatureOf(data) {
     // Cheap order-independent change signature over the fields rows depend on.
@@ -324,6 +327,7 @@ export function createUI(world, hooks) {
   // --- refresh scheduling -----------------------------------------------------
 
   function refreshFromWorld() {
+    if (timeLapseOn) return // sidebar's live refresh is paused while scrubbing time-lapse history
     const data = world.list()
     const sig = signatureOf(data)
     if (sig === lastSignature) return // nothing changed — leave rows/scroll alone
@@ -583,6 +587,182 @@ export function createUI(world, hooks) {
 
   photoBtn.addEventListener('click', () => setPhotoModeState(!photoMode))
 
+  // --- time-lapse mode (scrub history via world.setTimeFilter, optional API) --
+  // Sibling API on world, landed independently — always typeof-guarded:
+  //   world.setTimeFilter(cutoffMs|null) — null = live; cutoff = show only
+  //     structures with lastActive <= cutoff.
+  //   world.getTimeRange() -> { min, max } epoch ms.
+  // If world.setTimeFilter is missing, the toggle button just stays hidden.
+
+  const timeLapseSupported = typeof world.setTimeFilter === 'function'
+
+  const PLAY_DURATION_MS = 45000 // target duration for a full min→max sweep
+  const TIME_FILTER_THROTTLE_MS = 1000 / 30 // cap world.setTimeFilter calls to ~30/s
+
+  const timeLapseBtn = document.createElement('button')
+  timeLapseBtn.type = 'button'
+  timeLapseBtn.id = 'timelapse-btn'
+  timeLapseBtn.title = 'Time-lapse history'
+  timeLapseBtn.setAttribute('aria-label', 'Toggle time-lapse history')
+  timeLapseBtn.textContent = '⏳'
+  if (!timeLapseSupported) timeLapseBtn.classList.add('hidden') // API not landed — stay hidden rather than error
+  root.appendChild(timeLapseBtn)
+
+  const timelineBar = document.createElement('div')
+  timelineBar.id = 'timelapse-bar'
+  root.appendChild(timelineBar)
+
+  const timelineRow = document.createElement('div')
+  timelineRow.className = 'timelapse-row'
+  timelineBar.appendChild(timelineRow)
+
+  const timelinePlayBtn = document.createElement('button')
+  timelinePlayBtn.type = 'button'
+  timelinePlayBtn.className = 'timelapse-play-btn'
+  timelinePlayBtn.setAttribute('aria-label', 'Play time-lapse playback')
+  timelinePlayBtn.textContent = '▶'
+  timelineRow.appendChild(timelinePlayBtn)
+
+  const timelineRange = document.createElement('input')
+  timelineRange.type = 'range'
+  timelineRange.className = 'timelapse-range'
+  timelineRange.setAttribute('aria-label', 'Time-lapse scrubber')
+  timelineRow.appendChild(timelineRange)
+
+  const timelineCloseBtn = document.createElement('button')
+  timelineCloseBtn.type = 'button'
+  timelineCloseBtn.className = 'timelapse-close-btn'
+  timelineCloseBtn.setAttribute('aria-label', 'Exit time-lapse')
+  timelineCloseBtn.textContent = '✕'
+  timelineRow.appendChild(timelineCloseBtn)
+
+  const timelineLabel = document.createElement('div')
+  timelineLabel.className = 'timelapse-label'
+  timelineBar.appendChild(timelineLabel)
+
+  let rangeMin = 0
+  let rangeMax = 0
+  let lastFilterCallTs = 0
+  let playing = false
+  let playRafId = null
+  let playLastTs = null
+
+  function formatTimeLabel(value) {
+    const d = new Date(value)
+    return isNaN(d.getTime()) ? '—' : d.toLocaleString()
+  }
+
+  // Throttled to ~30/s: pass force=true for discrete transitions (open, close,
+  // the 'change' commit, and the final frame of playback) that must never be
+  // dropped by the throttle window.
+  function applyTimeFilter(value, force) {
+    if (!timeLapseSupported) return
+    const now = Date.now()
+    if (!force && now - lastFilterCallTs < TIME_FILTER_THROTTLE_MS) return
+    lastFilterCallTs = now
+    world.setTimeFilter(value)
+  }
+
+  function setScrubberValue(value, force) {
+    timelineRange.value = String(value)
+    timelineLabel.textContent = formatTimeLabel(value) // unthrottled — ticks every call, incl. every rAF frame while playing
+    applyTimeFilter(value, force)
+  }
+
+  function updatePlayButton() {
+    timelinePlayBtn.textContent = playing ? '⏸' : '▶'
+    timelinePlayBtn.setAttribute('aria-label', playing ? 'Pause time-lapse playback' : 'Play time-lapse playback')
+  }
+
+  function stopPlay() {
+    playing = false
+    updatePlayButton()
+    if (playRafId != null) cancelAnimationFrame(playRafId)
+    playRafId = null
+    playLastTs = null
+  }
+
+  function playTick(ts) {
+    if (!playing) return
+    if (playLastTs == null) playLastTs = ts
+    const dt = ts - playLastTs
+    playLastTs = ts
+    const rate = (rangeMax - rangeMin) / PLAY_DURATION_MS // units of sim-time per ms of real-time
+    const value = Number(timelineRange.value) + rate * dt
+    if (value >= rangeMax) {
+      setScrubberValue(rangeMax, true)
+      stopPlay() // reaching max auto-exits play state; bar stays open at 'now'
+      return
+    }
+    setScrubberValue(value, false)
+    playRafId = requestAnimationFrame(playTick)
+  }
+
+  function startPlay() {
+    if (!timeLapseOn || rangeMax <= rangeMin) return
+    if (Number(timelineRange.value) >= rangeMax) setScrubberValue(rangeMin, true) // restart from the start when already at 'now'
+    playing = true
+    updatePlayButton()
+    playLastTs = null
+    playRafId = requestAnimationFrame(playTick)
+  }
+
+  function openTimeLapse() {
+    if (!timeLapseSupported || timeLapseOn) return
+
+    let range = typeof world.getTimeRange === 'function' ? world.getTimeRange() : null
+    if (!range || !Number.isFinite(range.min) || !Number.isFinite(range.max) || range.max <= range.min) {
+      range = { min: Date.now() - 24 * 60 * 60 * 1000, max: Date.now() } // defensive fallback — missing/degenerate range
+    }
+    rangeMin = range.min
+    rangeMax = range.max
+
+    const span = Math.max(1, rangeMax - rangeMin)
+    timelineRange.min = String(rangeMin)
+    timelineRange.max = String(rangeMax)
+    timelineRange.step = String(Math.max(1, span / 100)) // also gives native ←/→ arrow keys a 1%-of-range nudge
+
+    timeLapseOn = true
+    timeLapseBtn.classList.add('active')
+    timelineBar.classList.add('open')
+    document.body.classList.add('time-lapse')
+    setScrubberValue(rangeMax, true) // start at 'now' — visually equivalent to live until scrubbed back
+  }
+
+  function closeTimeLapse() {
+    if (!timeLapseOn) return
+    stopPlay()
+    timeLapseOn = false
+    timeLapseBtn.classList.remove('active')
+    timelineBar.classList.remove('open')
+    document.body.classList.remove('time-lapse')
+    if (typeof world.setTimeFilter === 'function') world.setTimeFilter(null)
+  }
+
+  timeLapseBtn.addEventListener('click', () => {
+    if (timeLapseOn) closeTimeLapse()
+    else openTimeLapse()
+  })
+
+  timelineCloseBtn.addEventListener('click', closeTimeLapse)
+
+  timelinePlayBtn.addEventListener('click', () => {
+    if (playing) stopPlay()
+    else startPlay()
+  })
+
+  // Native range-input keyboard handling (←/→/Home/End) already nudges by
+  // `step`, which openTimeLapse sets to 1% of the range — no custom key
+  // handling needed for that requirement.
+  timelineRange.addEventListener('input', () => {
+    if (playing) stopPlay() // manual scrub takes over from playback
+    setScrubberValue(Number(timelineRange.value), false)
+  })
+
+  timelineRange.addEventListener('change', () => {
+    applyTimeFilter(Number(timelineRange.value), true) // force the final value through even if throttled mid-drag
+  })
+
   // --- global keyboard shortcuts: cmd/ctrl+k, escape, h ------------------------
 
   function isTypingInField(target) {
@@ -603,6 +783,7 @@ export function createUI(world, hooks) {
     if (key === 'Escape') {
       if (paletteOpen) closePalette()
       else if (inspectorCard.classList.contains('open')) closeInspector()
+      else if (timeLapseOn) closeTimeLapse()
       else if (photoMode) setPhotoModeState(false)
       return
     }

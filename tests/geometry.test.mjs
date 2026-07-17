@@ -22,7 +22,7 @@ import {
   buildLibrary,
   buildForge,
   buildKit,
-} from '../src/world.js'
+} from '../src/buildings.js'
 
 const EPS = 1e-6
 

@@ -3,26 +3,57 @@
 // session history. Everything a user will ever see here is derived from
 // string hashes (project path, session id) so relaunching the app rebuilds
 // the identical village layout, then a 4s poll layers live activity on top.
+//
+// Structure/person geometry lives in buildings.js, placement search + surface
+// math lives in placement.js, and canvas label sprites live in labels.js —
+// this module is the orchestration layer: settlement/structure/agent
+// records, ingest/polling, the per-frame update loop, click raycasting, the
+// camera tween, city lights, and the hammer-spark particle pool.
 import * as THREE from 'three'
-import { SEA_LEVEL, hash01, rngFromString, clamp, lerp, smoothstep } from './util.js'
+import { hash01, rngFromString, clamp, lerp, smoothstep } from './util.js'
+import {
+  RACE_KEYS,
+  RACE_PALETTES,
+  RACE_GLYPHS,
+  KIT_UNIT_SIZE,
+  TIER_MULT,
+  makeSettlementName,
+  pickStructureType,
+  pickTier,
+  truncateText,
+  buildKit,
+  buildPersonGroup,
+  sphereGeo,
+  hitMat,
+  boxGeo,
+  scaffoldMat,
+} from './buildings.js'
+import { findLandAnchor, findStructureSpot, randomLandNear, tangentBasis, yawedTangent, orientOnSurface, stepToward } from './placement.js'
+import {
+  makeSettlementSprite,
+  makeTopicSprite,
+  refreshTopicSprite,
+  makeBubbleSprite,
+  refreshBubbleSprite,
+  applyLabelScale,
+  SETTLEMENT_LABEL_K,
+  SETTLEMENT_LABEL_MIN,
+  SETTLEMENT_LABEL_MAX,
+  TOPIC_LABEL_K,
+  TOPIC_LABEL_MIN,
+  TOPIC_LABEL_MAX,
+  TOPIC_LABEL_REF_DIST,
+} from './labels.js'
 
 // ---------------------------------------------------------------------------
 // Tunables
 // ---------------------------------------------------------------------------
-
-const MAX_BUILD_HEIGHT = SEA_LEVEL + 0.03 // sampleHeight() must be below this to build/walk
 
 const POLL_INTERVAL = 4 // seconds between /api/sessions polls
 const CONSTRUCTION_DURATION = 45 // seconds a fresh structure takes to "grow in"
 const CONSTRUCTION_NEW_MAX_MS = 5 * 60 * 1000 // session must be this fresh to animate construction
 const LABEL_THROTTLE = 0.3 // seconds between topic-label visibility checks
 const TOPIC_VISIBLE_DIST = 0.5 // camera must be this close (world units) to see a topic label
-
-const ANCHOR_SEARCH_TRIES = 600
-const ANCHOR_STEP = 0.05
-const STRUCT_SEARCH_RADIUS = 0.05
-const STRUCT_MIN_SEP = 0.012
-const STRUCT_SEARCH_HARD_CAP = 400
 
 const AGENT_SPEED = 0.010 // rad/s baseline walking angular speed
 const WORKING_MAX_MS = 3 * 60 * 1000
@@ -36,14 +67,6 @@ const FOOT_LIFT = PERSON_HEIGHT * 0.05
 
 const CLICK_MOVE_THRESHOLD = 6 // px
 const TWEEN_DURATION = 1.1 // seconds
-
-const SETTLEMENT_LABEL_K = 0.022
-const SETTLEMENT_LABEL_MIN = 0.006
-const SETTLEMENT_LABEL_MAX = 0.085
-const TOPIC_LABEL_K = 0.02
-const TOPIC_LABEL_MIN = 0.0045
-const TOPIC_LABEL_MAX = 0.028
-const TOPIC_LABEL_REF_DIST = 1.15 // representative "up close" distance used to size topic labels once
 
 const BUBBLE_MAX_CHARS = 42 // speech-bubble text truncation
 const BUBBLE_VISIBLE_DIST = 0.35 // camera must be this close (world units) to see a speech bubble
@@ -62,204 +85,42 @@ const MINION_SCALE = 0.5 // half-size vs a normal worker
 
 const STRUCT_HIT_RADIUS = 0.012 // invisible click-target sphere radius per structure
 
-// ---------------------------------------------------------------------------
-// Races, palettes, naming
-// ---------------------------------------------------------------------------
-
-const RACE_KEYS = ['human', 'elf', 'dwarf', 'orc']
-
-const RACE_PALETTES = {
-  human: { cloth: 0x3b5c8c, roof: 0x4a6f9e, banner: 0x2f4d78, skin: 0xd9a066, accent: 0x3b5c8c },
-  elf: { cloth: 0x3f7a4a, roof: 0x4f8f5a, banner: 0x2f5f3a, skin: 0xe8caa4, accent: 0x5aa868 },
-  dwarf: { cloth: 0x8c3f2e, roof: 0x9c4a30, banner: 0x7a2f22, skin: 0xc97b5a, accent: 0xc9622f },
-  orc: { cloth: 0x5a5f66, roof: 0x4f5359, banner: 0x3f4348, skin: 0x6d8f4e, accent: 0x9fb15c },
-}
-
-const RACE_GLYPHS = { human: '⚑', elf: '✦', dwarf: '⚒', orc: '⚔' }
-
-const SUFFIXES = {
-  human: ['holm', 'stead', 'burg'],
-  elf: ['dell', 'thil', 'lorien'],
-  dwarf: ['forge', 'deep', 'helm'],
-  orc: ['gash', 'maw', 'grot'],
-}
-
-const COLOR_WOOD = 0x8a6242
-const COLOR_WHITEWASH = 0xe8e0cc
-const COLOR_STONE = 0x8a8274
-const COLOR_DARK = 0x2a2420
-const COLOR_FIELD_A = 0x8ea34f
-const COLOR_FIELD_B = 0xc7a24a
-const COLOR_THATCH = 0xc9a94a
-const COLOR_EMBER = 0xff7733
-const COLOR_EMBER_EMISSIVE = 0xff5a22
-
-// Structure keyword routing — order matters, first hit wins.
-const TYPE_RULES = [
-  ['barracks', ['fix', 'bug', 'debug', 'error']],
-  ['farm', ['data', 'pipeline', 'sql', 'dbt', 'table', 'etl']],
-  ['observatory', ['research', 'explor', 'investigat', 'analy', 'idea']],
-  ['library', ['doc', 'readme', 'report', 'write']],
-  ['forge', ['deploy', 'infra', 'docker', 'ci', 'server']],
-  ['hall', ['ui', 'design', 'front', 'css', 'page', 'app']],
-]
-const FALLBACK_TYPES = ['tower', 'hall', 'farm', 'observatory', 'library']
-
-// Authored kit height at the tier-1 (x1) baseline; tier2 = x1.45, tier3 = x2.
-// (tier2 values land in the ~0.012-0.028 world-height band the spec asks for.)
-const KIT_UNIT_SIZE = {
-  tower: 0.016,
-  hall: 0.010,
-  farm: 0.009,
-  barracks: 0.0095,
-  observatory: 0.013,
-  library: 0.011,
-  forge: 0.0095,
-}
-const TIER_MULT = [1, 1.45, 2]
+// Steam/smoke plumes: the "alive" signal (art direction §0.5) — every
+// structure whose session is currently WORKING breathes soft gray-white
+// puffs. Pattern-copied from the spark pool above, but additive OFF (normal
+// blending + real per-vertex alpha, see spawnPlumePuff) so it reads as
+// vapor, not glow.
+const PLUME_POOL_SIZE = 200 // shared particle budget for ALL structures' plumes
+const PLUME_EMIT_INTERVAL = 0.8 // seconds between puffs, per active structure
+const PLUME_TTL = 2.5 // seconds a puff lives
+const PLUME_RISE_SPEED = 0.01 // world units/s outward along the structure's surface normal
+const PLUME_DRIFT_SPEED = 0.0015 // world units/s lateral wander, tangent to the surface
+const PLUME_EMIT_OFFSET = 0.012 // world units outward from the anchor along dir — roughly rooftop height
+const PLUME_PEAK_ALPHA = 0.4
+const PLUME_SIZE = 7 // PointsMaterial size, screen-space (sizeAttenuation: false)
+const PLUME_FADE_IN = 0.2 // seconds — avoids a hard pop-in at spawn
 
 // ---------------------------------------------------------------------------
-// Shared geometry / material caches (never per-instance — see PERFORMANCE)
+// Scratch tangent-basis vectors for the tangentBasis() calls made directly
+// from this module (spark bursts, agent/minion forward vectors) — duplicated
+// from placement.js's own private copy rather than shared via an export,
+// since these are write-before-read scratch (see the M2 program plan's
+// split notes on module-level scratch vectors).
 // ---------------------------------------------------------------------------
-
-const _geomCache = new Map()
-function geom(key, factory) {
-  let g = _geomCache.get(key)
-  if (!g) {
-    g = factory()
-    _geomCache.set(key, g)
-  }
-  return g
-}
-
-const _matCache = new Map()
-function mat(key, factory) {
-  let m = _matCache.get(key)
-  if (!m) {
-    m = factory()
-    _matCache.set(key, m)
-  }
-  return m
-}
-
-function stdMat(key, color, extra) {
-  return mat(key, () => new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.88, metalness: 0.04, ...extra }))
-}
-
-function raceMat(kind, race) {
-  const pal = RACE_PALETTES[race]
-  if (kind === 'roof') return stdMat('roof_' + race, pal.roof)
-  if (kind === 'banner') return stdMat('banner_' + race, pal.banner, { side: THREE.DoubleSide })
-  if (kind === 'cloth') return stdMat('cloth_' + race, pal.cloth)
-  if (kind === 'skin') return stdMat('skin_' + race, pal.skin)
-  return stdMat('accent_' + race, pal.accent, { emissive: pal.accent, emissiveIntensity: 1.1 })
-}
-
-const boxGeo = () => geom('box', () => new THREE.BoxGeometry(1, 1, 1))
-const cylGeo = () => geom('cyl6', () => new THREE.CylinderGeometry(0.5, 0.5, 1, 6))
-const cylGeo10 = () => geom('cyl10', () => new THREE.CylinderGeometry(0.5, 0.5, 1, 10))
-const coneGeo = () => geom('cone6', () => new THREE.ConeGeometry(0.5, 1, 6))
-const sphereGeo = () => geom('sphere8', () => new THREE.SphereGeometry(0.5, 8, 6))
-const domeGeo = () => geom('dome8', () => new THREE.SphereGeometry(0.5, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2))
-const capsuleGeo = () => geom('capsule', () => new THREE.CapsuleGeometry(0.5, 1, 3, 6))
-
-const woodMat = () => stdMat('wood', COLOR_WOOD)
-const whiteMat = () => stdMat('whitewash', COLOR_WHITEWASH)
-const stoneMat = () => stdMat('stone', COLOR_STONE)
-const darkMat = () => stdMat('dark', COLOR_DARK)
-const fieldAMat = () => stdMat('fieldA', COLOR_FIELD_A)
-const fieldBMat = () => stdMat('fieldB', COLOR_FIELD_B)
-const thatchMat = () => stdMat('thatch', COLOR_THATCH)
-const emberMat = () => stdMat('ember', COLOR_EMBER, { emissive: COLOR_EMBER_EMISSIVE, emissiveIntensity: 1.8, roughness: 0.5 })
-const hitMat = () => mat('hit', () => new THREE.MeshBasicMaterial({ color: 0xffffff }))
-const scaffoldMat = () => mat('scaffold', () => new THREE.MeshBasicMaterial({ color: 0x6b4a30, wireframe: true, transparent: true, opacity: 0.85 }))
-
-/** Adds a Mesh child at a local position/scale/rotation. Returns the mesh. */
-function part(parent, geometry, material, px, py, pz, sx, sy, sz, rx = 0, ry = 0, rz = 0) {
-  const m = new THREE.Mesh(geometry, material)
-  m.position.set(px, py, pz)
-  m.scale.set(sx, sy, sz)
-  if (rx) m.rotation.x = rx
-  if (ry) m.rotation.y = ry
-  if (rz) m.rotation.z = rz
-  parent.add(m)
-  return m
-}
-
-// ---------------------------------------------------------------------------
-// Spherical math helpers (pure — no dependency on the live planet/world state)
-// ---------------------------------------------------------------------------
-
 const _tb1 = new THREE.Vector3()
 const _tb2 = new THREE.Vector3()
 
-/** Arbitrary orthonormal tangent basis at a point on the unit sphere. */
-function tangentBasis(dir, outT1, outT2) {
-  if (Math.abs(dir.y) < 0.999) outT1.set(0, 1, 0).cross(dir).normalize()
-  else outT1.set(1, 0, 0).cross(dir).normalize()
-  outT2.crossVectors(dir, outT1).normalize()
-}
-
-/** Writes into `out` the point `dist` radians from `base` along `bearing`. */
-function sphericalOffset(out, base, bearing, dist) {
-  tangentBasis(base, _tb1, _tb2)
-  const cb = Math.cos(bearing)
-  const sb = Math.sin(bearing)
-  const tx = _tb1.x * cb + _tb2.x * sb
-  const ty = _tb1.y * cb + _tb2.y * sb
-  const tz = _tb1.z * cb + _tb2.z * sb
-  const cd = Math.cos(dist)
-  const sd = Math.sin(dist)
-  out.set(base.x * cd + tx * sd, base.y * cd + ty * sd, base.z * cd + tz * sd).normalize()
-}
-
-/** A unit tangent at `dir` rotated to bearing `yaw` — used to give structures a facing. */
-function yawedTangent(dir, yaw, out) {
-  tangentBasis(dir, _tb1, _tb2)
-  const cb = Math.cos(yaw)
-  const sb = Math.sin(yaw)
-  return out.set(_tb1.x * cb + _tb2.x * sb, _tb1.y * cb + _tb2.y * sb, _tb1.z * cb + _tb2.z * sb).normalize()
-}
-
-/** Moves `current` at most `maxAngle` radians toward `target` along the great circle. Returns true if arrived. */
-function stepToward(current, target, maxAngle) {
-  const d = clamp(current.dot(target), -1, 1)
-  const angle = Math.acos(d)
-  if (angle < 1e-5) return true
-  const t = Math.min(1, maxAngle / angle)
-  current.lerp(target, t).normalize()
-  return t >= 1
-}
-
-const _up = new THREE.Vector3()
-const _right = new THREE.Vector3()
-const _fwd = new THREE.Vector3()
-const _basisMat = new THREE.Matrix4()
-
-/** Orients `object` so local +Y matches the surface normal `dir` and local +Z faces `forwardHint`. */
-function orientOnSurface(object, dir, forwardHint) {
-  _up.copy(dir).normalize()
-  _fwd.copy(forwardHint)
-  _fwd.addScaledVector(_up, -_fwd.dot(_up))
-  if (_fwd.lengthSq() < 1e-10) {
-    _fwd.set(1, 0, 0).addScaledVector(_up, -_up.x)
-    if (_fwd.lengthSq() < 1e-10) _fwd.set(0, 0, 1)
-  }
-  _fwd.normalize()
-  _right.crossVectors(_up, _fwd).normalize()
-  _fwd.crossVectors(_right, _up).normalize()
-  _basisMat.makeBasis(_right, _up, _fwd)
-  object.quaternion.setFromRotationMatrix(_basisMat)
-}
+// Scratch for composing a structure anchor's position/quaternion/scale into
+// the Matrix4 pushed to assets.js's setVisualMatrix (see pushVisualMatrix) —
+// same write-before-read scratch convention as _tb1/_tb2 above.
+const _visMat = new THREE.Matrix4()
+const _visScale = new THREE.Vector3()
 
 // ---------------------------------------------------------------------------
 // Silent-fallback rule: every graceful-degradation path warns exactly once
 // (module-level flags — these searches run per-settlement/per-structure and
 // the ingest/poll paths repeat every 4s, so a plain warn would spam).
 // ---------------------------------------------------------------------------
-let warnedLandAnchorFallback = false
-let warnedStructureSpotFallback = false
-let warnedLandNearFallback = false
 let warnedIngestSkip = false
 let warnedPoll = false
 let warnedStructureClickCb = false
@@ -276,479 +137,32 @@ function warnPoll(reason) {
   console.warn('[planet] world.js: session poll degraded — ' + reason)
 }
 
-function findLandAnchor(planet, base, rng) {
-  const dir = base.clone()
-  for (let i = 0; i <= ANCHOR_SEARCH_TRIES; i++) {
-    if (planet.isLand(dir) && planet.sampleHeight(dir) < MAX_BUILD_HEIGHT) return dir
-    if (i === ANCHOR_SEARCH_TRIES) break
-    dir.set(dir.x + (rng() - 0.5) * ANCHOR_STEP, dir.y + (rng() - 0.5) * ANCHOR_STEP, dir.z + (rng() - 0.5) * ANCHOR_STEP).normalize()
-  }
-  if (!warnedLandAnchorFallback) {
-    warnedLandAnchorFallback = true
-    console.warn('[planet] world.js: settlement anchor placement degraded — exhausted search budget, using best-effort location (may be underwater or above build height)')
-  }
-  return dir // best-effort last (island worlds happen)
+// M2 asset-pack integration (see assets.js's pinned contract in the M2 JIT
+// plan): loadBuildingAssets() is imported dynamically and guarded — the
+// pack may not exist yet, may throw on import, or may reject/report
+// not-ready (missing WEBGL features). Either way the world must render
+// identically to before via the procedural buildKit path, so both failure
+// modes get their own single warning (load-time vs. per-structure).
+let warnedAssetsLoad = false
+let warnedAssetsCreate = false
+
+function warnAssetsLoad(reason) {
+  if (warnedAssetsLoad) return
+  warnedAssetsLoad = true
+  console.warn('[planet] world.js: building-asset pack unavailable — using the procedural buildKit fallback for all structures (' + reason + ')')
 }
 
-function findStructureSpot(planet, anchorDir, rng, siblings) {
-  let radius = STRUCT_SEARCH_RADIUS
-  let minSep = STRUCT_MIN_SEP
-  const dir = new THREE.Vector3()
-  let fallback = null
-  for (let tries = 1; tries <= STRUCT_SEARCH_HARD_CAP; tries++) {
-    const bearing = rng() * Math.PI * 2
-    const dist = Math.sqrt(rng()) * radius
-    sphericalOffset(dir, anchorDir, bearing, dist)
-    if (!fallback) fallback = dir.clone()
-    if (planet.isLand(dir) && planet.sampleHeight(dir) < MAX_BUILD_HEIGHT) {
-      let ok = true
-      for (let i = 0; i < siblings.length; i++) {
-        if (dir.angleTo(siblings[i]) < minSep) {
-          ok = false
-          break
-        }
-      }
-      if (ok) return dir.clone()
-    }
-    if (tries % 80 === 0) {
-      minSep *= 0.82
-      radius = Math.min(radius * 1.15, 0.14)
-    }
-  }
-  if (!warnedStructureSpotFallback) {
-    warnedStructureSpotFallback = true
-    console.warn('[planet] world.js: structure placement degraded — exhausted search budget, using fallback spot (may overlap a sibling or sit on unsuitable ground)')
-  }
-  return fallback || anchorDir.clone()
-}
-
-function randomLandNear(planet, center, rng, maxRadius) {
-  const out = new THREE.Vector3()
-  let fallback = null
-  for (let i = 0; i < 120; i++) {
-    const bearing = rng() * Math.PI * 2
-    const dist = Math.sqrt(rng()) * maxRadius
-    sphericalOffset(out, center, bearing, dist)
-    if (!fallback) fallback = out.clone()
-    if (planet.isLand(out) && planet.sampleHeight(out) < MAX_BUILD_HEIGHT) return out.clone()
-  }
-  if (!warnedLandNearFallback) {
-    warnedLandNearFallback = true
-    console.warn('[planet] world.js: agent wander-point placement degraded — exhausted search budget, using fallback location (may be underwater or above build height)')
-  }
-  return fallback || center.clone()
-}
-
-// ---------------------------------------------------------------------------
-// Naming / classification
-// ---------------------------------------------------------------------------
-
-function basenameOf(p) {
-  const parts = String(p).split(/[\\/]+/).filter(Boolean)
-  return parts.length ? parts[parts.length - 1] : 'world'
-}
-
-function makeSettlementName(project, race) {
-  const raw = basenameOf(project)
-  let clean = raw.replace(/[^a-zA-Z0-9]/g, '')
-  if (!clean) clean = 'Settlement'
-  clean = clean.charAt(0).toUpperCase() + clean.slice(1)
-  if (clean.length > 12) clean = clean.slice(0, 12)
-  const suffixes = SUFFIXES[race]
-  const suffix = suffixes[Math.floor(hash01(project + '~suffix') * suffixes.length)]
-  return { name: clean + suffix, basenameRaw: raw }
-}
-
-function pickStructureType(topic, id) {
-  const t = (topic || '').toLowerCase()
-  for (let i = 0; i < TYPE_RULES.length; i++) {
-    const type = TYPE_RULES[i][0]
-    const words = TYPE_RULES[i][1]
-    for (let j = 0; j < words.length; j++) {
-      if (t.indexOf(words[j]) !== -1) return type
-    }
-  }
-  return FALLBACK_TYPES[Math.floor(hash01(id) * FALLBACK_TYPES.length)]
-}
-
-function pickTier(bytes) {
-  if (bytes < 30000) return 1
-  if (bytes < 400000) return 2
-  return 3
-}
-
-function truncateText(s, maxLen) {
-  const str = String(s == null ? '' : s)
-  if (str.length <= maxLen) return str
-  return str.slice(0, maxLen - 1) + '…'
-}
-
-// ---------------------------------------------------------------------------
-// Canvas label sprites (topic text is untrusted — always drawn via fillText)
-// ---------------------------------------------------------------------------
-
-const LABEL_FONT = 'system-ui, -apple-system, "Segoe UI", Helvetica, sans-serif'
-
-function roundRectPath(ctx, x, y, w, h, r) {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.lineTo(x + w - r, y)
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r)
-  ctx.lineTo(x + w, y + h - r)
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
-  ctx.lineTo(x + r, y + h)
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r)
-  ctx.lineTo(x, y + r)
-  ctx.quadraticCurveTo(x, y, x + r, y)
-  ctx.closePath()
-}
-
-function buildSettlementCanvas(glyph, name, basenameRaw, accentCss) {
-  const titleSize = 46
-  const subSize = 30
-  const padX = 26
-  const padY = 18
-  const gap = 6
-
-  const meas = document.createElement('canvas').getContext('2d')
-  const titleText = glyph + '  ' + name
-  meas.font = '700 ' + titleSize + 'px ' + LABEL_FONT
-  const titleW = meas.measureText(titleText).width
-  meas.font = '500 ' + subSize + 'px ' + LABEL_FONT
-  const subW = meas.measureText(basenameRaw).width
-
-  const width = Math.ceil(Math.max(titleW, subW) + padX * 2)
-  const height = Math.ceil(titleSize + subSize + gap + padY * 2)
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-
-  ctx.fillStyle = 'rgba(16,14,20,0.55)'
-  roundRectPath(ctx, 1, 1, width - 2, height - 2, 18)
-  ctx.fill()
-  ctx.strokeStyle = accentCss
-  ctx.lineWidth = 3
-  roundRectPath(ctx, 1.5, 1.5, width - 3, height - 3, 18)
-  ctx.stroke()
-
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  ctx.fillStyle = '#f6ecd9'
-  ctx.font = '700 ' + titleSize + 'px ' + LABEL_FONT
-  ctx.fillText(titleText, width / 2, padY)
-
-  ctx.fillStyle = 'rgba(216,206,196,0.72)'
-  ctx.font = '500 ' + subSize + 'px ' + LABEL_FONT
-  ctx.fillText(basenameRaw, width / 2, padY + titleSize + gap)
-
-  return { canvas, aspect: width / height }
-}
-
-function buildTopicCanvas(text) {
-  const size = 30
-  const padX = 18
-  const padY = 12
-
-  const meas = document.createElement('canvas').getContext('2d')
-  meas.font = '600 ' + size + 'px ' + LABEL_FONT
-  const w = meas.measureText(text).width
-
-  const width = Math.ceil(w + padX * 2)
-  const height = Math.ceil(size + padY * 2)
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-
-  ctx.fillStyle = 'rgba(14,13,18,0.62)'
-  roundRectPath(ctx, 1, 1, width - 2, height - 2, 12)
-  ctx.fill()
-
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  ctx.fillStyle = '#eee6d6'
-  ctx.font = '600 ' + size + 'px ' + LABEL_FONT
-  ctx.fillText(text, width / 2, padY)
-
-  return { canvas, aspect: width / height }
-}
-
-function makeSettlementSprite(glyph, name, basenameRaw, accentCss) {
-  const { canvas, aspect } = buildSettlementCanvas(glyph, name, basenameRaw, accentCss)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  const material = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })
-  const sprite = new THREE.Sprite(material)
-  sprite.center.set(0.5, 0)
-  sprite.userData.aspect = aspect
-  return sprite
-}
-
-function makeTopicSprite(text) {
-  const { canvas, aspect } = buildTopicCanvas(text)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  const material = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })
-  const sprite = new THREE.Sprite(material)
-  sprite.center.set(0.5, 0)
-  sprite.userData.aspect = aspect
-  return sprite
-}
-
-function refreshTopicSprite(sprite, text) {
-  const { canvas, aspect } = buildTopicCanvas(text)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  sprite.material.map.dispose()
-  sprite.material.map = tex
-  sprite.material.needsUpdate = true
-  sprite.userData.aspect = aspect
-}
-
-// Small rounded speech-bubble with a tail pointing down at the speaker.
-// Text is untrusted (session lastAction) — canvas fillText only, same as topics.
-function buildBubbleCanvas(text) {
-  const size = 22
-  const padX = 14
-  const padY = 9
-  const tail = 7
-
-  const meas = document.createElement('canvas').getContext('2d')
-  meas.font = '600 ' + size + 'px ' + LABEL_FONT
-  const w = meas.measureText(text).width
-
-  const width = Math.ceil(w + padX * 2)
-  const bodyH = Math.ceil(size + padY * 2)
-  const height = bodyH + tail
-
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-
-  ctx.fillStyle = 'rgba(20,18,26,0.75)'
-  roundRectPath(ctx, 1, 1, width - 2, bodyH - 2, 10)
-  ctx.fill()
-  ctx.beginPath()
-  ctx.moveTo(width / 2 - tail, bodyH - 2)
-  ctx.lineTo(width / 2 + tail, bodyH - 2)
-  ctx.lineTo(width / 2, bodyH - 2 + tail)
-  ctx.closePath()
-  ctx.fill()
-
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'top'
-  ctx.fillStyle = '#f6ecd9'
-  ctx.font = '600 ' + size + 'px ' + LABEL_FONT
-  ctx.fillText(text, width / 2, padY)
-
-  return { canvas, aspect: width / height }
-}
-
-function makeBubbleSprite(text) {
-  const { canvas, aspect } = buildBubbleCanvas(text)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  const material = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false })
-  const sprite = new THREE.Sprite(material)
-  sprite.center.set(0.5, 0)
-  sprite.userData.aspect = aspect
-  sprite.renderOrder = 2
-  return sprite
-}
-
-function refreshBubbleSprite(sprite, text) {
-  const { canvas, aspect } = buildBubbleCanvas(text)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  sprite.material.map.dispose()
-  sprite.material.map = tex
-  sprite.material.needsUpdate = true
-  sprite.userData.aspect = aspect
-}
-
-function applyLabelScale(sprite, dist, k, min, max) {
-  const s = clamp(dist * k, min, max)
-  const aspect = sprite.userData.aspect || 2
-  sprite.scale.set(s * aspect, s, 1)
-}
-
-// ---------------------------------------------------------------------------
-// Structure kits — each built from a handful of flat-shaded primitives in
-// "local unit" space (roughly 1 unit tall); the caller applies the tier scale.
-// ---------------------------------------------------------------------------
-
-export function buildTower(race) {
-  const g = new THREE.Group()
-  let y = 0
-  part(g, cylGeo(), stoneMat(), 0, y + 0.05, 0, 0.62, 0.10, 0.62)
-  y += 0.09
-  const trunkH = 0.58
-  part(g, cylGeo(), whiteMat(), 0, y + trunkH / 2, 0, 0.42, trunkH, 0.42)
-  part(g, boxGeo(), darkMat(), 0, y + 0.16, 0.2, 0.1, 0.2, 0.02)
-  y += trunkH
-  const roofH = 0.46
-  part(g, coneGeo(), raceMat('roof', race), 0, y + roofH / 2, 0, 0.56, roofH, 0.56)
-  y += roofH
-  part(g, sphereGeo(), raceMat('accent', race), 0, y + 0.05, 0, 0.11, 0.11, 0.11)
-  return g
-}
-
-export function buildHall(race) {
-  const g = new THREE.Group()
-  let y = 0
-  part(g, boxGeo(), stoneMat(), 0, y + 0.03, 0, 0.95, 0.06, 0.62)
-  y += 0.05
-  const wallH = 0.34
-  part(g, boxGeo(), whiteMat(), 0, y + wallH / 2, 0, 0.86, wallH, 0.54)
-  part(g, boxGeo(), darkMat(), 0, y + 0.13, 0.275, 0.14, 0.26, 0.03)
-  y += wallH
-  const roofMat = raceMat('roof', race)
-  part(g, boxGeo(), roofMat, 0, y + 0.16, 0.15, 0.92, 0.05, 0.46, 0.55, 0, 0)
-  part(g, boxGeo(), roofMat, 0, y + 0.16, -0.15, 0.92, 0.05, 0.46, -0.55, 0, 0)
-  return g
-}
-
-export function buildFarm(race, rng) {
-  const g = new THREE.Group()
-  const hutW = 0.3
-  part(g, boxGeo(), woodMat(), -0.28, 0.16, -0.05, hutW, 0.32, hutW)
-  part(g, coneGeo(), thatchMat(), -0.28, 0.32 + 0.14, -0.05, 0.24, 0.28, 0.24)
-  const fieldCount = rng() < 0.5 ? 2 : 3
-  const fieldMats = [fieldAMat(), fieldBMat()]
-  let fx = 0.1
-  for (let i = 0; i < fieldCount; i++) {
-    part(g, boxGeo(), fieldMats[i % 2], fx, 0.02, -0.15 + i * 0.16, 0.3, 0.04, 0.32)
-    fx += 0.32
-  }
-  return g
-}
-
-export function buildBarracks(race) {
-  const g = new THREE.Group()
-  let y = 0
-  part(g, boxGeo(), stoneMat(), 0, y + 0.03, 0, 1.0, 0.06, 0.4)
-  y += 0.05
-  const wallH = 0.26
-  part(g, boxGeo(), woodMat(), 0, y + wallH / 2, 0, 0.92, wallH, 0.34)
-  y += wallH
-  part(g, boxGeo(), raceMat('roof', race), 0, y + 0.08, -0.02, 0.98, 0.05, 0.42, 0.22, 0, 0)
-  const poleH = 0.5
-  part(g, cylGeo(), woodMat(), -0.42, poleH / 2, 0.22, 0.02, poleH, 0.02)
-  part(g, boxGeo(), raceMat('banner', race), -0.42, poleH * 0.62, 0.23, 0.02, 0.22, 0.14)
-  return g
-}
-
-export function buildObservatory(race) {
-  const g = new THREE.Group()
-  let y = 0
-  const baseH = 0.3
-  part(g, cylGeo(), stoneMat(), 0, y + baseH / 2, 0, 0.5, baseH, 0.5)
-  y += baseH
-  const upperH = 0.22
-  part(g, cylGeo10(), whiteMat(), 0, y + upperH / 2, 0, 0.4, upperH, 0.4)
-  y += upperH
-  part(g, domeGeo(), raceMat('roof', race), 0, y, 0, 0.44, 0.36, 0.44)
-  part(g, boxGeo(), darkMat(), 0.06, y + 0.1, 0.06, 0.08, 0.08, 0.2)
-  part(g, cylGeo(), darkMat(), 0.16, y + 0.2, 0.16, 0.05, 0.34, 0.05, 0, 0, 0.7)
-  return g
-}
-
-export function buildLibrary(race) {
-  const g = new THREE.Group()
-  let y = 0
-  part(g, boxGeo(), stoneMat(), 0, y + 0.03, 0, 0.86, 0.06, 0.6)
-  y += 0.05
-  const wallH = 0.36
-  part(g, boxGeo(), whiteMat(), 0, y + wallH / 2, 0, 0.78, wallH, 0.52)
-  const colH = wallH * 0.9
-  part(g, cylGeo(), stoneMat(), -0.28, y + colH / 2, 0.3, 0.05, colH, 0.05)
-  part(g, cylGeo(), stoneMat(), 0.28, y + colH / 2, 0.3, 0.05, colH, 0.05)
-  y += wallH
-  part(g, domeGeo(), raceMat('roof', race), 0, y, 0, 0.64, 0.2, 0.64)
-  return g
-}
-
-export function buildForge(race, rng) {
-  const g = new THREE.Group()
-  const hutW = 0.6
-  part(g, boxGeo(), stoneMat(), 0, 0.2, 0, hutW, 0.4, 0.44)
-  part(g, boxGeo(), darkMat(), 0, 0.42, 0, hutW * 0.95, 0.06, 0.42)
-  const y = 0.45
-  const chimSide = rng() < 0.5 ? -1 : 1
-  part(g, cylGeo(), darkMat(), chimSide * 0.2, y + 0.2, -0.14, 0.09, 0.4, 0.09)
-  part(g, boxGeo(), emberMat(), chimSide * 0.2, 0.02, 0.16, 0.12, 0.06, 0.12)
-  part(g, boxGeo(), darkMat(), 0, 0.06, 0.28, 0.14, 0.05, 0.09)
-  return g
-}
-
-export function buildKit(type, race, tier, rng) {
-  let g
-  if (type === 'tower') g = buildTower(race)
-  else if (type === 'hall') g = buildHall(race)
-  else if (type === 'farm') g = buildFarm(race, rng)
-  else if (type === 'barracks') g = buildBarracks(race)
-  else if (type === 'observatory') g = buildObservatory(race)
-  else if (type === 'library') g = buildLibrary(race)
-  else g = buildForge(race, rng)
-
-  if (tier === 3) {
-    // Grand structures fly a race-colored banner from a corner pole.
-    const poleH = 0.85
-    part(g, cylGeo(), woodMat(), 0.38, poleH / 2, 0.38, 0.025, poleH, 0.025)
-    part(g, boxGeo(), raceMat('banner', race), 0.38, poleH * 0.68, 0.38, 0.03, 0.26, 0.16)
-  }
-  return g
-}
-
-// ---------------------------------------------------------------------------
-// Tiny people
-// ---------------------------------------------------------------------------
-
-function buildPersonGroup(race) {
-  const g = new THREE.Group()
-  const cloth = raceMat('cloth', race)
-  const skin = raceMat('skin', race)
-  const accent = raceMat('accent', race)
-
-  const body = new THREE.Mesh(capsuleGeo(), cloth)
-  body.scale.set(0.34, 0.31, 0.34)
-  body.position.set(0, 0.31, 0)
-  g.add(body)
-
-  const head = new THREE.Mesh(sphereGeo(), skin)
-  head.scale.setScalar(0.36)
-  head.position.set(0, 0.78, 0)
-  g.add(head)
-
-  const dot = new THREE.Mesh(sphereGeo(), accent)
-  dot.scale.setScalar(0.075)
-  dot.position.set(0, 0.42, 0.14)
-  g.add(dot)
-
-  let widthMul = 1
-  let heightMul = 1
-  if (race === 'dwarf') {
-    widthMul = 1.3
-    heightMul = 0.75
-  } else if (race === 'elf') {
-    heightMul = 1.15
-  } else if (race === 'orc') {
-    widthMul = 1.1
-  }
-  g.scale.set(widthMul, heightMul, widthMul)
-
-  return g
+function warnAssetsCreate(reason) {
+  if (warnedAssetsCreate) return
+  warnedAssetsCreate = true
+  console.warn('[planet] world.js: asset-pack structure visual failed at least once — falling back to procedural buildKit for the affected structure(s) (' + reason + ')')
 }
 
 // ---------------------------------------------------------------------------
 // createWorld
 // ---------------------------------------------------------------------------
 
-export function createWorld(planet, camera, domElement) {
+export function createWorld(planet, camera, domElement, renderer = null) {
   const group = new THREE.Group()
   const settlementsGroup = new THREE.Group()
   const structuresGroup = new THREE.Group()
@@ -770,25 +184,75 @@ export function createWorld(planet, camera, domElement) {
   let townLightCount = -1
   function rebuildTownLights() {
     townLightCount = structures.size
+    townLightsDirty = false
     if (townLights) {
       structuresGroup.remove(townLights)
       townLights.geometry.dispose()
     }
-    const positions = new Float32Array(structures.size * 3)
-    let i = 0
+    // Filtered set: while a time-lapse cutoff is active, only currently-
+    // visible structures twinkle — a plain array first since the visible
+    // count (unlike structures.size) isn't known ahead of time.
+    const coords = []
     for (const st of structures.values()) {
-      positions[i * 3] = st.structureRoot.position.x + st.dir.x * 0.004
-      positions[i * 3 + 1] = st.structureRoot.position.y + st.dir.y * 0.004
-      positions[i * 3 + 2] = st.structureRoot.position.z + st.dir.z * 0.004
-      i++
+      if (!st.timeVisible) continue
+      coords.push(st.structureRoot.position.x + st.dir.x * 0.004, st.structureRoot.position.y + st.dir.y * 0.004, st.structureRoot.position.z + st.dir.z * 0.004)
     }
     const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(coords), 3))
     townLights = new THREE.Points(geo, townLightsMat)
     townLights.renderOrder = 1
     structuresGroup.add(townLights)
   }
   group.add(settlementsGroup, structuresGroup, agentsGroup)
+
+  // ---------------------------------------------------------------------------
+  // M2 asset-pack bootstrap (see the pinned contract in the M2 JIT plan).
+  // renderer isn't available in world.js, so loadBuildingAssets is called
+  // with null; a dynamic import means a missing/half-written assets.js
+  // degrades to the procedural buildKit path instead of breaking the whole
+  // module at import time. Structures created before this resolves keep
+  // their procedural visuals forever — no retro-swap, per the spec.
+  // ---------------------------------------------------------------------------
+  let assetsApi = null
+  let assetsReady = false
+
+  ;(async function initAssets() {
+    let mod
+    try {
+      mod = await import('./assets.js')
+    } catch (e) {
+      warnAssetsLoad('import failed: ' + e)
+      return
+    }
+    try {
+      const api = await mod.loadBuildingAssets(renderer)
+      if (api && api.ready) {
+        assetsApi = api
+        assetsReady = true
+        group.add(api.group)
+      } else {
+        warnAssetsLoad('loadBuildingAssets reported not-ready (missing WebGL features or a load failure)')
+      }
+    } catch (e) {
+      warnAssetsLoad('loadBuildingAssets rejected: ' + e)
+    }
+  })()
+
+  // Composes a structure anchor's current position/quaternion/visualScale
+  // into a Matrix4 and pushes it to the asset pack. Anchor position/
+  // quaternion never change after creation (structures are static), so this
+  // only needs to run at creation and whenever visualScale itself changes
+  // (construction growth, tier change) — never per-frame for settled
+  // structures. assets.js's contract asks for the FULL WORLD matrix; every
+  // ancestor from structureRoot up to the scene (structuresGroup, this
+  // world's own `group`) is identity-transformed, so structureRoot's local
+  // position/quaternion/scale composition already equals its world matrix —
+  // confirmed against assets.js's actual setVisualMatrix contract comment.
+  function pushVisualMatrix(structure) {
+    if (!assetsApi || structure.visualHandle == null) return
+    _visMat.compose(structure.structureRoot.position, structure.structureRoot.quaternion, _visScale.setScalar(structure.visualScale))
+    assetsApi.setVisualMatrix(structure.visualHandle, _visMat)
+  }
 
   // Hammer sparks: one shared additive-particle pool for every agent's
   // hammering animation, round-robin allocated so a burst never allocates.
@@ -872,6 +336,99 @@ export function createWorld(planet, camera, domElement) {
     sparkGeo.attributes.color.needsUpdate = true
   }
 
+  // Steam/smoke plumes: shared particle pool, pattern-copied from the spark
+  // pool above but with a real per-vertex ALPHA channel (color itemSize 4 —
+  // three.js auto-enables USE_COLOR_ALPHA for exactly this shape; see
+  // WebGLRenderer's vertexAlphas check) instead of fading color-to-black,
+  // since color-to-black only reads as "fade out" under additive blending.
+  // Blending stays the THREE default (normal) — "additive OFF" is
+  // deliberate here: vapor, not glow.
+  const plumePositions = new Float32Array(PLUME_POOL_SIZE * 3)
+  const plumeColors = new Float32Array(PLUME_POOL_SIZE * 4) // RGBA — itemSize 4 is what enables true per-vertex alpha
+  const plumeVelocity = new Float32Array(PLUME_POOL_SIZE * 3)
+  const plumeAge = new Float32Array(PLUME_POOL_SIZE)
+  const plumeTtl = new Float32Array(PLUME_POOL_SIZE) // 0 = free/dead slot
+  let plumeCursor = 0
+  const plumeGeo = new THREE.BufferGeometry()
+  plumeGeo.setAttribute('position', new THREE.BufferAttribute(plumePositions, 3))
+  plumeGeo.setAttribute('color', new THREE.BufferAttribute(plumeColors, 4))
+  const plumePointsMat = new THREE.PointsMaterial({
+    size: PLUME_SIZE,
+    sizeAttenuation: false,
+    vertexColors: true,
+    transparent: true,
+    opacity: 1,
+    blending: THREE.NormalBlending,
+    depthWrite: false,
+  })
+  const plumePoints = new THREE.Points(plumeGeo, plumePointsMat)
+  plumePoints.renderOrder = 1
+  plumePoints.frustumCulled = false // pool slots can sit anywhere on the planet
+  structuresGroup.add(plumePoints)
+
+  function spawnPlumePuff(st) {
+    const slot = plumeCursor
+    plumeCursor = (plumeCursor + 1) % PLUME_POOL_SIZE
+    const i3 = slot * 3
+    const i4 = slot * 4
+    plumePositions[i3] = st.structureRoot.position.x + st.dir.x * PLUME_EMIT_OFFSET
+    plumePositions[i3 + 1] = st.structureRoot.position.y + st.dir.y * PLUME_EMIT_OFFSET
+    plumePositions[i3 + 2] = st.structureRoot.position.z + st.dir.z * PLUME_EMIT_OFFSET
+    tangentBasis(st.dir, _tb1, _tb2)
+    const a = Math.random() * Math.PI * 2
+    plumeVelocity[i3] = (_tb1.x * Math.cos(a) + _tb2.x * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.x * PLUME_RISE_SPEED
+    plumeVelocity[i3 + 1] = (_tb1.y * Math.cos(a) + _tb2.y * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.y * PLUME_RISE_SPEED
+    plumeVelocity[i3 + 2] = (_tb1.z * Math.cos(a) + _tb2.z * Math.sin(a)) * PLUME_DRIFT_SPEED + st.dir.z * PLUME_RISE_SPEED
+    plumeAge[slot] = 0
+    plumeTtl[slot] = PLUME_TTL * (0.85 + Math.random() * 0.3)
+    const g = 0.82 + Math.random() * 0.12
+    plumeColors[i4] = g
+    plumeColors[i4 + 1] = g
+    plumeColors[i4 + 2] = Math.min(1, g + 0.03)
+    plumeColors[i4 + 3] = 0 // starts transparent; updatePlumes fades it in over PLUME_FADE_IN
+  }
+
+  function updatePlumes(dt) {
+    for (let slot = 0; slot < PLUME_POOL_SIZE; slot++) {
+      const t = plumeTtl[slot]
+      if (t <= 0) continue
+      const a = plumeAge[slot] + dt
+      const i3 = slot * 3
+      const i4 = slot * 4
+      if (a >= t) {
+        plumeTtl[slot] = 0
+        plumeColors[i4 + 3] = 0
+        continue
+      }
+      plumeAge[slot] = a
+      plumePositions[i3] += plumeVelocity[i3] * dt
+      plumePositions[i3 + 1] += plumeVelocity[i3 + 1] * dt
+      plumePositions[i3 + 2] += plumeVelocity[i3 + 2] * dt
+      const fadeIn = a < PLUME_FADE_IN ? a / PLUME_FADE_IN : 1
+      plumeColors[i4 + 3] = PLUME_PEAK_ALPHA * fadeIn * (1 - a / t)
+    }
+    plumeGeo.attributes.position.needsUpdate = true
+    plumeGeo.attributes.color.needsUpdate = true
+  }
+
+  // Per-structure emission timer: only structures whose session is
+  // currently WORKING (same threshold an agent uses for its own hammer/work
+  // phase) breathe smoke. New spawns are suppressed while a time-lapse
+  // cutoff is active (nowMs vs. lastActive would be comparing live "now" to
+  // a scrubbed-to timestamp, which is meaningless) — in-flight puffs are
+  // left to fade out naturally rather than snapping off.
+  function updateStructurePlumes(dt, nowMs) {
+    if (timeCutoff != null) return
+    for (const st of structures.values()) {
+      if (nowMs - st.lastActive >= WORKING_MAX_MS) continue
+      st.plumeTimer -= dt
+      if (st.plumeTimer <= 0) {
+        st.plumeTimer = PLUME_EMIT_INTERVAL * (0.85 + Math.random() * 0.3)
+        spawnPlumePuff(st)
+      }
+    }
+  }
+
   const stats = { settlements: 0, structures: 0, agents: 0 }
 
   const settlements = new Map() // project -> settlement record
@@ -887,6 +444,20 @@ export function createWorld(planet, camera, domElement) {
   let simTime = 0
   let pollTimer = 0
   let labelThrottle = 0
+  let townLightsDirty = true // set whenever any structure's timeVisible flips — forces rebuildTownLights beyond just the size-changed check
+
+  // --- time-lapse filter state (setTimeFilter/getTimeRange) -----------------
+  // timeCutoff: null = live (nothing filtered). timeSorted: all structures
+  // ascending by lastActive, rebuilt lazily (see ensureTimeSorted) only when
+  // ingest() has actually touched the data — cheap to leave stale between
+  // polls since setTimeFilter is the ~30x/s hot path and never re-sorts
+  // itself. timeVisibleUpTo: boundary index into timeSorted — [0,
+  // timeVisibleUpTo) are the currently-visible structures — so a scrub that
+  // doesn't cross any structure's timestamp touches nothing at all.
+  let timeCutoff = null
+  let timeSorted = []
+  let timeSortedDirty = true
+  let timeVisibleUpTo = 0
 
   const raycaster = new THREE.Raycaster()
   const ndc = new THREE.Vector2()
@@ -928,7 +499,7 @@ export function createWorld(planet, camera, domElement) {
     hitMesh.scale.setScalar(0.08) // sphereGeo radius 0.5 -> world radius 0.04
     settlementsGroup.add(hitMesh)
 
-    const settlement = { project, anchorDir, groundR, race, name, basenameRaw, labelSprite, hitMesh, structureDirs: [] }
+    const settlement = { project, anchorDir, groundR, race, name, basenameRaw, labelSprite, hitMesh, structureDirs: [], visibleStructureCount: 0 }
     hitMesh.userData.settlement = settlement
     hitSpheres.push(hitMesh)
     return settlement
@@ -936,7 +507,7 @@ export function createWorld(planet, camera, domElement) {
 
   // --- structure --------------------------------------------------------------
 
-  function createStructureRecord(id, settlement, topic, bytes, lastActive, animate) {
+  function createStructureRecord(id, settlement, topic, bytes, lastActive, animate, model) {
     const rng = rngFromString(id)
     const dir = findStructureSpot(planet, settlement.anchorDir, rng, settlement.structureDirs)
     const groundR = planet.sampleHeight(dir)
@@ -951,9 +522,37 @@ export function createWorld(planet, camera, domElement) {
     orientOnSurface(structureRoot, dir, _yawScratch)
     structureRoot.position.copy(dir).multiplyScalar(groundR - 0.0005 * finalScale)
 
-    const kitGroup = buildKit(type, settlement.race, tier, rng)
-    kitGroup.scale.setScalar(animate ? finalScale * 0.05 : finalScale)
-    structureRoot.add(kitGroup)
+    const initialVisualScale = animate ? finalScale * 0.05 : finalScale
+
+    // Asset-pack visual (M2): once assets.js has resolved, new structures
+    // are built from its merged/batched geometry instead of the procedural
+    // buildKit primitives. structureRoot remains the anchor either way —
+    // its position/quaternion are unchanged from before this task, and
+    // topicSprite/scaffold/hitMesh/city-lights all still key off it exactly
+    // as today. Falls back to buildKit per-structure (not just globally) so
+    // one bad (type,tier,race) combo can never take the whole world down.
+    // seedStr folds in the model-tier hint (M2 task 4) so asset selection
+    // can vary by model later without another world.js change.
+    let kitGroup = null
+    let visualHandle = null
+    let boundingRadius = null
+    if (assetsReady) {
+      try {
+        const seedStr = id + ':' + (model || '')
+        const res = assetsApi.createStructureVisual(type, tier, settlement.race, seedStr)
+        if (!res || res.handle == null) throw new Error('no handle returned')
+        visualHandle = res.handle
+        if (Number.isFinite(res.boundingRadius) && res.boundingRadius > 0) boundingRadius = res.boundingRadius
+      } catch (e) {
+        warnAssetsCreate(String(e))
+        visualHandle = null
+      }
+    }
+    if (visualHandle == null) {
+      kitGroup = buildKit(type, settlement.race, tier, rng)
+      kitGroup.scale.setScalar(initialVisualScale)
+      structureRoot.add(kitGroup)
+    }
 
     const topicSprite = makeTopicSprite(truncateText(topic, 44))
     topicSprite.visible = false
@@ -987,25 +586,34 @@ export function createWorld(planet, camera, domElement) {
       bytes,
       topic,
       lastActive,
+      model: model || null,
       settlement,
       finalScale,
       structureRoot,
       kitGroup,
+      visualHandle,
+      visualScale: initialVisualScale,
+      boundingRadius,
       scaffold,
       topicSprite,
       hitMesh,
       constructing: !!animate,
       constructionT: 0,
+      timeVisible: false, // sentinel — setStructureVisible() below establishes the real initial state
+      plumeTimer: Math.random() * PLUME_EMIT_INTERVAL,
     }
     hitMesh.userData.structure = structure
     structureHitSpheres.push(hitMesh)
     settlement.structureDirs.push(dir)
     if (animate) constructingSet.add(structure)
+    if (visualHandle != null) pushVisualMatrix(structure)
+    setStructureVisible(structure, timeCutoff == null || lastActive <= timeCutoff)
     return structure
   }
 
-  function updateStructureData(structure, topic, bytes, lastActive) {
+  function updateStructureData(structure, topic, bytes, lastActive, model) {
     structure.lastActive = lastActive
+    structure.model = model || null
     if (topic !== structure.topic) {
       structure.topic = topic
       refreshTopicSprite(structure.topicSprite, truncateText(topic, 44))
@@ -1016,10 +624,106 @@ export function createWorld(planet, camera, domElement) {
       if (tier !== structure.tier) {
         structure.tier = tier
         structure.finalScale = KIT_UNIT_SIZE[structure.type] * TIER_MULT[tier - 1]
-        if (!structure.constructing) structure.kitGroup.scale.setScalar(structure.finalScale)
+        if (!structure.constructing) {
+          if (structure.kitGroup) {
+            structure.kitGroup.scale.setScalar(structure.finalScale)
+          } else if (structure.visualHandle != null) {
+            structure.visualScale = structure.finalScale
+            pushVisualMatrix(structure)
+          }
+        }
         structure.topicSprite.position.set(0, structure.finalScale * 1.3, 0)
       }
     }
+  }
+
+  // --- time-lapse filter (setTimeFilter/getTimeRange) ------------------------
+  //
+  // Single choke point for structure visibility: toggles the anchor itself
+  // (cascades to topicSprite/scaffold/kitGroup, all its children — three.js
+  // never renders into an invisible object's subtree) AND the asset-pack
+  // visual (a separate object living in assets.js's own group, outside
+  // structureRoot's subtree, so it needs its own explicit call), keeps each
+  // settlement's visible-structure count in sync for the "hide empty
+  // settlement labels" rule, and marks city lights dirty. Click-through is
+  // guarded separately in onPointerUp — three.js's Raycaster ignores
+  // Object3D.visible entirely, so hiding the anchor alone would NOT stop a
+  // hidden structure's hitMesh from still being clickable.
+  function setStructureVisible(st, visible) {
+    if (st.timeVisible === visible) return
+    st.timeVisible = visible
+    st.structureRoot.visible = visible
+    if (st.visualHandle != null && assetsApi) assetsApi.setVisualVisible(st.visualHandle, visible)
+    st.settlement.visibleStructureCount += visible ? 1 : -1
+    st.settlement.labelSprite.visible = st.settlement.visibleStructureCount > 0
+    townLightsDirty = true
+  }
+
+  // Binary search: count of timeSorted entries with lastActive <= cutoff
+  // (null cutoff = everything, i.e. live mode).
+  function computeTimeBoundary(cutoff) {
+    if (cutoff == null) return timeSorted.length
+    let lo = 0
+    let hi = timeSorted.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (timeSorted[mid].lastActive <= cutoff) lo = mid + 1
+      else hi = mid
+    }
+    return lo
+  }
+
+  // Full O(n) correctness pass — only runs right after timeSorted was just
+  // rebuilt (i.e. at most once per ingest(), never mid-scrub): a structure's
+  // lastActive can only increase over real time, so a live/active structure
+  // that was visible under a fixed historical cutoff can drift to hidden
+  // between rebuilds; this reconciles any such drift before resuming the
+  // fast incremental path below. setStructureVisible's own early-return
+  // makes the common no-op case (nothing actually changed) cheap.
+  function reconcileTimeVisibility() {
+    for (let i = 0; i < timeSorted.length; i++) {
+      const st = timeSorted[i]
+      setStructureVisible(st, timeCutoff == null || st.lastActive <= timeCutoff)
+    }
+    timeVisibleUpTo = computeTimeBoundary(timeCutoff)
+  }
+
+  function ensureTimeSorted() {
+    if (!timeSortedDirty) return
+    timeSorted = Array.from(structures.values()).sort((a, b) => a.lastActive - b.lastActive)
+    timeSortedDirty = false
+    reconcileTimeVisibility()
+  }
+
+  // setTimeFilter(cutoffMs|null): the ~30x/s scrubber hot path. When
+  // timeSorted is already fresh (the common case — no ingest happened since
+  // the last call) this does zero allocation and zero sorting: a binary
+  // search for the new boundary, then only touches the structures whose
+  // visibility actually flips between the old and new boundary.
+  function setTimeFilter(cutoffMsRaw) {
+    const cutoff = typeof cutoffMsRaw === 'number' && Number.isFinite(cutoffMsRaw) ? cutoffMsRaw : null
+    ensureTimeSorted()
+
+    const wasFiltering = timeCutoff !== null
+    timeCutoff = cutoff
+    const isFiltering = cutoff !== null
+    if (isFiltering !== wasFiltering) agentsGroup.visible = !isFiltering // agents/minions/bubbles/sparks all live under agentsGroup
+
+    const newBoundary = computeTimeBoundary(cutoff)
+    if (newBoundary !== timeVisibleUpTo) {
+      if (newBoundary > timeVisibleUpTo) {
+        for (let i = timeVisibleUpTo; i < newBoundary; i++) setStructureVisible(timeSorted[i], true)
+      } else {
+        for (let i = newBoundary; i < timeVisibleUpTo; i++) setStructureVisible(timeSorted[i], false)
+      }
+      timeVisibleUpTo = newBoundary
+    }
+  }
+
+  function getTimeRange() {
+    ensureTimeSorted()
+    if (timeSorted.length === 0) return { min: 0, max: 0 }
+    return { min: timeSorted[0].lastActive, max: timeSorted[timeSorted.length - 1].lastActive }
   }
 
   // --- agent ------------------------------------------------------------------
@@ -1243,6 +947,11 @@ export function createWorld(planet, camera, domElement) {
         const bytes = Number.isFinite(s.bytes) ? s.bytes : 0
         const lastAction = typeof s.lastAction === 'string' && s.lastAction ? s.lastAction : null
         const subagents = Number.isFinite(s.subagents) ? clamp(Math.floor(s.subagents), 0, 20) : 0
+        // Defensive: the scanner is adding `model` (tier string | null) —
+        // read it loosely so both an old and a new server payload shape
+        // work. See createStructureRecord/updateStructureData for the one
+        // place this currently feeds into (the asset-visual seedStr).
+        const model = typeof s.model === 'string' && s.model ? s.model : null
 
         let settlement = settlements.get(project)
         if (!settlement) {
@@ -1255,10 +964,10 @@ export function createWorld(planet, camera, domElement) {
           const isNew = !knownIds.has(id)
           knownIds.add(id)
           const animate = isNew && now - lastActive < CONSTRUCTION_NEW_MAX_MS
-          structure = createStructureRecord(id, settlement, topic, bytes, lastActive, animate)
+          structure = createStructureRecord(id, settlement, topic, bytes, lastActive, animate, model)
           structures.set(id, structure)
         } else {
-          updateStructureData(structure, topic, bytes, lastActive)
+          updateStructureData(structure, topic, bytes, lastActive, model)
         }
 
         if (now - lastActive < AGENT_MAX_MS) {
@@ -1289,6 +998,7 @@ export function createWorld(planet, camera, domElement) {
         warnIngestSkip('exception: ' + e)
       }
     }
+    timeSortedDirty = true
   }
 
   async function poll() {
@@ -1305,7 +1015,17 @@ export function createWorld(planet, camera, domElement) {
       warnPoll('fetch/parse failed: ' + e)
     }
   }
-  poll()
+  // Hold the first ingest briefly for the asset pack (capped at 3s so a
+  // broken pack can never block the world) — otherwise the instant first
+  // poll beats the async GLB loads and nearly every structure is born on
+  // the procedural fallback path ("no retro-swap" design).
+  ;(async () => {
+    const start = performance.now()
+    while (!assetsReady && performance.now() - start < 3000) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    poll()
+  })()
 
   // --- click-to-visit -----------------------------------------------------------
 
@@ -1332,7 +1052,18 @@ export function createWorld(planet, camera, domElement) {
     // Structures are tested first: a hit opens the inspector and never
     // triggers the settlement fly-to underneath it.
     const structHits = raycaster.intersectObjects(structureHitSpheres, false)
-    const structure = structHits.length ? structHits[0].object.userData.structure : null
+    let structure = null
+    for (let i = 0; i < structHits.length; i++) {
+      // three.js's Raycaster ignores Object3D.visible entirely (core
+      // behavior, not specific to this codebase), so a hitMesh for a
+      // time-lapse-hidden structure is still geometrically hittable —
+      // timeVisible is the actual gate here.
+      const s = structHits[i].object.userData.structure
+      if (s && s.timeVisible) {
+        structure = s
+        break
+      }
+    }
     if (structure) {
       const st = structure.settlement
       const payload = {
@@ -1383,6 +1114,8 @@ export function createWorld(planet, camera, domElement) {
 
   function update(dt) {
     simTime += dt
+    const nowMs = Date.now()
+    if (assetsApi) assetsApi.update(dt)
     pollTimer += dt
     if (pollTimer >= POLL_INTERVAL) {
       pollTimer = 0
@@ -1400,7 +1133,13 @@ export function createWorld(planet, camera, domElement) {
       st.constructionT += dt / CONSTRUCTION_DURATION
       const t = Math.min(1, st.constructionT)
       const eased = smoothstep(0, 1, t)
-      st.kitGroup.scale.setScalar(lerp(st.finalScale * 0.05, st.finalScale, eased))
+      const scale = lerp(st.finalScale * 0.05, st.finalScale, eased)
+      if (st.kitGroup) {
+        st.kitGroup.scale.setScalar(scale)
+      } else if (st.visualHandle != null) {
+        st.visualScale = scale
+        pushVisualMatrix(st)
+      }
       if (t >= 1) {
         st.constructing = false
         if (st.scaffold) {
@@ -1429,7 +1168,6 @@ export function createWorld(planet, camera, domElement) {
       }
     }
 
-    const nowMs = Date.now()
     for (const [id, agent] of agents) {
       const remove = updateAgent(agent, dt, nowMs)
       if (remove) {
@@ -1448,6 +1186,8 @@ export function createWorld(planet, camera, domElement) {
     }
 
     updateSparks(dt)
+    updateStructurePlumes(dt, nowMs)
+    updatePlumes(dt)
 
     if (tween.active) {
       tween.t += dt / TWEEN_DURATION
@@ -1460,7 +1200,7 @@ export function createWorld(planet, camera, domElement) {
     stats.structures = structures.size
     stats.agents = agents.size
 
-    if (structures.size !== townLightCount) rebuildTownLights()
+    if (structures.size !== townLightCount || townLightsDirty) rebuildTownLights()
   }
 
   // Read-only settlement summaries for UI (sidebar/legend).
@@ -1490,5 +1230,5 @@ export function createWorld(planet, camera, domElement) {
     return true
   }
 
-  return { group, update, stats, list, visit, _tween: tween, onStructureClick }
+  return { group, update, stats, list, visit, _tween: tween, onStructureClick, setTimeFilter, getTimeRange }
 }
