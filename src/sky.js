@@ -113,6 +113,14 @@ export function createSky(seed) {
   // eternal night).
   const SUN_ORBIT_RATE = (Math.PI * 2) / 900
 
+  // Fast-time control: the sun's per-frame advance is multiplied by this
+  // (default 1 = the ~15-min day above). setSunSpeed(60) makes a full day
+  // take ~15s so the terminator sweeps visibly and the night side (city
+  // lights/aurora) lights up. Purely a time-of-day scrub — no material or
+  // default-behavior change; every downstream visual already reads from the
+  // sun's live position each frame, so speeding that up is all it takes.
+  let sunSpeed = 1
+
   // Per-frame scratch vectors (reused every call — no per-frame allocation).
   const _sunDirScratch = new THREE.Vector3()
   const _moonDirScratch = new THREE.Vector3()
@@ -125,7 +133,7 @@ export function createSky(seed) {
     clouds.upperMesh.rotateOnWorldAxis(clouds.upperAxis, clouds.upperRate * dt)
     for (const moon of moons) moon.pivot.rotateY(moon.rate * dt)
 
-    const sunAngle = SUN_ORBIT_RATE * dt
+    const sunAngle = SUN_ORBIT_RATE * dt * sunSpeed
     lights.sun.position.applyAxisAngle(Y_AXIS, sunAngle)
     sunSprite.position.applyAxisAngle(Y_AXIS, sunAngle)
     lights.moonFill.position.copy(lights.sun.position).multiplyScalar(-1)
@@ -280,6 +288,18 @@ export function createSky(seed) {
     return clouds.lowerMesh.visible
   }
 
+  // Fast-sun time control (owner request): scale the sun's per-frame orbital
+  // advance. 1 = default (~15-min day); 60 => ~15s day. Coerced to a finite,
+  // non-negative number so a stray UI value can't NaN-poison the sun's
+  // position (which many other modules read). 0 freezes the sun.
+  function setSunSpeed(multiplier) {
+    const m = Number(multiplier)
+    sunSpeed = Number.isFinite(m) && m >= 0 ? m : 1
+  }
+  function getSunSpeed() {
+    return sunSpeed
+  }
+
   return {
     group,
     update,
@@ -288,6 +308,8 @@ export function createSky(seed) {
     sampleCloudCover,
     setCloudsVisible,
     getCloudsVisible,
+    setSunSpeed,
+    getSunSpeed,
     skyboxBakeMs: skybox.bakeMs,
   }
 }
