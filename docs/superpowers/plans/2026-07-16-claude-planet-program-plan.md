@@ -62,6 +62,10 @@ material port on the WebGL bridge → WebGPURenderer flip → visual flagships.
   `Math.random`/`Date.now` in world-state code).
 - **Dependency pinning:** three.js pinned EXACT (0.185.1); version bumps are
   deliberate, one per milestone gate at most.
+- **Gallery rule (user, 2026-07-17):** every verdict packet, milestone
+  screenshot, and GIF is copied into `gallery/YYYY-MM-DD/` (with a line in
+  gallery/GALLERY.md) before its PR merges — screenshots are born in temp
+  dirs that macOS deletes; the gallery is the project's memory book.
 - **Budget honesty:** estimates below are sonnet builder-runs (observed
   median ~130k tokens, hard runs 190–290k). Architect integration time
   historically ≈ builder time — budgets are ranges, not promises; WIP cap =
