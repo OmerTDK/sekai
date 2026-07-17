@@ -19,6 +19,13 @@ import { createSeaIce } from './seaice.js'
 import { createSeaLife } from './sealife.js'
 import { createTrails } from './trails.js'
 import { createWeather } from './weather.js'
+import { createOcean } from './ocean.js'
+import { createVolcanoes } from './volcano.js'
+import { createWildlife } from './wildlife.js'
+import { createCaravans } from './caravans.js'
+import { createMeteors } from './meteor.js'
+import { createCivSim } from './civsim.js'
+import { createCivRender } from './civrender.js'
 import { createUI } from './ui.js'
 import { clamp, fantasyName } from './util.js'
 
@@ -94,6 +101,45 @@ scene.add(seaLife.group)
 
 const trails = createTrails(planet, world, SEED)
 scene.add(trails.group)
+
+// --- World-sim wave --------------------------------------------------------
+// Animated ocean replaces planet.js's static ocean: hide the old one (found by
+// its unique aDepth attribute) and add the moving-water sphere on top.
+planet.group.traverse((o) => {
+  if (o.isMesh && o.geometry && o.geometry.attributes && o.geometry.attributes.aDepth) o.visible = false
+})
+const ocean = createOcean(planet, camera, SEED)
+scene.add(ocean.mesh)
+
+const volcanoes = createVolcanoes(planet, SEED)
+scene.add(volcanoes.group)
+
+const wildlife = createWildlife(planet, SEED)
+scene.add(wildlife.group)
+
+const caravans = createCaravans(planet, world, SEED)
+scene.add(caravans.group)
+
+const meteors = createMeteors(planet, SEED)
+scene.add(meteors.group)
+
+// NPC civilizations must not overlap session settlements (the covenant), whose
+// anchors world populates asynchronously — snapshot after the same settle delay
+// airships/caravans use, then build the seeded civ layer.
+let civRender = null
+setTimeout(() => {
+  const anchorsByProject = new Map()
+  world.group.traverse((o) => {
+    const s = o.userData && o.userData.settlement
+    if (s && s.anchorDir) anchorsByProject.set(s.project, s.anchorDir)
+  })
+  const civSim = createCivSim(planet, SEED, Array.from(anchorsByProject.values()))
+  civRender = createCivRender(planet, civSim, SEED)
+  scene.add(civRender.group)
+  window.__planet.civSim = civSim
+  window.__planet.civRender = civRender
+}, 6500)
+
 // Git charm: commits become fireworks, merged PRs become monuments.
 async function pollEvents() {
   try {
@@ -157,6 +203,11 @@ window.__planet = {
   weather,
   seaLife,
   trails,
+  ocean,
+  volcanoes,
+  wildlife,
+  caravans,
+  meteors,
   cameraFeel,
   ui,
   renderer,
@@ -212,6 +263,12 @@ renderer.setAnimationLoop(() => {
   weather.update(dt, camera)
   seaLife.update(dt, camera)
   trails.update(dt)
+  ocean.update(dt)
+  volcanoes.update(dt)
+  wildlife.update(dt, camera)
+  caravans.update(dt)
+  meteors.update(dt)
+  if (civRender) civRender.update(dt, camera)
   ui.update(dt)
   cameraFeel.update(dt)
   controls.update()
