@@ -26,7 +26,15 @@ const FLOOD_RISE_MAX = 0.0035 // peak waterline rise above SEA_LEVEL
 const FLOOD_RADIUS = SEA_LEVEL + FLOOD_RISE_MAX
 const FLOOD_GROW_TIME = 10 // seconds to ease in once landfall starts
 const FLOOD_DRAIN_TIME = 30 // seconds to ease out once the storm leaves land
-const FLOOD_SHORE_SOFT = 0.0008 // shoreline fade band width, same units as terrain height
+const FLOOD_SHORE_SOFT = 0.0008 // upper shoreline fade band width, same units as terrain height
+// Lower bound of the flood band: seaward of FLOOD_DEPTH_BAND below SEA_LEVEL
+// the sheet fades to nothing, so it only shows on shallowly-submerged COASTAL
+// land -- a temporary waterline rise -- and never washes the open sea. Ocean-
+// floor terrainH sits ~0.02 below SEA_LEVEL, well past this band, so deep
+// water reads clear. (Without this, shoreFade alone is 1 over the whole ocean
+// floor, painting an opaque slab across the open sea -- the reported bug.)
+const FLOOD_DEPTH_BAND = 0.004 // how far below SEA_LEVEL the flood sheet still shows
+const FLOOD_PEAK_ALPHA = 0.6 // peak sheet opacity inside the band (subtle landfall touch)
 const FLOOD_COLOR = 0x3d6a5e // planet.js shallow #2f8fa8 family, shifted darker/greener + desaturated
 
 const RING_ANGULAR_RADIUS = 0.2 // rad -- larger than the flood sheet, "wet shores" extend past the water
@@ -75,18 +83,32 @@ FLOOD_PATCH.geo.setAttribute('terrainH', new THREE.BufferAttribute(terrainHArray
 // needed. uv() likewise reads the geometry's default uv attribute in place
 // of the old `varying vec2 vFUv/vRUv`.
 function makeFloodMaterial() {
-  const material = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false })
+  // depthTest TRUE (explicit -- the original ShaderMaterial relied on the
+  // default): the sheet is depth-tested against the opaque terrain/ocean, so a
+  // coastal mountain in front of it occludes it instead of the sheet drawing
+  // through. depthWrite FALSE: a transparent overlay must not write depth.
+  const material = new THREE.MeshBasicNodeMaterial({
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+  })
   material.uFloodLevel = uniform(SEA_LEVEL)
   material.uOpacity = uniform(0)
   const terrainH = attribute('terrainH', 'float')
 
+  // Upper fade: nothing above the risen waterline -- dry land stays dry.
   const wet = material.uFloodLevel.sub(terrainH)
   const shoreFade = smoothstepNode(0, FLOOD_SHORE_SOFT, wet)
+  // Lower fade: nothing over deep/open water. The sheet only shows where land
+  // is shallowly submerged -- terrainH within FLOOD_DEPTH_BAND below SEA_LEVEL
+  // up to the waterline -- so the flood hugs the coast rather than washing the
+  // whole sea. This is the band restriction that kills the open-sea slab.
+  const deepFade = smoothstepNode(SEA_LEVEL - FLOOD_DEPTH_BAND, SEA_LEVEL, terrainH)
   const c = uv().sub(0.5)
   const edgeFade = smoothstepNode(0.72, 1.0, length(c).mul(2)).oneMinus()
 
   material.colorNode = color(FLOOD_COLOR)
-  material.opacityNode = shoreFade.mul(edgeFade).mul(material.uOpacity).mul(0.78)
+  material.opacityNode = shoreFade.mul(deepFade).mul(edgeFade).mul(material.uOpacity).mul(FLOOD_PEAK_ALPHA)
   // material.colorNode is vec3 -> promoted to vec4 with alpha 1, so final
   // alpha is exactly opacityNode; alphaTest reproduces `if (alpha < 0.004)
   // discard;` (discards on <=, a no-op difference for a continuous alpha).
@@ -95,7 +117,14 @@ function makeFloodMaterial() {
 }
 
 function makeRingMaterial() {
-  const material = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false })
+  // Same depth contract as the flood sheet: depth-test against the terrain
+  // (so higher dry land occludes the wet-ground ring, as the comment on
+  // RING_RADIUS notes) but never write depth.
+  const material = new THREE.MeshBasicNodeMaterial({
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+  })
   material.uOpacity = uniform(0)
 
   const c = uv().sub(0.5)
