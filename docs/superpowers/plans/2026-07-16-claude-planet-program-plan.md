@@ -19,7 +19,8 @@ no unshippable gaps.
 `~/.claude/projects` transcripts (no database — the transcripts are the
 persistence); deterministic world from (seed, project, session-id) hashes.
 Engine path: minimal Electron shell → beauty + dragons/airships → TSL
-material port on the WebGL bridge → WebGPURenderer flip → visual flagships.
+material port on the WebGPURenderer(forceWebGL) host → WebGPU-backend flip →
+visual flagships.
 **Program-complete line: end of M5c.** Everything after is an opt-in epilogue.
 
 ---
@@ -184,6 +185,25 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
 - The fast-joy detour (b) is rejected; do not build WebGL2 throwaway
   versions of scattering/ocean.
 
+- **MECHANISM CORRECTED 2026-07-17 (context7-verified, after M-WX):** the
+  original notes assumed `WebGLRenderer.setNodesHandler(WebGLNodesHandler)`
+  as the incremental host. **That bridge is a dead end for us** — its
+  documented limitations forbid SHARED INSTANCED-MESH GEOMETRY and the
+  `compile()` path, but the whole app is BatchedMesh (250 buildings / 2–4
+  draw calls) + InstancedMesh with per-instance custom attributes (flora
+  sway, birds flap, trails, contact-blobs). The real clean path is
+  **`WebGPURenderer({ forceWebGL: true })`** (from `three/webgpu`) as the
+  incremental host: it runs TSL NodeMaterials on a WebGL2 backend today, and
+  the M4 "flip" becomes deleting `forceWebGL`. Consequences that move work
+  earlier than the old M3/M4 split implied: (1) `WebGPURenderer` does NOT run
+  `EffectComposer`/`UnrealBloomPass`, so the post-stack rebuild (node
+  `PostProcessing` + TSL `bloom()`) happens AT renderer-swap time, not as a
+  separable later step; (2) `WebGPURenderer` ignores `onBeforeCompile`, so
+  every one of the ~31 `onBeforeCompile` + ~5 `ShaderMaterial` sites across 9
+  files (planet 11, seaice 5, flora 5, birds 4, sky 2+2, trails 2, storms 1,
+  weather 1+1, flood 0+2) must become a NodeMaterial before the swap can go
+  live. S1 (below) is the GO/NO-GO gate on this whole path.
+
 ### M-LD — Look Development (added 2026-07-17, Omer's call: the aesthetic
 ### layer was complaint-driven, never designed; fix that before the engine work)
 - **Why:** every user frustration to date was in the vibed visual layer
@@ -251,34 +271,55 @@ M2 entry); index.html inline styles (extract at M2 entry); silent fallbacks
 - **Est:** 4 builder-runs. Runs parallel-safe with M2 integration
   (spikes/ + docs/ only).
 
-### M3 — TSL port (kill the shader hacks) [gate S1]
-- **S1 spike (retargeted):** port the TREE-SWAY material first — it is the
-  live InstancedMesh + custom-attribute case (18k instances), not the
-  dormant grass. GO criteria: pixel parity, fps within 10%, coexists with
-  legacy materials, AND a forced `material.needsUpdate` mid-session does not
-  produce a visible hitch (the bridge rebuilds instanced geometry buffers on
-  recompile — measure the frame-time spike).
-- **Port list (one PR each):** tree-sway → terrain splat → ocean swell →
-  cloud/storm materials → **atmosphere rim (raw ShaderMaterial — the site
-  the old exit-grep missed)** → aurora (ShaderMaterial) → grass-wind
-  (dormant, port or delete).
+### M3 — TSL material port on the forceWebGL host [gate S1]
+- **Host correction (see CHOICE-1, 2026-07-17):** the incremental host is
+  `WebGPURenderer({ forceWebGL: true })`, NOT the WebGLNodesHandler bridge.
+  Because that renderer ignores `onBeforeCompile` and cannot run
+  EffectComposer, M3 and the old M4 partially MERGE: the renderer swap +
+  node post-stack rebuild happen together, and the app can only go live on
+  the new renderer once ALL materials are NodeMaterials. Interim strategy is
+  therefore branch-local (spike page + progressively-ported modules verified
+  off-main) rather than shipping a half-ported main.
+- **S1 spike (retargeted to the forceWebGL host — RUNNING 2026-07-17):**
+  a standalone page renders a representative scene (customized sphere +
+  InstancedMesh-with-per-instance-attribute sway + BatchedMesh) under both
+  WebGLRenderer/onBeforeCompile (baseline) and WebGPURenderer(forceWebGL)/TSL
+  NodeMaterials. GO criteria: candidate fps within 10% of baseline; **per-
+  instance attributes animate correctly on InstancedMesh** (the crux the
+  rejected bridge failed); **BatchedMesh renders under the node path** (or a
+  documented workaround); forced material rebuild mid-run has no unacceptable
+  hitch; forceWebGL→WebGPU flip boots (or is documented as env-limited).
+  Measure fps by timing back-to-back renders, NOT rAF (backgrounded-tab
+  suspension gotcha).
+- **Port list (grouped, one PR each — ~36 sites total):** representative
+  first (tree-sway/birds instanced sway) → terrain splat/normal/macro chain
+  (planet.js, 11 sites — the biggest) → ocean → cloud/storm/weather →
+  sea-ice → flood/trails → atmosphere rim + aurora (the ShaderMaterials) →
+  grass-wind (dormant, port or delete).
 - **Exit:** `grep -rE "onBeforeCompile|new THREE\.(Raw)?ShaderMaterial" src/`
-  → zero hits; visual parity via verify kit; fps within 10% of baseline.
-- **Fallback if S1 NO-GO:** documented A″ (stay WebGL2; flagships as
-  fragment-shader implementations; revisit bridge next three.js version).
-- **Est:** 1 spike + 6–7 builder-runs. 2 sessions.
+  → zero hits; app runs on `WebGPURenderer({forceWebGL:true})`; node post-
+  stack (bloom) rebuilt; visual parity via verify kit; fps within 10% of the
+  WebGLRenderer baseline.
+- **Fallback if S1 NO-GO:** documented A″ (stay on WebGLRenderer + onBefore-
+  Compile; build M5 flagships as WebGL2 fragment-shader implementations;
+  revisit the node path on a later three.js). E-SIM rung 1 becomes the more
+  attractive next arc in that world.
+- **Est:** 1 spike + ~8–10 builder-runs (grew with M-WX's added materials).
 
-### M4 — Renderer flip + post stack [gate S2]
-- **S2 spike:** WebGPURenderer boots the full TSL scene; fps parity check.
-- **Scope:** flip renderer; REBUILD postprocessing on the WebGPU node stack
-  (bloom via TSL `pass()`/`bloom()` — EffectComposer has no bridge); verify
-  the >1.0-color bloom-headroom trick against TSL bloom's threshold
-  semantics (sky sun/stars depend on it); AgX regrade; `?renderer=webgl`
-  escape hatch retained ONE milestone, scoped to MATERIALS ONLY (no dual
-  post-fx maintenance — WebGL mode runs without bloom).
-- **Exit:** WebGPU default; verify-kit sweep + bloom-parity screenshots;
-  fps ≥ baseline −10%; escape hatch renders (unbloomed) without errors.
-- **Est:** 1 spike + 4–5 builder-runs. 2 sessions.
+### M4 — WebGPU flip [gate S2]
+- **Now a thin milestone** (most of its old scope moved into M3 with the host
+  correction): with the app already on `WebGPURenderer({forceWebGL:true})`
+  and the node post-stack live, M4 is deleting `forceWebGL` and validating
+  the true WebGPU backend.
+- **S2 spike:** `WebGPURenderer()` (no forceWebGL) boots the full ported
+  scene on the WebGPU backend; fps parity vs the forceWebGL baseline.
+- **Scope:** drop `forceWebGL`; verify the >1.0-color bloom-headroom trick
+  against TSL `bloom()` threshold semantics (sky sun/stars depend on it);
+  AgX regrade; retain a `?renderer=webgl` (forceWebGL) escape hatch ONE
+  milestone for machines without WebGPU.
+- **Exit:** WebGPU backend default; verify-kit sweep + bloom-parity shots;
+  fps ≥ forceWebGL baseline −10%; escape hatch still renders.
+- **Est:** 1 spike + 2–3 builder-runs.
 
 ### M5a — Atmospheric scattering
 - **Exit:** before/after approved by Omer; sunset limb + aerial perspective
@@ -384,8 +425,8 @@ Epilogue: E1(erosion) ─→ E2(LOD, needs E1's sampler if E1 landed)
 
 | Spike | Question | GO criteria | When |
 |---|---|---|---|
-| S1 | TSL bridge on LIVE instanced custom-attr material (tree-sway)? | parity, fps −≤10%, coexists, no recompile hitch | M3 start |
-| S2 | WebGPURenderer full-scene parity? | fps ≥ baseline−10%, nothing missing | M4 start |
+| S1 | WebGPURenderer(forceWebGL) + TSL on instanced custom-attr + BatchedMesh? | parity, fps −≤10%, instanced attrs correct, BatchedMesh works, no rebuild hitch | M3 start |
+| S2 | true WebGPU backend (drop forceWebGL) full-scene parity? | fps ≥ forceWebGL baseline−10%, nothing missing | M4 flip |
 | S4 | BatchedMesh @ 20k GLTF instances? | ≥55fps, ≤~30 civ draw calls | M2 start |
 | S5 | RESOLVED 2026-07-17 (GO — mix): Kenney base for all standard buildings, Quaternius reserved for grand tier-3 landmarks. Constraints from the spike: drop/downsize Quaternius PBR textures (17MB → tint-or-512px, fix dark faces), chunkier gear mounts (gears illegible oblique), tame pipe glow, scoped env-map for metals, everything batched per S4. | — | done |
 | S6 | Cheap terrain close-up fixes beat LOD? | Omer's eye at street level | E2 start |
