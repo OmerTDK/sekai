@@ -29,6 +29,8 @@ import { createCivRender } from './civrender.js'
 import { createEarthquakes } from './earthquake.js'
 import { createHerald } from './herald.js'
 import { createRoads } from './roads.js'
+import { createAtmosphereScattering } from './atmosphere.js'
+import { createVolumetricClouds } from './clouds.js'
 import { createUI } from './ui.js'
 import { clamp, fantasyName } from './util.js'
 
@@ -174,8 +176,21 @@ setInterval(pollEvents, 60_000)
 // bloom's threshold. Tone mapping still applies via renderer.toneMapping.
 const post = new THREE.PostProcessing(renderer)
 const scenePass = pass(scene, camera)
-const bloomPass = bloom(scenePass, 0.3, 0.7, 1.0)
-post.outputNode = scenePass.add(bloomPass)
+const scenePassDepth = scenePass.getTextureNode('depth')
+// M5a atmospheric scattering, then M5c volumetric clouds, composited over the
+// scene before bloom: scene → scattering → clouds → bloom.
+const atmo = createAtmosphereScattering(SEED, camera)
+const atmoNode = atmo.node(scenePass, scenePassDepth)
+const clouds = createVolumetricClouds(scenePass, camera, {
+  getSunDir: (o) => sky.getSunDir(o),
+  storms,
+  planet,
+  sky,
+})
+sky.setCloudsVisible(false) // volumetric clouds replace the 2.5D shells
+const cloudComposite = clouds.compositeOver(atmoNode)
+const bloomPass = bloom(cloudComposite, 0.3, 0.7, 1.0)
+post.outputNode = cloudComposite.add(bloomPass)
 
 document.querySelector('#title .planet-name').textContent = fantasyName(SEED)
 const statsEl = document.getElementById('stats')
@@ -226,6 +241,8 @@ window.__planet = {
   earthquake: earthquakes,
   roads,
   herald,
+  atmosphere: atmo,
+  clouds,
   cameraFeel,
   ui,
   renderer,
@@ -273,6 +290,8 @@ renderer.setAnimationLoop(() => {
   wind.update(dt)
   storms.update(dt, sky.getSunDir(sunDirScratch))
   sky.setStormClearing(stormDirScratch, storms.getPrimary(stormDirScratch))
+  atmo.update(dt, sky.getSunDir(sunDirScratch))
+  clouds.update(dt, camera)
   floods.update(dt)
   events.update(dt)
   dragon.update(dt, sky.getSunDir(sunDirScratch))

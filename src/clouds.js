@@ -398,7 +398,7 @@ export function createVolumetricClouds(scenePass, camera, { getSunDir, storms, p
     sunDir: uniform(new THREE.Vector3(1, 0.45, 0.9).normalize()),
     sunColor: uniform(SUN_COLOR.clone()),
     ambientFill: uniform(AMBIENT_FILL.clone()),
-    extinction: uniform(60), // density→optical-depth scale (tuning handle)
+    extinction: uniform(28), // density→optical-depth scale (softer = wispier, avoids chunky limb)
     // animation
     drift: uniform(new THREE.Vector3()),
     frameJitter: uniform(0),
@@ -410,7 +410,7 @@ export function createVolumetricClouds(scenePass, camera, { getSunDir, storms, p
     stormSign: uniform(1),
     stormStrength: uniform(0),
     // fades + mode toggles
-    ambient: uniform(1), // 1 = full-sky ambient deck, 0 = hurricane-only fallback
+    ambient: uniform(0.6), // ambient deck density (softer than 1 for wispy, non-blocky clouds)
     stormMul: uniform(1), // 1 = hurricane on, 0 = off
     ambientFade: uniform(1),
     stormFade: uniform(1),
