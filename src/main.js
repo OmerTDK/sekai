@@ -36,11 +36,14 @@ import { clamp, fantasyName } from './util.js'
 
 const SEED = new URLSearchParams(location.search).get('seed') ?? 'aetherion-1'
 
-// M4: run on the real WebGPU backend by default; init() negotiates it and
-// auto-falls-back to WebGL2 when WebGPU is unavailable. `?renderer=webgl`
-// forces the WebGL2 fallback (support/parity escape hatch, kept one milestone).
-// Every shader is TSL and post is node PostProcessing, so no scene code changes.
-const forceWebGL = new URLSearchParams(location.search).get('renderer') === 'webgl'
+// Default to the WebGL2 backend (WebGPURenderer's WebGL2 path — M3's proven
+// host where EVERY material renders). True WebGPU is opt-in via ?renderer=webgpu:
+// it works broadly (M4 flip verified) but a few TSL materials still hit
+// per-material WGSL compile gaps on the WebGPU backend (custom vertex attributes
+// like birds' wingSide, point-sprite coords) that don't exist on WebGL2 — those
+// are being hardened before WebGPU becomes the default. All shaders are TSL and
+// post is node PostProcessing, so both backends render the same scene code.
+const forceWebGL = new URLSearchParams(location.search).get('renderer') !== 'webgpu'
 const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL })
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.setSize(innerWidth, innerHeight)
