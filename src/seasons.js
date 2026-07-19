@@ -131,7 +131,10 @@ function buildSnowShell(planet, seed) {
   // clears uSnowLine are opaque, with a SNOW_EDGE_SOFT-wide fade below it --
   // only uSnowLine ever changes, so this is the one uniform write per frame
   // that grows/recedes the whole snow line.
-  material.opacityNode = smoothstep(uSnowLine, uSnowLine.add(SNOW_EDGE_SOFT), snowPotentialNode)
+  // Capped below 1.0 so even full-snow areas stay a translucent dusting the
+  // terrain shows through, rather than opaque white plates that read as flat
+  // facets when the camera skims close.
+  material.opacityNode = smoothstep(uSnowLine, uSnowLine.add(SNOW_EDGE_SOFT), snowPotentialNode).mul(0.7)
 
   const mesh = new THREE.Mesh(geo, material)
   mesh.renderOrder = 1 // transparent overlay -- draw after opaque terrain/ocean

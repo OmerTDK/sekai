@@ -31,6 +31,7 @@ import { createWarRender } from './warrender.js'
 import { createEarthquakes } from './earthquake.js'
 import { createHerald } from './herald.js'
 import { createRoads } from './roads.js'
+import { createRivers } from './rivers.js'
 import { createAtmosphereScattering } from './atmosphere.js'
 import { createVolumetricClouds } from './clouds.js'
 // E4 living-world
@@ -162,6 +163,29 @@ scene.add(fishSchools.group)
 const ambientSound = createAmbientSound(SEED)
 
 const autoTour = createAutoTour(planet, world, cameraFeel, controls, camera, SEED)
+
+// E1 rivers: load the committed erosion bake (public/bakes/<seed>.hf.bin), expose
+// its drainage network on the planet, and drape glowing water ribbons down the
+// valleys. The terrain mesh stays fully analytic — rivers re-drape at
+// planet.sampleHeight(dir), so this adds the headline visual with ZERO change to
+// the proven terrain/placement code. Loads async so boot isn't blocked on 4MB.
+let rivers = null
+;(async () => {
+  try {
+    const res = await fetch(`/bakes/${SEED}.hf.bin`)
+    if (!res.ok) return
+    const ab = await res.arrayBuffer()
+    const { decodeHeightField } = await import('./heightfield.js')
+    const hf = decodeHeightField(ab)
+    planet.getRiverNetwork = () => hf.getRiverNetwork()
+    planet.bakeHash = typeof hf.hash === 'function' ? hf.hash() : 0
+    rivers = createRivers(planet, SEED)
+    scene.add(rivers.group)
+    window.__planet.rivers = rivers
+  } catch (e) {
+    console.warn('[sekai] river bake load failed:', e)
+  }
+})()
 
 // The Aemunis Herald — a DOM chronicle ticker (no scene object).
 const herald = createHerald(world, SEED)
@@ -380,6 +404,7 @@ renderer.setAnimationLoop(() => {
   seaLife.update(dt, camera)
   trails.update(dt)
   ocean.update(dt)
+  if (rivers) rivers.update(dt)
   volcanoes.update(dt)
   wildlife.update(dt, camera)
   caravans.update(dt)

@@ -10,6 +10,7 @@
     "build": "vite build",
     "test": "node server/scan.test.js && node tests/geometry.test.mjs && node tests/heightfield.test.mjs",
     "app": "electron .",
+    "bake": "node scripts/bake-heightfield.mjs",
     "icon": "node scripts/make-icon.mjs",
     "pack": "npm run icon && npm run build && electron-builder --dir",
     "dist": "npm run icon && npm run build && electron-builder"

@@ -1,0 +1,2 @@
+# Committed erosion bakes are binary — never diff/merge as text.
+public/bakes/*.bin binary
