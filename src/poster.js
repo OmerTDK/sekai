@@ -74,7 +74,7 @@ export function createPosterExport({ renderer, post, camera }) {
 // (?renderer=webgpu) may not preserve the drawing buffer for toDataURL(), so
 // poster capture there is best-effort and more likely to need this fallback.
 async function downloadCanvas(canvas, filename) {
-  let dataUrl = null
+  let dataUrl
   try {
     dataUrl = canvas.toDataURL('image/png')
   } catch {

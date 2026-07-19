@@ -325,7 +325,7 @@ export function createRuins(planet, seed) {
   // main.js wiring, which calls ruins.update(dt) alongside the other
   // per-frame updates), so there is no distance to cull against here; ruins
   // are tiny from orbit anyway, same as flora.js's small permanent props.
-  function update(dt) {}
+  function update() {}
 
   return { group, update }
 }

@@ -16,7 +16,7 @@ import { SEA_LEVEL, clamp, smoothstep, hash01 } from './util.js'
 import { makeHeightField } from './heightfield.js'
 
 // --- Tunable constants (exported for ART tuning) ---------------------------
-export const CARVE_MAX = 0.010 // deepest valley cut, planet-radius units
+export const CARVE_MAX = 0.01 // deepest valley cut, planet-radius units
 export const CARVE_GAMMA = 0.6 // flow^gamma shaping — <1 broadens the low-flow cut
 export const RIVER_THRESHOLD = 1500 // min flow-accum (upstream cell count) for a river cell
 export const CARVE_SPREAD_TEXELS = 7 // Gaussian radius that widens valleys past mesh Nyquist
@@ -38,9 +38,14 @@ const SQRT2 = Math.SQRT2
 // 8-neighbour offsets (dr, dc, distance in texels). Fixed order → deterministic
 // tie-breaks. Columns WRAP, rows CLAMP (applied per-use).
 const NB = [
-  [-1, -1, SQRT2], [-1, 0, 1], [-1, 1, SQRT2],
-  [0, -1, 1], [0, 1, 1],
-  [1, -1, SQRT2], [1, 0, 1], [1, 1, SQRT2],
+  [-1, -1, SQRT2],
+  [-1, 0, 1],
+  [-1, 1, SQRT2],
+  [0, -1, 1],
+  [0, 1, 1],
+  [1, -1, SQRT2],
+  [1, 0, 1],
+  [1, 1, SQRT2],
 ]
 
 /**
@@ -115,8 +120,12 @@ export function bakeErosion({ seed, analyticHeight, width = 2048, height = 1024 
     while (i > 0) {
       const p = (i - 1) >> 1
       if (hKey[p] < hKey[i] || (hKey[p] === hKey[i] && hIdx[p] < hIdx[i])) break
-      const tk = hKey[p]; hKey[p] = hKey[i]; hKey[i] = tk
-      const ti = hIdx[p]; hIdx[p] = hIdx[i]; hIdx[i] = ti
+      const tk = hKey[p]
+      hKey[p] = hKey[i]
+      hKey[i] = tk
+      const ti = hIdx[p]
+      hIdx[p] = hIdx[i]
+      hIdx[i] = ti
       i = p
     }
   }
@@ -134,8 +143,12 @@ export function bakeErosion({ seed, analyticHeight, width = 2048, height = 1024 
         if (l < hSize && (hKey[l] < hKey[m] || (hKey[l] === hKey[m] && hIdx[l] < hIdx[m]))) m = l
         if (rr < hSize && (hKey[rr] < hKey[m] || (hKey[rr] === hKey[m] && hIdx[rr] < hIdx[m]))) m = rr
         if (m === i) break
-        const tk = hKey[m]; hKey[m] = hKey[i]; hKey[i] = tk
-        const ti = hIdx[m]; hIdx[m] = hIdx[i]; hIdx[i] = ti
+        const tk = hKey[m]
+        hKey[m] = hKey[i]
+        hKey[i] = tk
+        const ti = hIdx[m]
+        hIdx[m] = hIdx[i]
+        hIdx[i] = ti
         i = m
       }
     }
@@ -248,7 +261,6 @@ export function bakeErosion({ seed, analyticHeight, width = 2048, height = 1024 
     carve[i] = CARVE_MAX * Math.pow(fNorm[i], CARVE_GAMMA) * hb * ct
   }
   const carveBlur = gaussianBlurSeparable(carve, W, H, CARVE_SPREAD_TEXELS)
-  carve = null
 
   // River-channel mask (land cells with enough flow). Channels reaching the
   // coast are allowed below SEA_LEVEL so the river meets the sea; other land is
@@ -307,8 +319,10 @@ export function bakeErosion({ seed, analyticHeight, width = 2048, height = 1024 
     const i = popOrder[k]
     if (!riverCell[i]) continue
     let o
-    if (donMaxOrder[i] === 0) o = 1 // headwater
-    else if (donMaxCount[i] >= 2) o = donMaxOrder[i] + 1 // >=2 streams of top order meet
+    if (donMaxOrder[i] === 0)
+      o = 1 // headwater
+    else if (donMaxCount[i] >= 2)
+      o = donMaxOrder[i] + 1 // >=2 streams of top order meet
     else o = donMaxOrder[i]
     order[i] = o
     const ri = receiver[i]
@@ -461,8 +475,13 @@ function thermalRelax(h, W, H, talus, passes) {
           const ad = diff < 0 ? -diff : diff
           if (ad > talus) {
             const move = 0.5 * (ad - talus)
-            if (diff > 0) { delta[i] -= move; delta[j] += move }
-            else { delta[i] += move; delta[j] -= move }
+            if (diff > 0) {
+              delta[i] -= move
+              delta[j] += move
+            } else {
+              delta[i] += move
+              delta[j] -= move
+            }
           }
         }
         // down edge (row clamp -> skip at the bottom row)
@@ -472,8 +491,13 @@ function thermalRelax(h, W, H, talus, passes) {
           const ad = diff < 0 ? -diff : diff
           if (ad > talus) {
             const move = 0.5 * (ad - talus)
-            if (diff > 0) { delta[i] -= move; delta[j] += move }
-            else { delta[i] += move; delta[j] -= move }
+            if (diff > 0) {
+              delta[i] -= move
+              delta[j] += move
+            } else {
+              delta[i] += move
+              delta[j] -= move
+            }
           }
         }
       }

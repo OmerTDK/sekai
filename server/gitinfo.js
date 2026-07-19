@@ -279,7 +279,9 @@ async function pollGithubConflicts(project, state, out) {
       GH_TIMEOUT_MS,
     )
   } catch (e) {
-    warnGhConflicts('`gh pr list` failed (missing/unauthenticated gh?) — ' + (e && e.message ? e.message : String(e)))
+    warnGhConflicts(
+      '`gh pr list` failed (missing/unauthenticated gh?) — ' + (e && e.message ? e.message : String(e)),
+    )
     return
   }
 

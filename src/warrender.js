@@ -199,7 +199,8 @@ function anyForward(dir, out) {
   return out.copy(_ta1)
 }
 
-const isVec = (v) => v != null && typeof v.x === 'number' && typeof v.y === 'number' && typeof v.z === 'number'
+const isVec = (v) =>
+  v != null && typeof v.x === 'number' && typeof v.y === 'number' && typeof v.z === 'number'
 const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d)
 const ease = (t) => {
   const x = clamp(t, 0, 1)
@@ -261,7 +262,9 @@ function mergeParts(parts) {
   const merged = mergeGeometries(nonIndexed, false)
   if (!merged && !warnedMerge) {
     warnedMerge = true
-    console.warn('[planet] warrender.js: geometry merge degraded — mergeGeometries failed, shipping first part only')
+    console.warn(
+      '[planet] warrender.js: geometry merge degraded — mergeGeometries failed, shipping first part only',
+    )
   }
   const out = merged || nonIndexed[0]
   out.computeVertexNormals()
@@ -453,7 +456,8 @@ export function createWarRender(planet, warSim, seed) {
     const count = clamp(Math.round(num(side === 'atk' ? raid.atkCount : raid.defCount, 8)), 0, 40)
     const rng = rngFromString(seed + ':warrender:' + (raid.id || 'raid') + ':' + side)
     const out = []
-    for (let i = 0; i < count; i++) out.push({ bearing: rng() * TAU, dist: 0.004 + rng() * 0.01, fallAt: rng() })
+    for (let i = 0; i < count; i++)
+      out.push({ bearing: rng() * TAU, dist: 0.004 + rng() * 0.01, fallAt: rng() })
     return out
   }
 
@@ -513,7 +517,9 @@ export function createWarRender(planet, warSim, seed) {
 
   if (initialRaids.length === 0 && !warnedNoRaids) {
     warnedNoRaids = true
-    console.warn('[planet] warrender.js: no seeded raids — the war layer idles until data-driven raids arrive')
+    console.warn(
+      '[planet] warrender.js: no seeded raids — the war layer idles until data-driven raids arrive',
+    )
   }
 
   // Pre-allocated live-unit position buffer for ember spawning (built once, no
@@ -530,7 +536,11 @@ export function createWarRender(planet, warSim, seed) {
   warriorGeo.setAttribute('aFaction', wFactionBuf)
   warriorGeo.setAttribute('aFall', wFallBuf)
 
-  const warriorMat = new THREE.MeshStandardNodeMaterial({ flatShading: true, roughness: 0.82, metalness: 0.03 })
+  const warriorMat = new THREE.MeshStandardNodeMaterial({
+    flatShading: true,
+    roughness: 0.82,
+    metalness: 0.03,
+  })
   {
     const vcol = attribute('color', 'vec3')
     const aFaction = attribute('aFaction', 'float')
@@ -598,7 +608,9 @@ export function createWarRender(planet, warSim, seed) {
     // color in this layer — the S1 uniform-driven pulse). Torches carry the
     // real glow; this just keeps the char from reading dead.
     const flicker = sin(uTime.mul(4.0)).mul(0.1).add(0.16)
-    const smolder = vcolOf(TORCH_WARM).mul(smoothstep(0, 0.7, aHeal).oneMinus()).mul(flicker)
+    const smolder = vcolOf(TORCH_WARM)
+      .mul(smoothstep(0, 0.7, aHeal).oneMinus())
+      .mul(flicker)
     scorchMat.colorNode = base.add(smolder)
   }
   const scorchMesh = new THREE.InstancedMesh(scorchGeo, scorchMat, scorchCap)
@@ -804,7 +816,9 @@ export function createWarRender(planet, warSim, seed) {
     if (dynFree.length === 0) {
       if (!warnedDropRaid) {
         warnedDropRaid = true
-        console.warn('[planet] warrender.js: dynamic-raid pool full — extra concurrent raid not rendered this cycle')
+        console.warn(
+          '[planet] warrender.js: dynamic-raid pool full — extra concurrent raid not rendered this cycle',
+        )
       }
       return
     }
@@ -813,7 +827,9 @@ export function createWarRender(planet, warSim, seed) {
     const slots = raidSlots(raid)
     if (kind === 'siege' && slots.atk.length === 0 && !warnedNoRing) {
       warnedNoRing = true
-      console.warn('[planet] warrender.js: siege has no covenant-clear ring (raid.ringDirs) — rendering marks only')
+      console.warn(
+        '[planet] warrender.js: siege has no covenant-clear ring (raid.ringDirs) — rendering marks only',
+      )
     }
     let atkCount = Math.min(slots.atk.length, PER_RAID_WARRIORS)
     let defCount = Math.min(slots.def.length, PER_RAID_WARRIORS - atkCount)
@@ -913,7 +929,8 @@ export function createWarRender(planet, warSim, seed) {
   }
 
   // ---- territory node derivation ------------------------------------------
-  const keyDir = (d) => (Math.round(d.x * 100) | 0) + ',' + (Math.round(d.y * 100) | 0) + ',' + (Math.round(d.z * 100) | 0)
+  const keyDir = (d) =>
+    (Math.round(d.x * 100) | 0) + ',' + (Math.round(d.y * 100) | 0) + ',' + (Math.round(d.z * 100) | 0)
   // faction of a settlement record: raider(1)/realm(0) via warsim.isRaider when
   // available, else a positional default (source side raids, target defends).
   function factionOf(rec, dflt) {
@@ -972,7 +989,8 @@ export function createWarRender(planet, warSim, seed) {
 
   // ---- treaty / narration helpers -----------------------------------------
   const treatyKnown = warSim && typeof warSim.treatyBetween === 'function'
-  const projectOf = (s) => (s == null ? null : typeof s === 'string' ? s : s.project != null ? s.project : null)
+  const projectOf = (s) =>
+    s == null ? null : typeof s === 'string' ? s : s.project != null ? s.project : null
   function treatyActive(raid) {
     if (!treatyKnown) return false
     const a = projectOf(raid.raider)
@@ -1008,7 +1026,9 @@ export function createWarRender(planet, warSim, seed) {
     lastPhase.set(id, st.phase)
     if (treaty) return // peace suppresses the battle outcome line
     const entered =
-      kind === 'siege' ? st.phase === 'lift' && prev !== 'lift' : st.phase === 'aftermath' && prev !== 'aftermath'
+      kind === 'siege'
+        ? st.phase === 'lift' && prev !== 'lift'
+        : st.phase === 'aftermath' && prev !== 'aftermath'
     if (entered) {
       let line = ''
       try {
@@ -1094,7 +1114,8 @@ export function createWarRender(planet, warSim, seed) {
       const dir = offsetPoint(center, slot.bearing, slot.dist, _unitDir)
       const gR = groundRadius(dir)
       let fall = 0
-      if (clashT > 0 && slot.fallAt <= clashT) fall = clamp((clashT - slot.fallAt) * 4, 0, 1) * (1 - sideAlive)
+      if (clashT > 0 && slot.fallAt <= clashT)
+        fall = clamp((clashT - slot.fallAt) * 4, 0, 1) * (1 - sideAlive)
       wFallBuf.array[idx] = fall
       _dummy.position.copy(dir).multiplyScalar(gR + WARRIOR_LIFT)
       orientOnSurface(_dummy, dir, tangentToward(dir, enemyCenter, _fwd))
@@ -1102,7 +1123,8 @@ export function createWarRender(planet, warSim, seed) {
       _dummy.scale.setScalar(WARRIOR_SCALE)
       _dummy.updateMatrix()
       warriorMesh.setMatrixAt(idx, _dummy.matrix)
-      if (night && !marching && fall < 0.5 && liveCount < liveBuf.length) liveBuf[liveCount++].copy(_dummy.position)
+      if (night && !marching && fall < 0.5 && liveCount < liveBuf.length)
+        liveBuf[liveCount++].copy(_dummy.position)
     }
   }
 

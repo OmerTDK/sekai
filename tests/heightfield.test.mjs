@@ -79,9 +79,18 @@ const deq = (u16) => H_MIN + (u16 / 65535) * RANGE
   const H = 3
   // row 0 (north pole), row 1 (equator), row 2 (south pole)
   const heights = new Uint16Array([
-    1000, 2000, 3000, 4000, // r0
-    10000, 20000, 30000, 40000, // r1 (equator)
-    50000, 52000, 54000, 56000, // r2
+    1000,
+    2000,
+    3000,
+    4000, // r0
+    10000,
+    20000,
+    30000,
+    40000, // r1 (equator)
+    50000,
+    52000,
+    54000,
+    56000, // r2
   ])
   const idx = (r, c) => r * W + c
   const hf = makeHeightField({ width: W, height: H, hMin: H_MIN, hMax: H_MAX, heights })
@@ -192,7 +201,7 @@ const deq = (u16) => H_MIN + (u16 / 65535) * RANGE
 
   // Determinism hash survives the round-trip.
   ok(dec.hash() === hf.hash(), 'round-trip: hash() stable')
-  ok((dec.hash() >>> 0) === dec.hash(), 'hash() is an unsigned 32-bit value')
+  ok(dec.hash() >>> 0 === dec.hash(), 'hash() is an unsigned 32-bit value')
 
   // sampleHeight parity after decode.
   for (const dir of [

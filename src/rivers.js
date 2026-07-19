@@ -32,19 +32,9 @@
 // overwrite a world.js structure; they only shimmer in place. No heal cycle is
 // needed because they never advance or reshape.
 //
-// Contract (pinned): export function createRivers(planet, seed) -> { group, update(dt) }
+// Contract (pinned): export function createRivers(planet, _seed) -> { group, update(dt) }
 import * as THREE from 'three/webgpu'
-import {
-  attribute,
-  uniform,
-  color,
-  mix,
-  sin,
-  normalize,
-  positionWorld,
-  normalWorld,
-  cameraPosition,
-} from 'three/tsl'
+import { attribute, uniform, color, mix, sin, normalize, positionWorld, cameraPosition } from 'three/tsl'
 import { SEA_LEVEL, clamp } from './util.js'
 import { tangentBasis } from './placement.js'
 
@@ -93,7 +83,7 @@ function tangentToward(dir, target, out) {
 // ---------------------------------------------------------------------------
 // createRivers
 // ---------------------------------------------------------------------------
-export function createRivers(planet, seed) {
+export function createRivers(planet, _seed) {
   const group = new THREE.Group()
   // Determinism handle for the verify sweep (matches the planet's bake hash).
   group.userData.riverHash = planet.bakeHash
@@ -117,7 +107,7 @@ export function createRivers(planet, seed) {
     if (!nodes || nodes.length < 6) continue // need >= 2 nodes (6 floats) to form a segment
     const n = Math.floor(nodes.length / 3)
     const widths = path.widths || null
-    const order = (path.order | 0) || 1
+    const order = path.order | 0 || 1
     const mouthUnder = !!path.mouthUnder
     // Flow tier -> aFlow (0 = smallest creek, 1 = trunk): drives shallow->mid mix.
     const flowTier = clamp((order - 1) / (RIVER_MAX_ORDER - 1), 0, 1)
