@@ -114,4 +114,4 @@ Bundled art is CC0 / permissively licensed — see `public/textures/SOURCES.md` 
 
 ## License
 
-The Sekai code is the author's. Bundled assets retain their original CC0/permissive licenses (see the `SOURCES.md` files). No `LICENSE` file is included as this is a personal project.
+Sekai is licensed under the [Apache License 2.0](LICENSE) — you're free to use, modify, and redistribute it, with attribution and the license notice. Bundled art assets retain their own CC0/permissive licenses (see the `SOURCES.md` files); see [NOTICE](NOTICE) for attribution.
