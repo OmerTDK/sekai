@@ -106,7 +106,7 @@ Everything is seeded through `src/util.js` (`rngFromString`, `hash01`, `makeNois
 
 ## Status & roadmap
 
-The graphics program is complete (M0–M5c) and the epilogue is shipped: rivers, seasons, fish schools, ruins, ambient sound, poster export, auto-tour, the packaged Electron app, and the full conflict ladder — raids & battles (rung 1), data-driven skirmishes / supply economy / sieges / treaties (rungs 2–3). A parallax-occlusion terrain-detail node (`pom.js`) is built and awaiting shader integration. See [ROADMAP.md](ROADMAP.md) and `docs/superpowers/plans/` for the full history.
+The graphics program is complete (M0–M5c) and the epilogue is shipped: rivers, seasons, fish schools, ruins, ambient sound, poster export, auto-tour, the packaged Electron app, and the full conflict ladder — raids & battles (rung 1), data-driven skirmishes / supply economy / sieges / treaties (rungs 2–3). A parallax-occlusion terrain-detail node (`pom.js`) is built and awaiting shader integration. See [DESIGN.md](DESIGN.md) for how it all fits together.
 
 ## Credits
 
