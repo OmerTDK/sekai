@@ -16,9 +16,9 @@ It's built on the 2026 web-3D stack — three.js's WebGPU renderer with TSL node
 - Procedural planet with fjord coastlines, archipelagos and dramatic relief (`planet.js`)
 - Animated Gerstner **ocean** — rolling swell, crest whitecaps, breaking shore foam (`ocean.js`)
 - **Rivers** traced from a committed CPU **erosion bake** (priority-flood + D8 flow accumulation), draped down the valleys as glowing water ribbons (`rivers.js`, `erosion.js`, `heightfield.js`)
-- Polar **sea ice** with pressure cracks (`seaice.js`) and hurricane-driven **coastal flooding** (`flood.js`)
+- A **frozen sea** near the poles — the ocean surface itself freezes to matte cracked ice, its extent breathing with the season (`ocean.js`); polar snow line + hurricane-driven **coastal flooding** (`flood.js`)
 
-![Archipelago coastline — green islands, beaches, turquoise shallows, a river glinting in the highlands](docs/media/terrain-coast.jpg)
+![A skim across the coastline — terrain, rivers and Gerstner ocean in motion](docs/media/surface-pan.gif)
 
 ### Sky & atmosphere
 - Galaxy starfield with a fast-rotating **sun** — watch the terminator sweep and the dark side light up (`sky.js`)
@@ -28,7 +28,7 @@ It's built on the 2026 web-3D stack — three.js's WebGPU renderer with TSL node
 
 
 ### Weather & life
-- **Seasons** — a slow cycle that drives snow line, foliage tint, sea-ice extent and daylight (`seasons.js`)
+- **Seasons** — a slow cycle that drives snow line, foliage tint, frozen-sea extent and daylight (`seasons.js`)
 - Flocking **birds** (`birds.js`), breaching **whales & dolphins** (`sealife.js`), **fish schools** under the shallows (`fishschools.js`), migrating **wildlife herds** (`wildlife.js`)
 - Poisson-scattered **forests** with contact shadows (`flora.js`), drifting **weather fronts** and precipitation (`weather.js`, `wind.js`)
 - Procedural **ambient sound** — wind, ocean and distant activity (`ambient.js`)
@@ -99,7 +99,7 @@ Everything is seeded through `src/util.js` (`rngFromString`, `hash01`, `makeNois
 - **render/terrain** — `planet.js` `ocean.js` `rivers.js` `sky.js` `atmosphere.js` `clouds.js` `assets.js` `env.js`
 - **world** — `world.js` `buildings.js` `placement.js` `labels.js` `civsim.js` `civrender.js` `caravans.js` `roads.js` `airships.js` `dragon.js` `ruins.js` `herald.js` `events.js`
 - **sim/conflict** — `warsim.js` `warrender.js` `volcano.js` `earthquake.js` `meteor.js`
-- **weather/life** — `weather.js` `wind.js` `storms.js` `flood.js` `seaice.js` `sealife.js` `fishschools.js` `wildlife.js` `birds.js` `flora.js` `seasons.js` `trails.js` `ambient.js`
+- **weather/life** — `weather.js` `wind.js` `storms.js` `flood.js` `sealife.js` `fishschools.js` `wildlife.js` `birds.js` `flora.js` `seasons.js` `trails.js` `ambient.js`
 - **support** — `util.js` `ui.js` `cameraFeel.js` `poster.js` `autotour.js` `verifykit.js`
 - **offline** — `terrainField.js` `erosion.js` `heightfield.js` + `scripts/bake-heightfield.mjs` (the deterministic erosion bake)
 - **server/** — the zero-dependency local API (`scan.js` `gitinfo.js` `resume.js`, shared router `api.js`, standalone `server.js`)
