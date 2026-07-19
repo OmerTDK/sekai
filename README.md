@@ -18,7 +18,6 @@ It's built on the 2026 web-3D stack — three.js's WebGPU renderer with TSL node
 - **Rivers** traced from a committed CPU **erosion bake** (priority-flood + D8 flow accumulation), draped down the valleys as glowing water ribbons (`rivers.js`, `erosion.js`, `heightfield.js`)
 - Polar **sea ice** with pressure cracks (`seaice.js`) and hurricane-driven **coastal flooding** (`flood.js`)
 
-![Dive to the ocean surface](docs/media/dive-to-ocean.gif)
 
 ### Sky & atmosphere
 - Galaxy starfield with a fast-rotating **sun** — watch the terminator sweep and the dark side light up (`sky.js`)
@@ -26,7 +25,6 @@ It's built on the 2026 web-3D stack — three.js's WebGPU renderer with TSL node
 - **Volumetric clouds** and hurricanes with lit tops and shaded bellies (`clouds.js`)
 - Aurora and eclipse events; sub-pixel output **dithering** so dark gradients never band
 
-![Fast-sun day/night sweep](docs/media/fast-sun-daynight.gif)
 
 ### Weather & life
 - **Seasons** — a slow cycle that drives snow line, foliage tint, sea-ice extent and daylight (`seasons.js`)
@@ -41,14 +39,12 @@ It's built on the 2026 web-3D stack — three.js's WebGPU renderer with TSL node
 - The **Aemunis Herald** — a medieval chronicle ticker that narrates your real git activity (`herald.js`)
 - Ancient **ruins** at seeded sites (`ruins.js`); commits become fireworks and merged PRs become monuments (`events.js`)
 
-![A raid plays out and heals](docs/media/raid-battle.gif)
 
 ### Conflict & cataclysm
 - **Raiding parties & field battles** — raider factions (tmp-dir projects) march on prosperous settlements; armies muster, clash, and leave banners + scorch that heal (`warsim.js`, `warrender.js`)
 - Active **volcanoes** (`volcano.js`), **earthquakes** with camera shake (`earthquake.js`), and **meteor strikes** (`meteor.js`)
 - **The Covenant:** simulation is *additive*. Conflict and cataclysm happen *around* your session structures — they leave marks and always heal — but never move, destroy, or overwrite the record of your work.
 
-![Dragon and airship over the peaks](docs/media/dragon-airships.gif)
 
 ### Controls
 Bottom-right cluster: 🎛 feature toggles · ⚡ god controls (meteor, hurricane, aurora, fast-sun) · zoom · 🔇 ambient mute · 🖼 poster export (high-res PNG) · 🎬 cinematic auto-tour. Click a settlement in the sidebar to inspect it or resume that Claude Code session in a terminal.
@@ -87,7 +83,9 @@ Sekai scans `~/.claude/projects/**` for session transcripts and maps them to the
 | A commit | A firework |
 | A merged PR | A monument |
 | A `tmp`/scratch project | A raider faction |
-| Git merge conflicts | Border skirmishes (planned, rung 2) |
+| Git merge conflicts | Border skirmishes between the rival factions |
+| Session activity / prosperity | How attractive a settlement is to raid |
+| A merged PR between rivals | A peace treaty |
 
 Everything is seeded through `src/util.js` (`rngFromString`, `hash01`, `makeNoise3D`) — no `Math.random` or `Date.now` touches world state, so a world is fully reproducible from its inputs.
 
@@ -105,7 +103,7 @@ Everything is seeded through `src/util.js` (`rngFromString`, `hash01`, `makeNois
 
 ## Status & roadmap
 
-The graphics program is complete (M0–M5c) and the epilogue is largely shipped: rivers, seasons, fish, ruins, ambient sound, poster export, auto-tour, the packaged Electron app, and rung-1 conflict (raids & battles). Deeper world-sim (data-driven skirmishes and sieges — E-SIM rungs 2–3) is in progress. See [ROADMAP.md](ROADMAP.md) and `docs/superpowers/plans/` for the full history.
+The graphics program is complete (M0–M5c) and the epilogue is shipped: rivers, seasons, fish schools, ruins, ambient sound, poster export, auto-tour, the packaged Electron app, and the full conflict ladder — raids & battles (rung 1), data-driven skirmishes / supply economy / sieges / treaties (rungs 2–3). A parallax-occlusion terrain-detail node (`pom.js`) is built and awaiting shader integration. See [ROADMAP.md](ROADMAP.md) and `docs/superpowers/plans/` for the full history.
 
 ## Credits
 
