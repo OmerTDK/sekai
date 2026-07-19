@@ -24,7 +24,9 @@ process.env.PATH = [
   '/usr/sbin',
   '/sbin',
   process.env.PATH || '',
-].filter(Boolean).join(':')
+]
+  .filter(Boolean)
+  .join(':')
 
 import { handleApi } from './api.js'
 

@@ -46,8 +46,15 @@ import { If, Loop, Break, float, mix } from 'three/tsl'
  * @returns {Node} vec2 corrected UV
  */
 export function parallaxOcclusion({
-  heightTex, uv, viewDirTangent, scale,
-  minSteps = 8, maxSteps = 24, lodFade, channel = 'r', sampleHeight,
+  heightTex,
+  uv,
+  viewDirTangent,
+  scale,
+  minSteps = 8,
+  maxSteps = 24,
+  lodFade,
+  channel = 'r',
+  sampleHeight,
 }) {
   // Height accessor. Default = explicit-LOD single-channel fetch (WGSL-safe, §6);
   // callers pass `sampleHeight` for per-biome packed blends (one fetch, dotted
@@ -68,15 +75,15 @@ export function parallaxOcclusion({
   // (vz→1) → minSteps. The Loop's STATIC bound stays `maxSteps`; this only drives
   // the runtime early-exit and the per-step ray-depth increment.
   const nSteps = mix(float(maxSteps), float(minSteps), vz).toVar()
-  const layerStep = float(1).div(nSteps).toVar()              // ray-depth increment per step
+  const layerStep = float(1).div(nSteps).toVar() // ray-depth increment per step
 
   // Total UV travel from surface(0) to bottom(1) is (view.xy / view.z) * depth.
   const uvMax = viewDirTangent.xy.div(vz).mul(depth).toVar()
   const duv = uvMax.mul(layerStep).toVar()
 
   const curUv = uv.toVar()
-  const curLayer = float(0).toVar()                           // ray depth 0..1
-  const curD = H(curUv).oneMinus().toVar()                    // heightfield depth = 1 - height
+  const curLayer = float(0).toVar() // ray depth 0..1
+  const curD = H(curUv).oneMinus().toVar() // heightfield depth = 1 - height
   const prevUv = curUv.toVar()
   const prevLayer = curLayer.toVar()
   const prevD = curD.toVar()
@@ -99,10 +106,10 @@ export function parallaxOcclusion({
 
   // One secant step between prev (ray above the surface) and cur (ray below it):
   // find where f(x) = heightfieldDepth(x) - rayDepth(x) crosses zero.
-  const after = curD.sub(curLayer)                            // <= 0 at/after the crossing
-  const before = prevD.sub(prevLayer)                         // >  0 before the crossing
-  const t = after.div(after.sub(before).max(1e-5))            // in [0..1]
-  return mix(curUv, prevUv, t)                                // corrected UV
+  const after = curD.sub(curLayer) // <= 0 at/after the crossing
+  const before = prevD.sub(prevLayer) // >  0 before the crossing
+  const t = after.div(after.sub(before).max(1e-5)) // in [0..1]
+  return mix(curUv, prevUv, t) // corrected UV
 }
 
 /**
@@ -126,17 +133,24 @@ export function parallaxOcclusion({
  * @returns {Node} float visibility in [1-strength .. 1] (1 = fully lit)
  */
 export function parallaxSoftShadow({
-  heightTex, uv, lightDirTangent, hitDepth, scale,
-  steps = 6, lodFade, channel = 'r', sampleHeight, strength = 0.35,
+  heightTex,
+  uv,
+  lightDirTangent,
+  hitDepth,
+  scale,
+  steps = 6,
+  lodFade,
+  channel = 'r',
+  sampleHeight,
+  strength = 0.35,
 }) {
   const H = sampleHeight ?? ((p) => heightTex.sample(p).level(0)[channel])
   const fade = lodFade ?? float(1)
   const depth = float(scale).mul(fade).toVar()
 
   // Depth of the hit below the top surface (0 = top .. 1 = bottom).
-  const startDepth = (hitDepth === undefined || hitDepth === null)
-    ? H(uv).oneMinus().toVar()
-    : float(hitDepth).toVar()
+  const startDepth =
+    hitDepth === undefined || hitDepth === null ? H(uv).oneMinus().toVar() : float(hitDepth).toVar()
 
   // Clamp the along-normal light component (grazing-light UV blow-up guard).
   const lz = lightDirTangent.z.max(0.15).toVar()
@@ -146,17 +160,20 @@ export function parallaxSoftShadow({
   const occ = float(0).toVar()
   // STATIC bound `steps` (JS literal) → constant-trip WGSL for-loop; explicit LOD.
   Loop(steps, ({ i }) => {
-    const f = float(i).add(1).div(steps)                      // (0 .. 1]
-    const rayDepth = startDepth.mul(f.oneMinus())             // rises from the hit toward the top
-    const sUv = uv.add(uvToTop.mul(f))                        // march toward the light
-    const hfDepth = H(sUv).oneMinus()                         // heightfield depth at sUv
+    const f = float(i).add(1).div(steps) // (0 .. 1]
+    const rayDepth = startDepth.mul(f.oneMinus()) // rises from the hit toward the top
+    const sUv = uv.add(uvToTop.mul(f)) // march toward the light
+    const hfDepth = H(sUv).oneMinus() // heightfield depth at sUv
     // Positive where the heightfield surface sits ABOVE the light ray → blocks it.
     occ.assign(occ.max(rayDepth.sub(hfDepth)))
   })
 
   // Visibility multiplier in [1-strength, 1], faded out with the LOD gate.
   const shadow = occ.clamp(0, 1).mul(fade)
-  return shadow.mul(strength).oneMinus().clamp(1 - strength, 1)
+  return shadow
+    .mul(strength)
+    .oneMinus()
+    .clamp(1 - strength, 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +202,7 @@ function separableBoxBlurRGBA(data, w, h, radius) {
       for (let c = 0; c < 4; c++) {
         let sum = 0
         for (let k = -radius; k <= radius; k++) {
-          const xx = ((x + k) % w + w) % w
+          const xx = (((x + k) % w) + w) % w
           sum += data[(y * w + xx) * 4 + c]
         }
         tmp[o + c] = Math.round(sum / win)
@@ -238,19 +255,17 @@ function make2DContext(size) {
  */
 export function buildPackedHeightTexture({ sources, size = 512, blur = 1, fromColor = false }) {
   const ctx = make2DContext(size)
-  const out = new Uint8Array(size * size * 4)                 // RGBA, channel k = source k height
+  const out = new Uint8Array(size * size * 4) // RGBA, channel k = source k height
 
   sources.slice(0, 4).forEach((img, k) => {
     ctx.clearRect(0, 0, size, size)
-    ctx.drawImage(img, 0, 0, size, size)                      // decode + downsample once
+    ctx.drawImage(img, 0, 0, size, size) // decode + downsample once
     const px = ctx.getImageData(0, 0, size, size).data
     for (let i = 0; i < size * size; i++) {
       const r = px[i * 4]
       const g = px[i * 4 + 1]
       const b = px[i * 4 + 2]
-      out[i * 4 + k] = fromColor
-        ? Math.round(r * LUMA[0] + g * LUMA[1] + b * LUMA[2])
-        : r
+      out[i * 4 + k] = fromColor ? Math.round(r * LUMA[0] + g * LUMA[1] + b * LUMA[2]) : r
     }
   })
 

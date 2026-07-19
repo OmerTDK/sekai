@@ -141,7 +141,8 @@ export function makeHeightField({ width, height, hMin, hMax, heights, flow, rive
 // intermediate and is NOT persisted — a decoded field's sampleFlow returns 0.
 // ---------------------------------------------------------------------------
 
-const HEADER_BYTES = 4 /*magic*/ + 4 /*version*/ + 4 /*width*/ + 4 /*height*/ + 4 /*hMin*/ + 4 /*hMax*/ + 4 /*riverCount*/
+const HEADER_BYTES =
+  4 /*magic*/ + 4 /*version*/ + 4 /*width*/ + 4 /*height*/ + 4 /*hMin*/ + 4 /*hMax*/ + 4 /*riverCount*/
 
 /** Serialize a heightfield to a fresh little-endian ArrayBuffer. */
 export function encodeHeightField(hf) {

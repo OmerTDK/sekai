@@ -404,8 +404,7 @@ export function createWarSim(planet, settlements, seed, opts = {}) {
     // Richest targets first (deterministic hash tie-break), then cap.
     pairs.sort(
       (a, b) =>
-        attractivenessOf(b.target) - attractivenessOf(a.target) ||
-        hash01(b.id + ':o') - hash01(a.id + ':o'),
+        attractivenessOf(b.target) - attractivenessOf(a.target) || hash01(b.id + ':o') - hash01(a.id + ':o'),
     )
     const capped = pairs.slice(0, raidCap)
 
@@ -1217,7 +1216,11 @@ export function createWarSim(planet, settlements, seed, opts = {}) {
     }
     const struct = Math.max(s.structures || 0, 0)
     const nStruct =
-      maxStruct > minStruct ? (struct - minStruct) / (maxStruct - minStruct) : maxStruct > 0 ? struct / maxStruct : 0
+      maxStruct > minStruct
+        ? (struct - minStruct) / (maxStruct - minStruct)
+        : maxStruct > 0
+          ? struct / maxStruct
+          : 0
     const nAct = activityScore01(s)
     return clamp(0.6 * nStruct + 0.4 * nAct, 0, 1)
   }

@@ -194,10 +194,7 @@ export function createTerrainField(seed) {
     const x = dir.x
     const y = dir.y
     const z = dir.z
-    return (
-      fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 2, 2.0, 0.5) * 0.5 +
-      0.5
-    )
+    return fbm(nMoisture, x * MOISTURE_SCALE, y * MOISTURE_SCALE, z * MOISTURE_SCALE, 2, 2.0, 0.5) * 0.5 + 0.5
   }
 
   // Latitude (|y|) threshold at which polar ice caps begin, perturbed by a

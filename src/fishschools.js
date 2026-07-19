@@ -100,18 +100,32 @@ function makePart(positions, indices, colorSpec) {
 
 export function buildFishGeometry() {
   const bodyPos = [
-    0, 0, 0.5, // 0 nose
-    0.13, 0, -0.03, // 1 right flank
-    0, 0, -0.32, // 2 tail root (spine)
-    -0.13, 0, -0.03, // 3 left flank
+    0,
+    0,
+    0.5, // 0 nose
+    0.13,
+    0,
+    -0.03, // 1 right flank
+    0,
+    0,
+    -0.32, // 2 tail root (spine)
+    -0.13,
+    0,
+    -0.03, // 3 left flank
   ]
   const bodyIdx = [0, 1, 2, 0, 2, 3]
   const bodyColors = [COLOR_TOP, COLOR_BELLY, COLOR_TOP, COLOR_BELLY]
 
   const tailPos = [
-    0, 0, -0.32, // 0 tail root (shared spine point)
-    0.09, 0, -0.52, // 1 tail tip right
-    -0.09, 0, -0.52, // 2 tail tip left
+    0,
+    0,
+    -0.32, // 0 tail root (shared spine point)
+    0.09,
+    0,
+    -0.52, // 1 tail tip right
+    -0.09,
+    0,
+    -0.52, // 2 tail tip left
   ]
   const tailIdx = [0, 1, 2]
   const tailColors = [COLOR_TOP, COLOR_BELLY, COLOR_BELLY]
