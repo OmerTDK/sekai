@@ -1,7 +1,7 @@
 # Ground-detail texture sources (ambientCG)
 
 Four ambientCG PBR material sets, 1K-JPG resolution, used for the terrain's
-triplanar detail splat (`src/planet.js`, `terrainMat.onBeforeCompile`). All
+triplanar detail splat (`src/planet.js`, a TSL node material). All
 four are CC0 (public domain):
 
 > Yes. All assets are released under the Creative Commons CC0 license,

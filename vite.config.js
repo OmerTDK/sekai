@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite'
+import { handleApi } from './server/api.js'
 
 export default defineConfig({
   server: { open: true },
@@ -6,35 +7,12 @@ export default defineConfig({
     {
       name: 'claude-session-api',
       configureServer(server) {
-        server.middlewares.use('/api/sessions', async (req, res) => {
-          res.setHeader('content-type', 'application/json')
+        // Dev and the packaged standalone server share ONE router (server/api.js)
+        // so /api/sessions, /api/events and /api/resume behave byte-identically
+        // in both. Anything else falls through to Vite's static/HMR handling.
+        server.middlewares.use(async (req, res, next) => {
           try {
-            const { scanSessions } = await import('./server/scan.js')
-            res.end(JSON.stringify(await scanSessions()))
-          } catch (e) {
-            res.statusCode = 500
-            res.end(JSON.stringify({ error: String(e) }))
-          }
-        })
-        server.middlewares.use('/api/events', async (req, res) => {
-          res.setHeader('content-type', 'application/json')
-          try {
-            const { gitEvents } = await import('./server/gitinfo.js')
-            res.end(JSON.stringify(await gitEvents()))
-          } catch (e) {
-            res.statusCode = 500
-            res.end(JSON.stringify({ error: String(e) }))
-          }
-        })
-        server.middlewares.use('/api/resume', async (req, res) => {
-          if (req.method !== 'POST') {
-            res.statusCode = 405
-            res.end()
-            return
-          }
-          try {
-            const { handleResume } = await import('./server/resume.js')
-            handleResume(req, res)
+            if (!(await handleApi(req, res))) next()
           } catch (e) {
             res.statusCode = 500
             res.setHeader('content-type', 'application/json')

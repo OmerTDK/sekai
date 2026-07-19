@@ -15,6 +15,12 @@ const APP_DIR = path.join(__dirname, '..')
 const PROBE_TIMEOUT_MS = 600
 const POLL_INTERVAL_MS = 300
 const MAX_WAIT_MS = 30000
+const SERVER_START_TIMEOUT_MS = 15000
+
+// The packaged app runs a bundled local server child (server/server.js) that
+// serves the built dist/ + the /api/* endpoints. Kept module-scoped so the
+// quit handlers can tear it down.
+let serverChild = null
 
 // Resolves true if `url` answers an HTTP request within PROBE_TIMEOUT_MS.
 function probeOnce(url) {
@@ -111,16 +117,83 @@ function showError(win, message) {
   win.loadURL(`data:text/plain,${encodeURIComponent(message)}`)
 }
 
-async function boot() {
-  let up = await probeOnce(DEV_URL)
+// Packaged mode: spawn server/server.js as a Node child (the Electron binary run
+// as Node via ELECTRON_RUN_AS_NODE — no system `node` needed), serving the built
+// dist/ + /api/*. Resolves the kernel-assigned port from the child's
+// 'SEKAI_LISTENING <port>' stdout sentinel.
+function startPackagedServer() {
+  return new Promise((resolve, reject) => {
+    const distDir = path.join(__dirname, '..', 'dist')
+    const serverEntry = path.join(__dirname, '..', 'server', 'server.js')
+    serverChild = spawn(process.execPath, [serverEntry], {
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1', // set ONLY on this child — never process-wide
+        SEKAI_DIST: distDir,
+        SEKAI_HOST: '127.0.0.1',
+        SEKAI_PORT: '0',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+    })
+    let buf = ''
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(new Error('no SEKAI_LISTENING sentinel within timeout'))
+    }, SERVER_START_TIMEOUT_MS)
+    serverChild.stdout.setEncoding('utf8')
+    serverChild.stdout.on('data', (chunk) => {
+      buf += chunk
+      let i
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i)
+        buf = buf.slice(i + 1)
+        const m = line.match(/^SEKAI_LISTENING (\d+)/)
+        if (m && !settled) {
+          settled = true
+          clearTimeout(timer)
+          resolve(Number(m[1]))
+        }
+      }
+    })
+    serverChild.stderr.setEncoding('utf8')
+    serverChild.stderr.on('data', (d) => console.error('[sekai-server]', d.trimEnd()))
+    serverChild.on('exit', () => {
+      serverChild = null
+    })
+    serverChild.on('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(err)
+    })
+  })
+}
 
+async function boot() {
+  const win = createWindow()
+
+  // Packaged: run the bundled server child and load its local origin. No
+  // terminal, no separate `npm start`.
+  if (app.isPackaged) {
+    try {
+      const port = await startPackagedServer()
+      win.loadURL(`http://127.0.0.1:${port}`)
+    } catch (err) {
+      showError(win, 'Sekai server failed to start — run "npm run build" and relaunch.\n' + String(err))
+    }
+    return
+  }
+
+  // Dev: probe the Vite dev server, spawn it if down, then load it (keeps
+  // `npm run app` and the `planet` alias working unchanged).
+  let up = await probeOnce(DEV_URL)
   if (!up) {
     startDevServer()
     up = await waitForServer(DEV_URL, MAX_WAIT_MS)
   }
-
-  const win = createWindow()
-
   if (up) {
     win.loadURL(DEV_URL)
   } else {
@@ -131,6 +204,19 @@ async function boot() {
     )
   }
 }
+
+// Tear the server child down cleanly on quit so no orphan process lingers.
+function killServerChild() {
+  if (serverChild) {
+    try {
+      serverChild.kill('SIGTERM')
+    } catch {
+      /* already gone */
+    }
+    serverChild = null
+  }
+}
+app.on('will-quit', killServerChild)
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(buildMenu())

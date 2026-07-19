@@ -26,11 +26,21 @@ import { createCaravans } from './caravans.js'
 import { createMeteors } from './meteor.js'
 import { createCivSim } from './civsim.js'
 import { createCivRender } from './civrender.js'
+import { createWarSim } from './warsim.js'
+import { createWarRender } from './warrender.js'
 import { createEarthquakes } from './earthquake.js'
 import { createHerald } from './herald.js'
 import { createRoads } from './roads.js'
+import { createRivers } from './rivers.js'
 import { createAtmosphereScattering } from './atmosphere.js'
 import { createVolumetricClouds } from './clouds.js'
+// E4 living-world
+import { createRuins } from './ruins.js'
+import { createSeasons } from './seasons.js'
+import { createFishSchools } from './fishschools.js'
+import { createAmbientSound } from './ambient.js'
+import { createPosterExport } from './poster.js'
+import { createAutoTour } from './autotour.js'
 import { createUI } from './ui.js'
 import { clamp, fantasyName } from './util.js'
 
@@ -140,6 +150,43 @@ scene.add(earthquakes.group)
 const roads = createRoads(planet, world, SEED)
 scene.add(roads.group)
 
+// --- E4 living-world -------------------------------------------------------
+const ruins = createRuins(planet, SEED)
+scene.add(ruins.group)
+
+const seasons = createSeasons(planet, SEED)
+scene.add(seasons.group)
+
+const fishSchools = createFishSchools(planet, SEED)
+scene.add(fishSchools.group)
+
+const ambientSound = createAmbientSound(SEED)
+
+const autoTour = createAutoTour(planet, world, cameraFeel, controls, camera, SEED)
+
+// E1 rivers: load the committed erosion bake (public/bakes/<seed>.hf.bin), expose
+// its drainage network on the planet, and drape glowing water ribbons down the
+// valleys. The terrain mesh stays fully analytic — rivers re-drape at
+// planet.sampleHeight(dir), so this adds the headline visual with ZERO change to
+// the proven terrain/placement code. Loads async so boot isn't blocked on 4MB.
+let rivers = null
+;(async () => {
+  try {
+    const res = await fetch(`/bakes/${SEED}.hf.bin`)
+    if (!res.ok) return
+    const ab = await res.arrayBuffer()
+    const { decodeHeightField } = await import('./heightfield.js')
+    const hf = decodeHeightField(ab)
+    planet.getRiverNetwork = () => hf.getRiverNetwork()
+    planet.bakeHash = typeof hf.hash === 'function' ? hf.hash() : 0
+    rivers = createRivers(planet, SEED)
+    scene.add(rivers.group)
+    window.__planet.rivers = rivers
+  } catch (e) {
+    console.warn('[sekai] river bake load failed:', e)
+  }
+})()
+
 // The Aemunis Herald — a DOM chronicle ticker (no scene object).
 const herald = createHerald(world, SEED)
 
@@ -147,6 +194,8 @@ const herald = createHerald(world, SEED)
 // anchors world populates asynchronously — snapshot after the same settle delay
 // airships/caravans use, then build the seeded civ layer.
 let civRender = null
+// E-SIM rung 1: raiding parties + field battles between settlements.
+let warRender = null
 setTimeout(() => {
   const anchorsByProject = new Map()
   world.group.traverse((o) => {
@@ -158,13 +207,49 @@ setTimeout(() => {
   scene.add(civRender.group)
   window.__planet.civSim = civSim
   window.__planet.civRender = civRender
+
+  // --- E-SIM rung 1: build the conflict theater from the settled world. ------
+  // Snapshot each settlement's anchor/ground/structure dirs so warsim can place
+  // raids that respect the covenant (marks clear session structures).
+  const recByProject = new Map()
+  world.group.traverse((o) => {
+    const s = o.userData && o.userData.settlement
+    if (s && !recByProject.has(s.project)) recByProject.set(s.project, s)
+  })
+  const settlementSnapshot = []
+  for (const row of world.list()) {
+    const s = recByProject.get(row.project)
+    if (!s) continue
+    settlementSnapshot.push({
+      project: row.project,
+      name: row.name,
+      race: row.race,
+      structures: row.structures,
+      anchorDir: s.anchorDir,
+      groundR: s.groundR,
+      structureDirs: s.structureDirs || [],
+    })
+  }
+  const warSim = createWarSim(planet, settlementSnapshot, SEED)
+  warRender = createWarRender(planet, warSim, SEED)
+  warRender.setNarrator((line) => herald.narrate(line))
+  scene.add(warRender.group)
+  window.__planet.warSim = warSim
+  window.__planet.warRender = warRender
 }, 6500)
 
 // Git charm: commits become fireworks, merged PRs become monuments.
 async function pollEvents() {
   try {
     const res = await fetch('/api/events')
-    if (res.ok) events.ingest(await res.json())
+    if (!res.ok) return
+    const evs = await res.json()
+    events.ingest(evs)
+    // E-SIM rung 2/3: the SAME git feed drives data-driven border skirmishes,
+    // supply intercepts, faction standing, sieges and treaties. Guarded so it's a
+    // safe no-op until warSim is built (in the 6500ms settle timeout).
+    const ws = window.__planet && window.__planet.warSim
+    if (ws && typeof ws.ingest === 'function') ws.ingest(evs)
   } catch {
     /* server may be mid-restart; next poll catches up */
   }
@@ -207,6 +292,9 @@ post.outputColorTransform = false
 const displayColor = renderOutput(cloudComposite.add(bloomPass))
 const dither = interleavedGradientNoise(screenCoordinate).sub(0.5).mul(float(1).div(255))
 post.outputNode = vec4(displayColor.rgb.add(dither), displayColor.a)
+
+// E4 poster export needs the built post pipeline to render high-res frames.
+const poster = createPosterExport({ renderer, post, camera })
 
 document.querySelector('#title .planet-name').textContent = fantasyName(SEED)
 const statsEl = document.getElementById('stats')
@@ -263,6 +351,12 @@ window.__planet = {
   ui,
   renderer,
   post,
+  ruins,
+  seasons,
+  fishSchools,
+  ambientSound,
+  poster,
+  autoTour,
   controls,
 }
 window.__planet.verify = createVerifyKit({
@@ -317,11 +411,13 @@ renderer.setAnimationLoop(() => {
   seaLife.update(dt, camera)
   trails.update(dt)
   ocean.update(dt)
+  if (rivers) rivers.update(dt)
   volcanoes.update(dt)
   wildlife.update(dt, camera)
   caravans.update(dt)
   meteors.update(dt)
   if (civRender) civRender.update(dt, camera)
+  if (warRender) warRender.update(dt, camera, sky.getSunDir(sunDirScratch))
   roads.update(dt)
   herald.update(dt)
   ui.update(dt)
@@ -330,6 +426,13 @@ renderer.setAnimationLoop(() => {
   // Earthquake camera shake is an additive offset that controls.update()
   // clears next frame, so it must run AFTER controls.update().
   earthquakes.update(dt)
+
+  // E4 living-world
+  ruins.update(dt)
+  seasons.update(dt)
+  fishSchools.update(dt, camera)
+  ambientSound.update(dt, camera, world)
+  autoTour.update(dt)
 
   hudTimer -= dt
   if (hudTimer <= 0) {

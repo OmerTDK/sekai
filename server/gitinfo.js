@@ -1,7 +1,22 @@
-// Polls git + GitHub for "charm" events (commits, merged PRs) on projects
-// that currently have an active Claude Code session, so the planet can throw
-// fireworks / plant monuments in near-real-time without ever shelling out to
-// git for settlements nobody is working in right now.
+// Polls git + GitHub for "charm" events (commits, merged PRs, and now
+// merge-conflict skirmishes) on projects that currently have an active
+// Claude Code session, so the planet can throw fireworks / plant monuments /
+// stage border skirmishes in near-real-time without ever shelling out to git
+// for settlements nobody is working in right now.
+//
+// Event kinds emitted: 'commit', 'pr-merged', and 'conflict'. A 'conflict'
+// event means real, currently-observable contested-merge signal was found —
+// either an open GitHub PR whose mergeStateStatus is DIRTY/CONFLICTING, or a
+// local merge commit whose subject reads like a revert/conflict/rebase. Its
+// shape is { project, kind:'conflict', id, ts, title, other? } — `other`,
+// when present, is the project path of ANOTHER currently-active project that
+// shares the same GitHub remote (i.e. another git worktree/checkout of the
+// same repo — the most reliable "related project" signal available without
+// assuming anything about directory layout). Downstream (warsim.js) uses
+// `project`+`other` to map a conflict onto a border skirmish between two
+// settlements; when `other` can't be resolved it's simply omitted and the
+// event degrades to informational only. This file stays entirely read-only —
+// it never writes to, merges, or mutates any repo it inspects.
 //
 // Zero npm dependencies: node:child_process (execFile — argv arrays only,
 // NEVER a shell string) plus this repo's own scan.js for the active-project
@@ -35,9 +50,10 @@ const GH_TIMEOUT_MS = 5000
 const MAX_BUFFER = 1024 * 1024
 
 // Per-project state, keyed by project path: { lastInvoke, commitSince,
-// prSince, seenCommits, seenPrs, githubRepo }. `githubRepo` is `undefined`
-// until first detected, then either an "owner/repo" string or `null`
-// (confirmed: no GitHub remote) — checked once per project, not every poll.
+// prSince, conflictSince, seenCommits, seenPrs, seenConflicts, githubRepo }.
+// `githubRepo` is `undefined` until first detected, then either an
+// "owner/repo" string or `null` (confirmed: no GitHub remote) — checked once
+// per project, not every poll.
 const projectState = new Map()
 
 let warnedGitLog = false
@@ -80,8 +96,10 @@ function getState(project) {
       lastInvoke: 0,
       commitSince: bootTs,
       prSince: bootTs,
+      conflictSince: bootTs,
       seenCommits: new Set(),
       seenPrs: new Set(),
+      seenConflicts: new Set(),
       githubRepo: undefined,
     }
     projectState.set(project, st)
@@ -210,6 +228,144 @@ async function pollPrs(project, state, out) {
   state.prSince = maxTs
 }
 
+let warnedGhConflicts = false
+function warnGhConflicts(reason) {
+  if (warnedGhConflicts) return
+  warnedGhConflicts = true
+  console.warn('[planet] gitinfo.js: gh conflict polling degraded — ' + reason)
+}
+
+let warnedGitConflicts = false
+function warnGitConflicts(reason) {
+  if (warnedGitConflicts) return
+  warnedGitConflicts = true
+  console.warn('[planet] gitinfo.js: local merge-conflict polling degraded — ' + reason)
+}
+
+// A merge commit's subject line is the only read-only, universally-available
+// proxy for "this merge was contested" — real conflict markers/rerere
+// records aren't reliably present after the fact, but a human (or an
+// automated merge driver) narrating a revert/conflict/rebase in the subject
+// is a strong, cheap signal.
+const CONFLICT_SUBJECT_RE = /revert|conflict|\brebase\b/i
+
+// Open PRs whose mergeStateStatus reads as contested. 'CONFLICTING' isn't a
+// documented GitHub value (the real one is 'DIRTY') but costs nothing to
+// also check in case the field's vocabulary varies by GH version/API.
+function isConflictingStatus(status) {
+  return status === 'DIRTY' || status === 'CONFLICTING'
+}
+
+async function pollGithubConflicts(project, state, out) {
+  // state.githubRepo is resolved by pollPrs (called first in gitEvents) —
+  // don't re-detect it here. undefined (not yet resolved) or null (confirmed
+  // no GitHub remote) both mean "nothing to check".
+  if (!state.githubRepo) return
+
+  let stdout
+  try {
+    stdout = await execFileText(
+      'gh',
+      [
+        'pr',
+        'list',
+        '--repo',
+        state.githubRepo,
+        '--state',
+        'open',
+        '--json',
+        'number,title,mergeStateStatus,headRefName',
+      ],
+      GH_TIMEOUT_MS,
+    )
+  } catch (e) {
+    warnGhConflicts('`gh pr list` failed (missing/unauthenticated gh?) — ' + (e && e.message ? e.message : String(e)))
+    return
+  }
+
+  let list
+  try {
+    list = JSON.parse(stdout)
+  } catch (e) {
+    warnGhConflicts('`gh pr list` returned unparseable JSON — ' + e)
+    return
+  }
+  if (!Array.isArray(list)) return
+
+  for (const pr of list) {
+    if (!pr || typeof pr.number !== 'number' || !isConflictingStatus(pr.mergeStateStatus)) continue
+    const id = state.githubRepo + '#' + pr.number + ':conflict'
+    if (state.seenConflicts.has(id)) continue
+    state.seenConflicts.add(id)
+    out.push({
+      project,
+      kind: 'conflict',
+      id,
+      // Unlike a commit's %ct or a PR's mergedAt, "this PR is DIRTY" is a
+      // live state with no historical occurred-at timestamp of its own —
+      // ts is "detected now", same as a monitoring poll timestamping an
+      // observed condition.
+      ts: Date.now(),
+      title: truncateTitle(pr.title),
+      // Best-effort only: a branch name, not a project path — kept in case
+      // it's useful context, but it will not resolve to a settlement on its
+      // own. The repo-sibling pass in gitEvents() below fills `other` with
+      // an actual project path when one is available; that assignment wins.
+      other: typeof pr.headRefName === 'string' && pr.headRefName ? pr.headRefName : undefined,
+    })
+  }
+}
+
+async function pollLocalConflicts(project, state, out) {
+  let stdout
+  try {
+    stdout = await execFileText(
+      'git',
+      [
+        '-C',
+        project,
+        'log',
+        '--merges',
+        '--since=' + new Date(state.conflictSince).toISOString(),
+        '--pretty=%H|%ct|%s',
+      ],
+      GIT_TIMEOUT_MS,
+    )
+  } catch (e) {
+    warnGitConflicts(e && e.message ? e.message : String(e))
+    return
+  }
+
+  let maxTs = state.conflictSince
+  for (const line of stdout.split('\n')) {
+    if (!line) continue
+    const parsed = parseCommitLine(line)
+    if (!parsed) continue
+    if (parsed.ts > maxTs) maxTs = parsed.ts
+    if (!CONFLICT_SUBJECT_RE.test(parsed.subject)) continue
+    const id = parsed.hash + ':conflict'
+    if (state.seenConflicts.has(id)) continue
+    state.seenConflicts.add(id)
+    out.push({
+      project,
+      kind: 'conflict',
+      id,
+      ts: parsed.ts,
+      title: truncateTitle(parsed.subject),
+    })
+  }
+  state.conflictSince = maxTs
+}
+
+// Detects contested merges between related work. Two independent, purely
+// read-only signals — either may be unavailable (no `gh`, no GitHub remote,
+// no merges in range) and each degrades on its own via warn-once, exactly
+// like pollPrs, never throwing and never blocking the other signal.
+async function pollConflicts(project, state, out) {
+  await pollGithubConflicts(project, state, out)
+  await pollLocalConflicts(project, state, out)
+}
+
 export async function gitEvents() {
   let sessions
   try {
@@ -239,7 +395,8 @@ export async function gitEvents() {
         if (now - state.lastInvoke < MIN_POLL_INTERVAL_MS) return out // cache: too soon since our last real invocation
         state.lastInvoke = now
         await pollCommits(project, state, out)
-        await pollPrs(project, state, out)
+        await pollPrs(project, state, out) // resolves state.githubRepo, used below by pollConflicts
+        await pollConflicts(project, state, out)
       } catch (e) {
         // Never let one misbehaving project break the whole poll.
         warnGitLog('unexpected error polling ' + project + ': ' + e)
@@ -249,6 +406,30 @@ export async function gitEvents() {
   )
 
   const events = perProject.flat()
+
+  // Pair conflict events between two worktrees/checkouts of the SAME repo —
+  // the most reliable "related projects" signal available read-only, with no
+  // assumption about directory layout (parentDir-style heuristics don't hold
+  // across arbitrary worktree locations). Done as a post-pass over the
+  // now-fully-settled projectState so it can never race another active
+  // project's own githubRepo detection within this same poll cycle.
+  const projectsByRepo = new Map()
+  for (const project of activeProjects) {
+    const repo = projectState.get(project)?.githubRepo
+    if (!repo) continue
+    let list = projectsByRepo.get(repo)
+    if (!list) projectsByRepo.set(repo, (list = []))
+    list.push(project)
+  }
+  for (const e of events) {
+    if (e.kind !== 'conflict') continue
+    const repo = projectState.get(e.project)?.githubRepo
+    if (!repo) continue
+    const siblings = projectsByRepo.get(repo)
+    const sibling = siblings && siblings.find((p) => p !== e.project)
+    if (sibling) e.other = sibling // a real project path wins over any best-effort branch-name guess
+  }
+
   events.sort((a, b) => a.ts - b.ts)
   return events
 }

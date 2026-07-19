@@ -275,8 +275,16 @@ export function createHerald(world, seed) {
     style.remove()
   }
 
+  // Push an externally-authored chronicle line (e.g. an E-SIM raid outcome) to
+  // the front of the queue so it surfaces before ambient filler.
+  function narrate(text) {
+    if (typeof text === 'string' && text.trim()) {
+      if (eventQueue.length < MAX_EVENT_QUEUE) eventQueue.unshift(text.trim())
+    }
+  }
+
   // Kick off with the opening line already fading in.
   beginLine()
 
-  return { update, destroy }
+  return { update, destroy, narrate }
 }

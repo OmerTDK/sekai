@@ -2,3 +2,8 @@ node_modules
 dist
 .DS_Store
 /spikes/
+
+# electron-builder packaging artifacts
+release
+build/icon.png
+build/icon.icns
