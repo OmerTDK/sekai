@@ -85,6 +85,18 @@ const COAST_COLOR = 0xcdeee6 // animated coast-glow band
 const SHORE_BAND = 0x7fe0c8 // thin posterized shelf-line accent
 const FOAM_WHITE = 0xf1f6f6 // wave-break foam
 
+// --- frozen sea: an ice tint on the ocean surface itself near the poles (NO
+// separate shell — the water freezes in place, so it can never read as a
+// floating pane at grazing angles the way the old sea-ice caps did). ----------
+const ICE_COLOR = 0xdbe8f0 // pale matte ice white-blue
+const ICE_CRACK_COLOR = 0x8fb3cc // deeper icy blue in the pressure-crack veins
+const ICE_LAT_LO = 0.6 // |latitude| (0=equator, 1=pole) where ice starts
+const ICE_LAT_HI = 0.8 // ... where the surface is fully frozen
+const ICE_EDGE_JITTER = 0.16 // noise amplitude that makes the ice edge irregular
+const ICE_EDGE_SCALE = 3.2 // spatial frequency of the ice-edge noise
+const ICE_CRACK_SCALE = 34 // frequency of the pressure-crack veins
+const ICE_WAVE_DAMP = 0.9 // how far the swell flattens under full ice (0..1)
+
 // Normalized seafloor-depth denominator -- MUST match planet.js's
 // WATER_COLOR_RANGE (OCEAN_BASE_DEPTH 0.02 + OCEAN_FLOOR_AMP 0.008) so the
 // baked aDepth here is identical to what the terrain uses. (planet.js exposes
@@ -305,9 +317,29 @@ export function createOcean(planet, camera, seed) {
     { P: 'vec3', return: 'vec2' },
   )
 
+  // Frozen-sea palette + irregular polar-ice mask, computed from positionLocal
+  // so the vertex wave-flattening and the fragment colour agree exactly. The
+  // |latitude| is pushed through a noise-jittered smoothstep, so the frozen zone
+  // has a wavy, coastline-like edge instead of a clean latitude ring.
+  const uIce = color(ICE_COLOR)
+  const uIceCrack = color(ICE_CRACK_COLOR)
+  const uIceBias = uniform(0) // season-driven extent shift (winter grows the cap)
+  const iceMaskAt = (pos) => {
+    const lat = normalize(pos).y.abs()
+    const edge = mx_noise_float(pos.mul(ICE_EDGE_SCALE)).mul(ICE_EDGE_JITTER)
+    return smoothstep(float(ICE_LAT_LO), float(ICE_LAT_HI), lat.add(edge).add(uIceBias))
+  }
+
+  // Ice reads matte (no water sun-glint) — roughnessNode overrides the
+  // constructor roughness where the surface is frozen.
+  material.roughnessNode = mix(float(0.42), float(0.92), iceMaskAt(positionLocal))
+
   // Per-vertex geometric-amplitude scale: LOD * shoreline fade (crests shrink
-  // to nothing in the shallows -- covenant/coast-read protection).
-  const geoScale = uWaveLOD.mul(smoothstep(0.01, 0.14, aDepth))
+  // to nothing in the shallows -- covenant/coast-read protection), then the
+  // swell flattens to near-nothing under full ice so the frozen sea sits calm.
+  const geoScale = uWaveLOD
+    .mul(smoothstep(0.01, 0.14, aDepth))
+    .mul(iceMaskAt(positionLocal).mul(ICE_WAVE_DAMP).oneMinus())
 
   // --- positionNode: displace along the Gerstner field ---------------------
   material.positionNode = positionLocal.add(waveDisp(positionLocal).mul(geoScale))
@@ -427,6 +459,15 @@ export function createOcean(planet, camera, seed) {
     const foam = crest.add(shoreFoam).clamp(0, 1)
     waterColor.assign(mix(waterColor, uFoam, foam))
 
+    // --- frozen sea: blend the surface toward matte ice near the poles, with
+    // pressure-crack veins + faint snow mottle. This IS the ocean surface, so
+    // it conforms perfectly -- no floating shell, no grazing-angle pane.
+    const iceMask = iceMaskAt(positionLocal)
+    const crackN = mx_noise_float(positionWorld.mul(ICE_CRACK_SCALE))
+    const crackLines = smoothstep(0.05, 0.0, crackN.abs()).mul(0.55)
+    const iceCol = mix(uIce, uIceCrack, crackLines).add(mx_noise_float(positionWorld.mul(7)).mul(0.05))
+    waterColor.assign(mix(waterColor, iceCol, iceMask))
+
     return waterColor
   })()
 
@@ -439,6 +480,13 @@ export function createOcean(planet, camera, seed) {
     uTime.value = elapsed
     const alt = camera.position.length() - SEA_LEVEL
     uWaveLOD.value = 1 - smoothstepJS(LOD_NEAR, LOD_FAR, alt)
+    // Frozen-sea extent breathes with the season (winter grows the cap toward
+    // the equator). The season module's bias is negative in winter, so negate
+    // it to push the ice edge outward. Guarded — no-op if seasons isn't up yet.
+    const seasons = typeof window !== 'undefined' && window.__planet && window.__planet.seasons
+    if (seasons && typeof seasons.getSeaIceThresholdBias === 'function') {
+      uIceBias.value = -seasons.getSeaIceThresholdBias()
+    }
   }
 
   return { mesh, update }
