@@ -1,6 +1,6 @@
 # ART.md — Sekai Art Direction (v1, binding)
 
-**Status:** v1 — binding, owner-approved direction (Omer, 2026-07-17; M-LD milestone, see `docs/superpowers/plans/2026-07-16-claude-planet-program-plan.md`). Every terrain/water/cloud/camera JIT plan from M3 onward must cite this file. A handful of rules remain tagged **(PROPOSED)** — this doc's own extrapolation beyond what M-LD actually spiked or the owner verdicted; treat only those as flagged-not-settled, everything else below is binding.
+**Status:** v1 — binding, owner-approved direction (Omer, 2026-07-17; M-LD milestone, see `docs/superpowers/plans/2026-07-16-sekai-program-plan.md`). Every terrain/water/cloud/camera JIT plan from M3 onward must cite this file. A handful of rules remain tagged **(PROPOSED)** — this doc's own extrapolation beyond what M-LD actually spiked or the owner verdicted; treat only those as flagged-not-settled, everything else below is binding.
 
 **How to check a rule:** open `http://localhost:5173`, run `window.__planet.verify.gotoViewpoint(name)` for `orbit` / `mid-coast` / `ground-sunlit` / `night-city` / `storm` (`src/verifykit.js`), screenshot, compare against the rule below.
 

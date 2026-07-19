@@ -8,7 +8,7 @@
 > (~600fps hidden, timers exact), resume endpoint verified live + 400 on
 > malicious input. M1 verified in the same pass.
 
-> Program plan: `2026-07-16-claude-planet-program-plan.md` (v1.0, signed off).
+> Program plan: `2026-07-16-sekai-program-plan.md` (v1.0, signed off).
 > Builders: sonnet subagents on disjoint files. Architect owns package.json,
 > vite.config.js, electron/main.cjs, src/main.js, launcher, integration, merge.
 
@@ -74,7 +74,7 @@ loud fallbacks, measured eclipses).
 - [ ] main.js: import createVerifyKit, attach as `__planet.verify`.
 - [ ] package.json: pin `"three": "0.185.1"` exact; `"test"` runs scan tests
   + geometry tests; commit lockfile.
-- [ ] Repoint `~/Applications/Claude Planet.app` launcher to `npm run app`
+- [ ] Repoint `~/Applications/Sekai.app` launcher to `npm run app`
   (Electron) instead of Chrome app-mode.
 - [ ] Full verification: `npm test` green; `__planet.verify.sweep()` — all 5
   shots captured, fps ≥55, determinism hash stable across two reloads;

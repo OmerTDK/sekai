@@ -1,7 +1,7 @@
 # Roadmap
 
 > **SUPERSEDED** as of 2026-07-16 by
-> `docs/superpowers/plans/2026-07-16-claude-planet-program-plan.md` (v1.0).
+> `docs/superpowers/plans/2026-07-16-sekai-program-plan.md` (v1.0).
 > This file is kept for the architecture rationale (Godot/Tauri rejection,
 > path analysis) — do not plan work from it.
 
@@ -10,7 +10,7 @@ self-merge (no review gate). Everything is built by sonnet subagents on
 disjoint modules against contracts pinned by the architect session, then
 integrated and verified live in the running app before merge.
 
-Repo: https://github.com/OmerTDK/claude-planet (private)
+Repo: https://github.com/OmerTDK/sekai (private)
 
 ---
 

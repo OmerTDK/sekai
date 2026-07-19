@@ -6,10 +6,10 @@ file wins for process, the plan wins for scope.
 
 ## Branching & worktrees
 
-- `~/claude-planet` (the main checkout) stays parked on `main`, always — it
+- `~/sekai` (the main checkout) stays parked on `main`, always — it
   serves the stable app (`:5173`, the Dock app). Never switch its branch.
 - Every wave of work happens in a dedicated worktree:
-  `git worktree add ~/.config/superpowers/worktrees/claude-planet/<branch>`
+  `git worktree add ~/.config/superpowers/worktrees/sekai/<branch>`
   → own `npm install` → own dev-server port for verification → green
   baseline `npm test` before any builder starts.
 - Branch naming: `wave/<milestone-id>` (e.g. `wave/m-wx`). Historical

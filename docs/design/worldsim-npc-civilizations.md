@@ -4,7 +4,7 @@ Arc owner: world-sim foundation. Branch `wave/m3-tsl`. Engine: three.js
 0.185.1, `three/webgpu` (WebGPURenderer, `forceWebGL:true` today; M4 flips to
 the true WebGPU backend), TSL node materials, node `PostProcessing`.
 
-Plan reference: `docs/superpowers/plans/2026-07-16-claude-planet-program-plan.md`
+Plan reference: `docs/superpowers/plans/2026-07-16-sekai-program-plan.md`
 §"Deep world-simulation ladder" (L530) and §"World-sim expansion" (L559–593).
 
 ---
