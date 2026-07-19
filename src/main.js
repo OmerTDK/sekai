@@ -242,7 +242,14 @@ setTimeout(() => {
 async function pollEvents() {
   try {
     const res = await fetch('/api/events')
-    if (res.ok) events.ingest(await res.json())
+    if (!res.ok) return
+    const evs = await res.json()
+    events.ingest(evs)
+    // E-SIM rung 2/3: the SAME git feed drives data-driven border skirmishes,
+    // supply intercepts, faction standing, sieges and treaties. Guarded so it's a
+    // safe no-op until warSim is built (in the 6500ms settle timeout).
+    const ws = window.__planet && window.__planet.warSim
+    if (ws && typeof ws.ingest === 'function') ws.ingest(evs)
   } catch {
     /* server may be mid-restart; next poll catches up */
   }

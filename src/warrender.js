@@ -1,43 +1,66 @@
-// E-SIM conflict-ladder RENDER layer (rung 1) — see
-// docs/design/epilogue-e-sim.md §"R1-2 warrender.js". A pure projection of the
-// warsim.js DATA layer: it reads `warSim.raids` (seeded raid records) and
-// `warSim.raidStateAt(raid, warClock, out)` (the pure reducer) and draws each
-// raid as instanced armies marching → mustering → clashing on an on-land
-// battlefield, then the aftermath marks (winner banners, ground scorch,
-// ruins-props) that heal completely over the epoch, plus a night-torch ember
-// pool among the clashing units.
+// E-SIM conflict-ladder RENDER layer (rungs 1-3) — see
+// docs/design/epilogue-e-sim.md §"R1-2 / R2-3 / R3-2 warrender.js". A pure
+// projection of the warsim.js DATA layer: it reads `warSim.raids` (seeded +
+// data-driven raid records) and `warSim.raidStateAt(raid, warClock, out)` (the
+// pure reducer) and draws each raid as instanced armies marching → mustering →
+// clashing on an on-land battlefield, then the aftermath marks (winner banners,
+// ground scorch, ruins-props) that heal completely over the epoch, plus a
+// night-torch ember pool among the clashing units.
+//
+// RUNG 1 (always on): field raids — armies + banners + scorch + props + torches.
+// RUNG 2 (data-driven, additive): a translucent faction-influence "territory"
+//   overlay that ebbs between rival clusters and heals to nothing; and supply
+//   intercepts along routes — a road ambush (reuses the scorch ring) that strews
+//   supply wreckage (reuses the props mesh).
+// RUNG 3 (deep-sim, additive): sieges — besiegers ring a settlement on a
+//   covenant-clear offset ring (NEVER the footprint), holding then withdrawing,
+//   the ring healing on lift; and treaties — when two rivals reconcile the
+//   hostilities are replaced by a gold peace banner at the midpoint and a herald
+//   peace line. All rung 2/3 features are OPTIONAL projections of the warsim
+//   R2/R3 API (raid.kind / raid.ringDirs / raid.supplyProps / treatyBetween);
+//   when warsim exposes none of them (rung-1-only warsim) this layer renders
+//   EXACTLY the rung-1 theater — see the defensive readers below.
 //
 // THE COVENANT: this module owns its own THREE.Group added ALONGSIDE (never
 // inside) world.group; it never reads or writes world.js internals and never
 // holds a mutable reference to a session mesh. Every army position and every
-// mark (banner/scorch/prop) is a pure function of the war clock — warsim has
-// already covenant-clearance-tested every dir against the session anchors +
-// structure dirs, so this layer only READS planet.sampleHeight and paints.
-// Because raidStateAt(raid, clock) is idempotent over EPOCH, the marks heal
-// automatically and totally: scorch/banners fade + degenerate-scale to nothing
-// and props vanish at epoch end, returning the world bit-for-bit to its
-// pre-raid visual state. Session structures are never moved, recolored, scaled
-// or hidden by any path in here.
+// mark (banner/scorch/prop/territory/siege ring) is a pure function of the war
+// clock — warsim has already covenant-clearance-tested every dir against the
+// session anchors + structure dirs, so this layer only READS planet.sampleHeight
+// and paints. Because raidStateAt(raid, clock) is idempotent over EPOCH, the
+// marks heal automatically and totally: scorch/banners/territory fade +
+// degenerate-scale to nothing and props vanish at epoch/siege end, returning the
+// world bit-for-bit to its pre-raid visual state. The territory overlay is a
+// translucent additive drape (depthWrite:false), never a permanent stain — its
+// whole mesh hides when the map is at peace. Session structures are never moved,
+// recolored, scaled or hidden by any path in here; a siege rings the settlement
+// at an offset and never enters or overlaps the footprint.
 //
 // ENGINE: WebGPURenderer(forceWebGL) host — every material is a *NodeMaterial
 // from three/webgpu with a TSL node graph built ONCE at construction and
 // animated only through uniform() writes (S1 build-once/uniforms-only law).
 // Per-instance variation rides on custom instanced float attributes read in
-// the colorNode (aFaction/aFall/aHeal) — the exact civrender.js aRuin/aWarm
-// pattern, proven on the WebGL2 default host. Inactive instances hide via a
-// degenerate makeScale(0,0,0) (WebGPU-safe). frustumCulled=false everywhere
-// (instances span the globe).
+// the colorNode (aFaction/aFall/aHeal/aPeace/aIntensity) — the exact
+// civrender.js aRuin/aWarm pattern, proven on the WebGL2 default host. Inactive
+// instances hide via a degenerate makeScale(0,0,0) (WebGPU-safe).
+// frustumCulled=false everywhere (instances span the globe).
 //
-// DRAW-CALL BUDGET = 5, independent of raid count: (1) warriors InstancedMesh
-// + (2) banners + (3) scorch + (4) props + (5) torch Points.
+// DRAW-CALL BUDGET: 5 rung-1 draws — (1) warriors InstancedMesh + (2) banners +
+// (3) scorch + (4) props + (5) torch Points — plus (6) ONE territory overlay
+// InstancedMesh, drawn only while a conflict is actually contested (hidden at
+// peace). Siege / intercept / treaty visuals REUSE the warriors/banners/scorch/
+// props meshes — no new draws. Independent of raid count.
 //
 // DETERMINISM: the sole time source is warClock, accumulated from dt in
 // update(); raidStateAt(raid, warClock) is a pure function of it, so a reload
-// with a fixed ?seed replays identically. The ONE place Math.random is allowed
-// is the ephemeral torch/ember Points pool (never read back into sim state —
-// the same exemption events.js's firework pool ships under). No Date.now.
+// with a fixed ?seed replays identically. Territory intensity, siege occupancy
+// and treaty state are all pure projections of that clock + warsim state — no
+// per-frame RNG. The ONE place Math.random is allowed is the ephemeral torch/
+// ember Points pool (never read back into sim state — the same exemption
+// events.js's firework pool ships under). No Date.now.
 //
-// Contract (pinned): export function createWarRender(planet, warSim, seed) ->
+// Contract (pinned, UNCHANGED across rungs): export function
+// createWarRender(planet, warSim, seed) ->
 // { group, update(dt, camera, sunDir), setNarrator(fn) }.
 import * as THREE from 'three/webgpu'
 import { attribute, positionGeometry, uniform, vec3, mix, sin, smoothstep } from 'three/tsl'
@@ -55,6 +78,7 @@ const WARRIOR_SCALE = 0.006 // world units — unit-space geometry (~1 tall) sca
 const BANNER_SCALE = 0.0105
 const SCORCH_SCALE = 0.02 // disc radius in world units
 const PROP_SCALE = 0.006
+const SUPPLY_SCALE = 0.0042 // intercept supply wreckage — smaller scattered pieces (reuses the props geo)
 
 const WARRIOR_LIFT = 0.0004 // world units above sampleHeight (foot clearance)
 const BANNER_LIFT = 0.0004
@@ -64,6 +88,41 @@ const PROP_LIFT = 0.0004
 const FALLEN_LEAN = 1.25 // rad — a fully-fallen unit tips this far forward before greying out
 
 const NIGHT_DOT = 0.1 // sunDir·battlefieldDir below this ⇒ the battlefield is in night (torches lit)
+
+// --- Rung-2/3 dynamic-raid capacity ---------------------------------------
+// Rung-1 raids are known at construction (warSim.raids); rung-2/3 raids
+// (border skirmishes, supply intercepts, sieges) are appended to warSim.raids
+// at RUNTIME by warSim.ingest(events). We reserve a fixed pool of dynamic slots
+// AFTER the rung-1 region so those render without ever resizing a mesh or
+// disturbing a single rung-1 instance range (the rung-1 region stays byte-for-
+// byte identical to the shipped rung-1 layout).
+const DYN_SLOTS = 6 // concurrent runtime raids we can render (RAID_CAP+2 border headroom + sieges)
+const PER_RAID_WARRIORS = 32 // field army (ATK_MAX 16 + DEF_MAX 14) OR a siege ring — max per raid
+const PER_RAID_BANNERS = 8 // field 3 / siege ring banners / +1 treaty banner
+const PER_RAID_SCORCH = 16 // field ring 7 + raided settlement ring 7 / siege ground ring
+const PER_RAID_PROPS = 10 // field wrecks 3 + intercept supply scatter
+
+// --- Rung-2 territory / influence shading ---------------------------------
+const TERRITORY_SLOTS = 24 // max influence nodes (cluster anchors + contested borders touched by conflict)
+const TERRITORY_ANGLE = 0.06 // world units — influence disc radius on the surface
+const TERRITORY_LIFT = 0.0006 // world units above ground (drape, no z-fight)
+const TERRITORY_ALPHA = 0.3 // peak additive strength of an influence patch
+const TERRITORY_EBB = 0.9 // rad/s pulse rate of the influence breathing
+const TERRITORY_VISIBLE_MIN = 0.02 // hide the whole overlay below this max intensity (no peacetime stain)
+
+// --- Rung-3 siege ---------------------------------------------------------
+const SIEGE_HIDE_PRESENT = 0.03 // besiegers below this ring-presence are hidden (fully withdrawn)
+
+// Faction + mark palette.
+const REALM_TINT = 0x3b5c8c // banner-blue (RACE_PALETTES.human)
+const RAIDER_TINT = 0x6d7346 // orc drab-olive (RACE_PALETTES.orc cloth×accent), reads distinct from realm blue
+const PEACE_GOLD = 0xd9b24a // treaty cloth — neutral gold, distinct from both factions
+const FALLEN_GREY = { r: 0.18, g: 0.16, b: 0.14 } // fallen units grey toward this
+const SCORCH_DARK = 0x241d16 // burnt-earth char
+const GROUND_TONE = 0x6b6459 // neutral earth tone the scorch lerps back to as it heals
+const TORCH_WARM = 0xff7a2a // ember color
+
+const TAU = Math.PI * 2
 
 // Torch/ember pool (events.js firework-pool clone — the ONE Math.random block).
 const TORCH_POOL = 260 // shared additive-particle budget for ALL raids' battle torches
@@ -75,16 +134,6 @@ const TORCH_SPEED_MIN = 0.006 // world units/s ember rise speed
 const TORCH_SPEED_MAX = 0.014
 const TORCH_HEIGHT = 0.004 // world units above the unit the ember spawns at
 const EMBER_RATE = 26 // embers/sec spawned across all night-clashing units
-
-// Faction + mark palette.
-const REALM_TINT = 0x3b5c8c // banner-blue (RACE_PALETTES.human)
-const RAIDER_TINT = 0x6d7346 // orc drab-olive (RACE_PALETTES.orc cloth×accent), reads distinct from realm blue
-const FALLEN_GREY = { r: 0.18, g: 0.16, b: 0.14 } // fallen units grey toward this
-const SCORCH_DARK = 0x241d16 // burnt-earth char
-const GROUND_TONE = 0x6b6459 // neutral earth tone the scorch lerps back to as it heals
-const TORCH_WARM = 0xff7a2a // ember color
-
-const TAU = Math.PI * 2
 
 // ---------------------------------------------------------------------------
 // Module-scope scratch (write-before-read only; never holds state across calls
@@ -156,6 +205,20 @@ const ease = (t) => {
   const x = clamp(t, 0, 1)
   return x * x * (3 - 2 * x)
 }
+/** Scalar smoothstep (kept distinct from the TSL `smoothstep` node import above). */
+function smooth01(a, b, x) {
+  const t = clamp((x - a) / (b - a), 0, 1)
+  return t * t * (3 - 2 * t)
+}
+
+// Normalize a warsim raid kind to one of the render paths. Anything not a known
+// rung-2/3 kind (including a missing kind, i.e. a rung-1 raid) is a field raid.
+function raidKind(raid) {
+  const k = raid && raid.kind
+  return k === 'border' || k === 'intercept' || k === 'siege' ? k : 'raid'
+}
+const movingPhase = (p) =>
+  p === 'marching' || p === 'clashing' || p === 'approach' || p === 'encircle' || p === 'lift'
 
 // ---------------------------------------------------------------------------
 // Geometry authoring — local unit space, forward=+Z, up=+Y, feet/base at y=0,
@@ -167,6 +230,8 @@ const ease = (t) => {
 // ---------------------------------------------------------------------------
 let warnedMerge = false
 let warnedNoRaids = false
+let warnedDropRaid = false
+let warnedNoRing = false
 
 function paintRGB(geo, r, g, b) {
   const n = geo.attributes.position.count
@@ -239,6 +304,7 @@ function buildScorchGeo() {
 
 // A broken ruins-cart: a tilted bed, a snapped plank, one standing wheel and
 // one fallen wheel — a legible "battle wreck" silhouette (real wood tones).
+// Doubles as intercepted-supply wreckage (scaled down) at an ambush point.
 function buildPropGeo() {
   const wood = 0x5c4327
   const wheelCol = 0x33291f
@@ -255,6 +321,26 @@ function buildPropGeo() {
   ])
   geo.rotateZ(0.28) // list to one side as if collapsed
   return geo
+}
+
+// A flat influence disc for the territory overlay: same +Y-normal disc as the
+// scorch, but with a baked per-vertex `aRim` soft-ring alpha profile (0 at the
+// centre so a settlement's own footprint stays clear — covenant "around, not
+// on" — peaking at ~0.55R, back to 0 at the rim so patches blend softly).
+function buildTerritoryGeo() {
+  const g = new THREE.CircleGeometry(1, 28)
+  g.rotateX(-Math.PI / 2)
+  const pos = g.attributes.position
+  const n = pos.count
+  const rim = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const x = pos.getX(i)
+    const z = pos.getZ(i)
+    const r = Math.min(1, Math.hypot(x, z))
+    rim[i] = smooth01(0.0, 0.55, r) * (1 - smooth01(0.55, 1.0, r))
+  }
+  g.setAttribute('aRim', new THREE.BufferAttribute(rim, 1))
+  return g
 }
 
 // ---------------------------------------------------------------------------
@@ -291,19 +377,74 @@ const hasDirs = (raid) =>
   isVec(raid.defenseDir) &&
   isVec(raid.targetDir)
 
+// Ring slots for a siege (warsim R3 provides raid.ringDirs — Vector3[] or
+// [{dir,forward}]). Normalized to a uniform {dir,forward?} shape.
+function ringSlots(raid) {
+  const arr = Array.isArray(raid && raid.ringDirs) ? raid.ringDirs : []
+  const out = []
+  for (const e of arr) {
+    if (isVec(e)) out.push({ dir: e, forward: null })
+    else if (e && isVec(e.dir)) out.push({ dir: e.dir, forward: isVec(e.forward) ? e.forward : null })
+  }
+  return out
+}
+
+const bannerLen = (raid) => (Array.isArray(raid && raid.bannerDirs) ? raid.bannerDirs.length : 0)
+const scorchLen = (raid) => (Array.isArray(raid && raid.scorchDirs) ? raid.scorchDirs.length : 0)
+const propMainLen = (raid) => (Array.isArray(raid && raid.propDirs) ? raid.propDirs.length : 0)
+const propSupplyLen = (raid) => (Array.isArray(raid && raid.supplyProps) ? raid.supplyProps.length : 0)
+
+// A dir that warsim has ALREADY covenant-clearance-tested — for the treaty peace
+// banner, so a reconciliation mark never lands on an unverified spot. Never
+// falls back to a raw midpoint (which warsim never cleared).
+function covenantClearPoint(raid) {
+  if (isVec(raid.battlefieldDir)) return raid.battlefieldDir
+  if (Array.isArray(raid.bannerDirs)) {
+    for (const b of raid.bannerDirs) {
+      const d = isVec(b) ? b : b && b.dir
+      if (isVec(d)) return d
+    }
+  }
+  if (Array.isArray(raid.ringDirs)) {
+    for (const r of raid.ringDirs) {
+      const d = isVec(r) ? r : r && r.dir
+      if (isVec(d)) return d
+    }
+  }
+  if (isVec(raid.musterDir)) return raid.musterDir
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // createWarRender
 // ---------------------------------------------------------------------------
 export function createWarRender(planet, warSim, seed) {
   const group = new THREE.Group()
   const timeUniforms = [] // every animated material's time uniform, written each frame
-  const raids = warSim && Array.isArray(warSim.raids) ? warSim.raids.filter(Boolean) : []
+
+  // Read warSim.raids FRESH each call — rung-2/3 raids are appended at runtime
+  // by warSim.ingest(); the layer must pick them up.
+  const rawRaids = () => (warSim && Array.isArray(warSim.raids) ? warSim.raids : [])
+  const initialRaids = rawRaids().filter(Boolean)
+
+  // isRaider(projectOrSettlement) — optional in warsim; falls back to a heuristic.
+  const isRaiderKnown = warSim && typeof warSim.isRaider === 'function'
+  function isRaiderOf(x) {
+    if (isRaiderKnown && x != null) {
+      try {
+        return !!warSim.isRaider(x)
+      } catch {
+        /* ignore */
+      }
+    }
+    return false
+  }
 
   // Ground radius for a mark/unit — never below sea so a dir whose sampleHeight
   // returns seafloor still plants on the surface, not in the abyss.
   const groundRadius = (dir) => Math.max(planet.sampleHeight(dir), SEA_LEVEL)
 
-  // --- resolve per-raid formation slots + assign packed instance ranges ------
+  // --- resolve per-raid formation slots (rung-1 field armies) ----------------
   // Slots come from warsim; if a raid omits them we synthesize a deterministic
   // fallback stream so the layer still plays (pure projection stays robust).
   function resolveSlots(raid, side) {
@@ -316,51 +457,63 @@ export function createWarRender(planet, warSim, seed) {
     return out
   }
 
-  const layout = []
-  for (const raid of raids) {
-    const atkSlots = resolveSlots(raid, 'atk')
-    const defSlots = resolveSlots(raid, 'def')
-    layout.push({
-      raid,
-      atkSlots,
-      defSlots,
-      atkCount: atkSlots.length,
-      defCount: defSlots.length,
-      bannerCount: Array.isArray(raid.bannerDirs) ? raid.bannerDirs.length : 0,
-      scorchCount: Array.isArray(raid.scorchDirs) ? raid.scorchDirs.length : 0,
-      propCount: Array.isArray(raid.propDirs) ? raid.propDirs.length : 0,
-      atkBase: 0,
-      defBase: 0,
-      bannerBase: 0,
-      scorchBase: 0,
-      propBase: 0,
-    })
+  // Per-raid slot geometry (kind-aware): a siege's "attackers" are its ring
+  // besiegers; every other kind is a field army.
+  function raidSlots(raid) {
+    if (raidKind(raid) === 'siege') return { atk: ringSlots(raid), def: [] }
+    return { atk: resolveSlots(raid, 'atk'), def: resolveSlots(raid, 'def') }
   }
-  let wN = 0
-  let bN = 0
-  let sN = 0
-  let pN = 0
-  for (const L of layout) {
-    L.atkBase = wN
-    wN += L.atkCount
-    L.defBase = wN
-    wN += L.defCount
-    L.bannerBase = bN
-    bN += L.bannerCount
-    L.scorchBase = sN
-    sN += L.scorchCount
-    L.propBase = pN
-    pN += L.propCount
-  }
-  const warriorCap = Math.max(1, wN)
-  const bannerCap = Math.max(1, bN)
-  const scorchCap = Math.max(1, sN)
-  const propCap = Math.max(1, pN)
 
-  const enabled = layout.length > 0 && wN > 0
-  if (!enabled && !warnedNoRaids) {
+  // ---- (0) rung-1 region layout: TIGHT per-raid ranges, computed ONCE, exactly
+  // as the shipped rung-1 layer packed them. The rung-1 raids occupy instance
+  // indices [0, iW/iB/iS/iP) and are never re-packed → byte-identical rung-1
+  // rendering. Dynamic (rung-2/3) raids live in fixed-size blocks AFTER this.
+  const initLayout = []
+  let iW = 0
+  let iB = 0
+  let iS = 0
+  let iP = 0
+  for (const raid of initialRaids) {
+    const slots = raidSlots(raid)
+    const propMain = propMainLen(raid)
+    const propSupply = propSupplyLen(raid)
+    const L = {
+      raid,
+      id: raid.id,
+      kind: raidKind(raid),
+      permanent: true,
+      atkSlots: slots.atk,
+      defSlots: slots.def,
+      atkCount: slots.atk.length,
+      defCount: slots.def.length,
+      bannerCount: bannerLen(raid),
+      scorchCount: scorchLen(raid),
+      propMain,
+      propSupply,
+      propCount: propMain + propSupply,
+      atkBase: iW,
+      defBase: iW + slots.atk.length,
+      bannerBase: iB,
+      scorchBase: iS,
+      propBase: iP,
+    }
+    initLayout.push(L)
+    iW += L.atkCount + L.defCount
+    iB += L.bannerCount
+    iS += L.scorchCount
+    iP += L.propCount
+  }
+
+  // Total capacities = rung-1 tight region + fixed dynamic pool.
+  const warriorCap = Math.max(1, iW + DYN_SLOTS * PER_RAID_WARRIORS)
+  const bannerCap = Math.max(1, iB + DYN_SLOTS * PER_RAID_BANNERS)
+  const scorchCap = Math.max(1, iS + DYN_SLOTS * PER_RAID_SCORCH)
+  const propCap = Math.max(1, iP + DYN_SLOTS * PER_RAID_PROPS)
+  const territoryCap = TERRITORY_SLOTS
+
+  if (initialRaids.length === 0 && !warnedNoRaids) {
     warnedNoRaids = true
-    console.warn('[planet] warrender.js: no raids to render — the war layer is idle this session')
+    console.warn('[planet] warrender.js: no seeded raids — the war layer idles until data-driven raids arrive')
   }
 
   // Pre-allocated live-unit position buffer for ember spawning (built once, no
@@ -392,13 +545,19 @@ export function createWarRender(planet, warSim, seed) {
   const warriorMesh = new THREE.InstancedMesh(warriorGeo, warriorMat, warriorCap)
 
   // ---- (2) banners --------------------------------------------------------
+  // aFaction tint + aHeal fade (rung 1) + aPeace (rung 3): a treaty banner mixes
+  // the faction tint toward neutral gold. aPeace defaults 0 for every rung-1
+  // banner ⇒ mix(...,0) is a no-op ⇒ rung-1 banners render identically.
   const bFactionBuf = new THREE.InstancedBufferAttribute(new Float32Array(bannerCap), 1)
   const bHealBuf = new THREE.InstancedBufferAttribute(new Float32Array(bannerCap), 1)
+  const bPeaceBuf = new THREE.InstancedBufferAttribute(new Float32Array(bannerCap), 1)
   bFactionBuf.setUsage(THREE.DynamicDrawUsage)
   bHealBuf.setUsage(THREE.DynamicDrawUsage)
+  bPeaceBuf.setUsage(THREE.DynamicDrawUsage)
   const bannerGeo = buildBannerGeo()
   bannerGeo.setAttribute('aFaction', bFactionBuf)
   bannerGeo.setAttribute('aHeal', bHealBuf)
+  bannerGeo.setAttribute('aPeace', bPeaceBuf)
 
   const bannerMat = new THREE.MeshStandardNodeMaterial({
     flatShading: true,
@@ -410,7 +569,9 @@ export function createWarRender(planet, warSim, seed) {
     const vcol = attribute('color', 'vec3')
     const aFaction = attribute('aFaction', 'float')
     const aHeal = attribute('aHeal', 'float')
-    const tint = mix(vcolOf(REALM_TINT), vcolOf(RAIDER_TINT), aFaction)
+    const aPeace = attribute('aPeace', 'float')
+    const factionTint = mix(vcolOf(REALM_TINT), vcolOf(RAIDER_TINT), aFaction)
+    const tint = mix(factionTint, vcolOf(PEACE_GOLD), aPeace) // aPeace=0 (rung-1) ⇒ factionTint
     const lit = tint.mul(vcol)
     bannerMat.colorNode = mix(lit, vcolOf(GROUND_TONE), aHeal.mul(0.6)) // fade toward ground as it heals
   }
@@ -464,18 +625,55 @@ export function createWarRender(planet, warSim, seed) {
     group.add(m)
   }
 
-  // Static per-instance faction: warriors (0=defender,1=attacker), banners
-  // (winner side). Written once — these never change over an epoch.
-  for (const L of layout) {
-    for (let i = 0; i < L.atkCount; i++) wFactionBuf.array[L.atkBase + i] = 1
-    for (let i = 0; i < L.defCount; i++) wFactionBuf.array[L.defBase + i] = 0
-    const raiderWon = L.raid.winnerFaction ? L.raid.winnerFaction === 'raider' : L.raid.outcome === 'raided'
-    for (let j = 0; j < L.bannerCount; j++) bFactionBuf.array[L.bannerBase + j] = raiderWon ? 1 : 0
-  }
-  wFactionBuf.needsUpdate = true
-  bFactionBuf.needsUpdate = true
+  // ---- (5) territory / influence overlay (rung 2, +1 draw call) -----------
+  // Translucent additive faction-tinted discs draped on the ground at rival
+  // cluster anchors (+ contested battlefield midpoints). Unlit (a flat wash,
+  // sun-independent). Opacity = per-vertex soft ring × per-instance conflict
+  // intensity × a uTime ebb × a peak alpha — so it breathes and, when the map
+  // is at peace, drops to zero and the whole mesh hides (never a permanent
+  // stain). depthWrite:false + renderOrder:-1 ⇒ drawn under the armies.
+  const terrFactionBuf = new THREE.InstancedBufferAttribute(new Float32Array(territoryCap), 1)
+  const terrIntensityBuf = new THREE.InstancedBufferAttribute(new Float32Array(territoryCap), 1)
+  terrFactionBuf.setUsage(THREE.DynamicDrawUsage)
+  terrIntensityBuf.setUsage(THREE.DynamicDrawUsage)
+  const territoryGeo = buildTerritoryGeo()
+  territoryGeo.setAttribute('aFaction', terrFactionBuf)
+  territoryGeo.setAttribute('aIntensity', terrIntensityBuf)
 
-  // ---- (5) torch / ember Points pool (events.js firework-pool clone) -------
+  const territoryMat = new THREE.MeshBasicNodeMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  })
+  {
+    const uTime = uniform(0)
+    timeUniforms.push(uTime)
+    const aRim = attribute('aRim', 'float')
+    const aFaction = attribute('aFaction', 'float')
+    const aIntensity = attribute('aIntensity', 'float')
+    territoryMat.colorNode = mix(vcolOf(REALM_TINT), vcolOf(RAIDER_TINT), aFaction)
+    const ebb = sin(uTime.mul(TERRITORY_EBB)).mul(0.2).add(0.8)
+    territoryMat.opacityNode = aRim.mul(aIntensity).mul(ebb).mul(TERRITORY_ALPHA)
+  }
+  const territoryMesh = new THREE.InstancedMesh(territoryGeo, territoryMat, territoryCap)
+  territoryMesh.count = territoryCap
+  territoryMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  territoryMesh.frustumCulled = false
+  territoryMesh.visible = false
+  territoryMesh.renderOrder = -1
+  _mat4.makeScale(0, 0, 0)
+  for (let i = 0; i < territoryCap; i++) territoryMesh.setMatrixAt(i, _mat4)
+  territoryMesh.instanceMatrix.needsUpdate = true
+  group.add(territoryMesh)
+
+  const territoryNodes = [] // { dir, faction(0 realm / 0.5 contested / 1 raider), radiusMul }
+  const territoryByRaid = new Map() // raid.id -> [nodeIndex]
+  const nodeHeat = new Float32Array(territoryCap)
+  let lastTerrMax = 0
+
+  // ---- (6) torch / ember Points pool (events.js firework-pool clone) -------
   // Parallel typed arrays, round-robin cursor, additive Points, TTL fade. This
   // is the ONE place Math.random is allowed — ephemeral spectacle, never read
   // back into sim/mark/schedule state.
@@ -569,7 +767,289 @@ export function createWarRender(planet, warSim, seed) {
   function setNarrator(fn) {
     narrator = typeof fn === 'function' ? fn : () => {}
   }
-  const lastPhase = new Map() // raid.id -> last observed phase, for the once-per-epoch aftermath narration
+  const lastPhase = new Map() // raid.id -> last observed phase (once-per-epoch outcome narration)
+  const lastTreaty = new Map() // raid.id -> last observed treaty flag (once-per-treaty peace narration)
+
+  // ---- dynamic-raid allocator ---------------------------------------------
+  const alloc = new Map() // raid.id -> layout record
+  const dynFree = [] // free dynamic-slot indices [0, DYN_SLOTS)
+  for (let k = DYN_SLOTS - 1; k >= 0; k--) dynFree.push(k)
+  let staticDirty = false // per-instance faction/peace attrs need re-upload
+  let layoutSig = null
+
+  // Seed the rung-1 region into the allocator and write its static attributes.
+  for (const L of initLayout) {
+    alloc.set(L.id, L)
+    writeStaticAttrs(L)
+  }
+
+  function writeStaticAttrs(L) {
+    const raiderBanner =
+      L.kind === 'siege'
+        ? true // besiegers fly raider colours
+        : L.raid.winnerFaction
+          ? L.raid.winnerFaction === 'raider'
+          : L.raid.outcome === 'raided'
+    for (let i = 0; i < L.atkCount; i++) wFactionBuf.array[L.atkBase + i] = 1
+    for (let i = 0; i < L.defCount; i++) wFactionBuf.array[L.defBase + i] = 0
+    for (let j = 0; j < L.bannerCount; j++) {
+      bFactionBuf.array[L.bannerBase + j] = raiderBanner ? 1 : 0
+      bPeaceBuf.array[L.bannerBase + j] = 0
+    }
+    staticDirty = true
+  }
+
+  function allocDynamic(raid) {
+    if (alloc.has(raid.id)) return
+    if (dynFree.length === 0) {
+      if (!warnedDropRaid) {
+        warnedDropRaid = true
+        console.warn('[planet] warrender.js: dynamic-raid pool full — extra concurrent raid not rendered this cycle')
+      }
+      return
+    }
+    const k = dynFree.pop()
+    const kind = raidKind(raid)
+    const slots = raidSlots(raid)
+    if (kind === 'siege' && slots.atk.length === 0 && !warnedNoRing) {
+      warnedNoRing = true
+      console.warn('[planet] warrender.js: siege has no covenant-clear ring (raid.ringDirs) — rendering marks only')
+    }
+    let atkCount = Math.min(slots.atk.length, PER_RAID_WARRIORS)
+    let defCount = Math.min(slots.def.length, PER_RAID_WARRIORS - atkCount)
+    const bannerCount = Math.min(Math.max(bannerLen(raid), 1), PER_RAID_BANNERS) // >=1 leaves a treaty-banner slot
+    const scorchCount = Math.min(scorchLen(raid), PER_RAID_SCORCH)
+    const propMain = Math.min(propMainLen(raid), PER_RAID_PROPS)
+    const propSupply = Math.min(propSupplyLen(raid), PER_RAID_PROPS - propMain)
+    const wBlk = iW + k * PER_RAID_WARRIORS
+    const L = {
+      raid,
+      id: raid.id,
+      kind,
+      permanent: false,
+      dynSlot: k,
+      atkSlots: slots.atk,
+      defSlots: slots.def,
+      atkCount,
+      defCount,
+      bannerCount,
+      scorchCount,
+      propMain,
+      propSupply,
+      propCount: propMain + propSupply,
+      atkBase: wBlk,
+      defBase: wBlk + atkCount,
+      bannerBase: iB + k * PER_RAID_BANNERS,
+      scorchBase: iS + k * PER_RAID_SCORCH,
+      propBase: iP + k * PER_RAID_PROPS,
+    }
+    alloc.set(raid.id, L)
+    writeStaticAttrs(L)
+  }
+
+  function freeRaid(id, L) {
+    for (let i = 0; i < L.atkCount; i++) {
+      hideAt(warriorMesh, L.atkBase + i)
+      wFactionBuf.array[L.atkBase + i] = 0
+      wFallBuf.array[L.atkBase + i] = 0
+    }
+    for (let i = 0; i < L.defCount; i++) {
+      hideAt(warriorMesh, L.defBase + i)
+      wFactionBuf.array[L.defBase + i] = 0
+      wFallBuf.array[L.defBase + i] = 0
+    }
+    for (let j = 0; j < L.bannerCount; j++) {
+      hideAt(bannerMesh, L.bannerBase + j)
+      bFactionBuf.array[L.bannerBase + j] = 0
+      bPeaceBuf.array[L.bannerBase + j] = 0
+      bHealBuf.array[L.bannerBase + j] = 0
+    }
+    for (let j = 0; j < L.scorchCount; j++) {
+      hideAt(scorchMesh, L.scorchBase + j)
+      sHealBuf.array[L.scorchBase + j] = 0
+    }
+    for (let j = 0; j < L.propCount; j++) hideAt(propMesh, L.propBase + j)
+    if (typeof L.dynSlot === 'number') dynFree.push(L.dynSlot)
+    alloc.delete(id)
+    lastPhase.delete(id)
+    lastTreaty.delete(id)
+    staticDirty = true
+  }
+
+  // Reconcile the allocator + territory nodes with the CURRENT raid set. Cheap
+  // no-op when the set is unchanged (the rung-1 offline case → the layout is
+  // built exactly once, identical to the shipped rung-1 layer).
+  function ensureLayout() {
+    const raw = rawRaids()
+    let sig = ''
+    for (const r of raw) if (r && r.id) sig += r.id + '|'
+    if (sig === layoutSig) return
+    layoutSig = sig
+    const present = new Set()
+    for (const r of raw) {
+      if (!r || !r.id) continue
+      present.add(r.id)
+      if (!alloc.has(r.id)) allocDynamic(r)
+    }
+    for (const [id, L] of alloc) {
+      if (!L.permanent && !present.has(id)) freeRaid(id, L)
+    }
+    buildTerritoryNodes(raw)
+    flushStaticAttrs()
+  }
+
+  function flushStaticAttrs() {
+    if (!staticDirty) return
+    wFactionBuf.needsUpdate = true
+    wFallBuf.needsUpdate = true
+    bFactionBuf.needsUpdate = true
+    bPeaceBuf.needsUpdate = true
+    bHealBuf.needsUpdate = true
+    warriorMesh.instanceMatrix.needsUpdate = true
+    bannerMesh.instanceMatrix.needsUpdate = true
+    scorchMesh.instanceMatrix.needsUpdate = true
+    propMesh.instanceMatrix.needsUpdate = true
+    staticDirty = false
+  }
+
+  // ---- territory node derivation ------------------------------------------
+  const keyDir = (d) => (Math.round(d.x * 100) | 0) + ',' + (Math.round(d.y * 100) | 0) + ',' + (Math.round(d.z * 100) | 0)
+  // faction of a settlement record: raider(1)/realm(0) via warsim.isRaider when
+  // available, else a positional default (source side raids, target defends).
+  function factionOf(rec, dflt) {
+    if (rec != null && isRaiderKnown) return isRaiderOf(rec) ? 1 : 0
+    return dflt
+  }
+
+  function buildTerritoryNodes(raw) {
+    territoryNodes.length = 0
+    territoryByRaid.clear()
+    const seen = new Map() // rounded-dir -> node index (dedup shared cluster anchors)
+    const addNode = (dir, faction, radiusMul, raidId, dedup) => {
+      if (!isVec(dir)) return
+      let idx = -1
+      const key = dedup ? keyDir(dir) : null
+      if (dedup && seen.has(key)) idx = seen.get(key)
+      if (idx < 0) {
+        if (territoryNodes.length >= TERRITORY_SLOTS) return
+        idx = territoryNodes.length
+        territoryNodes.push({ dir: new THREE.Vector3(dir.x, dir.y, dir.z).normalize(), faction, radiusMul })
+        if (dedup) seen.set(key, idx)
+      }
+      let arr = territoryByRaid.get(raidId)
+      if (!arr) {
+        arr = []
+        territoryByRaid.set(raidId, arr)
+      }
+      if (arr.indexOf(idx) < 0) arr.push(idx)
+    }
+    for (const r of raw) {
+      if (!r || !r.id) continue
+      addNode(r.sourceDir, factionOf(r.raider, 1), 1, r.id, true) // raider cluster
+      addNode(r.targetDir, factionOf(r.target, 0), 1, r.id, true) // realm cluster
+      addNode(r.battlefieldDir, 0.5, 1.3, r.id, false) // contested borderland
+    }
+    for (let i = 0; i < territoryCap; i++) {
+      if (i < territoryNodes.length) {
+        const nd = territoryNodes[i]
+        terrFactionBuf.array[i] = nd.faction
+        _dummy.position.copy(nd.dir).multiplyScalar(groundRadius(nd.dir) + TERRITORY_LIFT)
+        orientOnSurface(_dummy, nd.dir, anyForward(nd.dir, _fwd))
+        _dummy.scale.setScalar(TERRITORY_ANGLE * nd.radiusMul)
+        _dummy.updateMatrix()
+        territoryMesh.setMatrixAt(i, _dummy.matrix)
+      } else {
+        terrFactionBuf.array[i] = 0
+        terrIntensityBuf.array[i] = 0
+        _mat4.makeScale(0, 0, 0)
+        territoryMesh.setMatrixAt(i, _mat4)
+      }
+    }
+    terrFactionBuf.needsUpdate = true
+    terrIntensityBuf.needsUpdate = true
+    territoryMesh.instanceMatrix.needsUpdate = true
+  }
+
+  // ---- treaty / narration helpers -----------------------------------------
+  const treatyKnown = warSim && typeof warSim.treatyBetween === 'function'
+  const projectOf = (s) => (s == null ? null : typeof s === 'string' ? s : s.project != null ? s.project : null)
+  function treatyActive(raid) {
+    if (!treatyKnown) return false
+    const a = projectOf(raid.raider)
+    const b = projectOf(raid.target)
+    if (a == null || b == null) return false
+    try {
+      return !!warSim.treatyBetween(a, b)
+    } catch {
+      return false
+    }
+  }
+  function peaceLine(raid) {
+    for (const m of ['treatyLine', 'peaceLine']) {
+      if (warSim && typeof warSim[m] === 'function') {
+        try {
+          const l = warSim[m](raid)
+          if (l) return l
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    const a = (raid.raider && raid.raider.name) || 'the war-band'
+    const b = (raid.target && raid.target.name) || 'the free peoples'
+    return `A treaty is sealed — ${a} and ${b} lower their banners and the roads reopen`
+  }
+  function narrateFor(raid, st, kind, treaty) {
+    const id = raid.id
+    const prevTreaty = lastTreaty.get(id) || false
+    if (treaty && !prevTreaty) narrator(peaceLine(raid))
+    lastTreaty.set(id, treaty)
+    const prev = lastPhase.get(id)
+    lastPhase.set(id, st.phase)
+    if (treaty) return // peace suppresses the battle outcome line
+    const entered =
+      kind === 'siege' ? st.phase === 'lift' && prev !== 'lift' : st.phase === 'aftermath' && prev !== 'aftermath'
+    if (entered) {
+      let line = ''
+      try {
+        if (typeof warSim.outcomeLine === 'function') line = warSim.outcomeLine(raid)
+      } catch {
+        line = ''
+      }
+      if (line) narrator(line)
+    }
+  }
+
+  // ---- conflict "heat" driving the territory overlay ----------------------
+  function raidHeat(kind, st) {
+    const p = st.phase
+    if (kind === 'siege') {
+      if (p === 'approach' || p === 'encircle' || p === 'hold') return 1
+      if (p === 'lift') return 0.6
+      if (p === 'healed') return (1 - clamp(num(st.healFrac, 1), 0, 1)) * 0.3
+      return 0
+    }
+    if (p === 'marching' || p === 'clashing') return 1
+    if (p === 'aftermath') return 1 - clamp(num(st.aftermathT, 0), 0, 1) * 0.4
+    if (p === 'healed') return (1 - clamp(num(st.healFrac, 1), 0, 1)) * 0.3
+    return 0
+  }
+  function addNodeHeat(raidId, heat) {
+    const arr = territoryByRaid.get(raidId)
+    if (!arr) return
+    for (const idx of arr) if (heat > nodeHeat[idx]) nodeHeat[idx] = heat
+  }
+  function writeTerritory() {
+    let mx = 0
+    for (let i = 0; i < territoryNodes.length; i++) {
+      const h = nodeHeat[i]
+      terrIntensityBuf.array[i] = h
+      if (h > mx) mx = h
+    }
+    for (let i = territoryNodes.length; i < territoryCap; i++) terrIntensityBuf.array[i] = 0
+    terrIntensityBuf.needsUpdate = true
+    lastTerrMax = mx
+  }
 
   // ---- placement helpers --------------------------------------------------
   let liveCount = 0 // living night-clashing unit positions collected this pass (for embers)
@@ -579,6 +1059,8 @@ export function createWarRender(planet, warSim, seed) {
     mesh.setMatrixAt(idx, _mat4)
   }
 
+  // Field army (rung 1 — UNCHANGED): source→muster→battlefield (attacker),
+  // target→defense→battlefield (defender), interpolated by the clock.
   function placeArmy(L, st, isAtk, night) {
     const raid = L.raid
     const slots = isAtk ? L.atkSlots : L.defSlots
@@ -587,9 +1069,6 @@ export function createWarRender(planet, warSim, seed) {
     const sideAlive = isAtk ? num(st.atkAlive, 1) : num(st.defAlive, 1)
     const marching = st.phase === 'marching'
 
-    // Formation center + the enemy center it faces, interpolated by the clock.
-    // Attackers: source→muster (march), muster→battlefield (clash).
-    // Defenders: target→defense (muster), defense→battlefield (clash).
     let center
     let enemyCenter
     if (isAtk) {
@@ -614,8 +1093,6 @@ export function createWarRender(planet, warSim, seed) {
       const slot = slots[i]
       const dir = offsetPoint(center, slot.bearing, slot.dist, _unitDir)
       const gR = groundRadius(dir)
-      // Fallen fraction: a unit whose fallAt has passed tips + greys, scaled by
-      // how far its side has lost (loser side falls harder).
       let fall = 0
       if (clashT > 0 && slot.fallAt <= clashT) fall = clamp((clashT - slot.fallAt) * 4, 0, 1) * (1 - sideAlive)
       wFallBuf.array[idx] = fall
@@ -625,8 +1102,44 @@ export function createWarRender(planet, warSim, seed) {
       _dummy.scale.setScalar(WARRIOR_SCALE)
       _dummy.updateMatrix()
       warriorMesh.setMatrixAt(idx, _dummy.matrix)
-      // Living units at night during the clash seed the torch embers.
       if (night && !marching && fall < 0.5 && liveCount < liveBuf.length) liveBuf[liveCount++].copy(_dummy.position)
+    }
+  }
+
+  // Rung-3 siege: besiegers ride the covenant-clear ring (raid.ringDirs), facing
+  // inward toward the settlement; they slide in from the raider anchor as the
+  // ring fills (present 0→1) and withdraw on 'lift' (present 1→0). They never
+  // enter the footprint — every ring dir was clearance-tested by warsim.
+  function placeSiege(L, sg, night) {
+    const raid = L.raid
+    const slots = L.atkSlots
+    const base = L.atkBase
+    const n = L.atkCount
+    const target = raid.targetDir
+    const from = isVec(raid.sourceDir) ? raid.sourceDir : null
+    for (let i = 0; i < n; i++) {
+      const idx = base + i
+      const slot = slots[i]
+      const ringDir = slot && slot.dir
+      if (!isVec(ringDir) || sg.present < SIEGE_HIDE_PRESENT) {
+        hideAt(warriorMesh, idx)
+        wFallBuf.array[idx] = 0
+        continue
+      }
+      const dir = from ? slerpUnit(from, ringDir, ease(sg.present), _unitDir) : _unitDir.copy(ringDir)
+      const gR = groundRadius(dir)
+      wFallBuf.array[idx] = 0
+      _dummy.position.copy(dir).multiplyScalar(gR + WARRIOR_LIFT)
+      const face = isVec(target)
+        ? tangentToward(dir, target, _fwd)
+        : slot.forward
+          ? _fwd.copy(slot.forward)
+          : anyForward(dir, _fwd)
+      orientOnSurface(_dummy, dir, face)
+      _dummy.scale.setScalar(WARRIOR_SCALE)
+      _dummy.updateMatrix()
+      warriorMesh.setMatrixAt(idx, _dummy.matrix)
+      if (night && sg.holding && liveCount < liveBuf.length) liveBuf[liveCount++].copy(_dummy.position)
     }
   }
 
@@ -641,21 +1154,44 @@ export function createWarRender(planet, warSim, seed) {
     }
   }
 
-  function placeBanners(L, st, show) {
-    const dirs = L.raid.bannerDirs || []
+  // Banners. `treatyMode` repaints slot 0 as a neutral gold peace banner at the
+  // (covenant-clear) battlefield midpoint and hides the rest.
+  function placeBanners(L, st, show, treatyMode) {
+    const raid = L.raid
     const heal = clamp(num(st.healFrac, 0), 0, 1)
+    if (treatyMode) {
+      const peaceDir = covenantClearPoint(raid) // warsim-cleared point only (never a raw midpoint)
+      for (let j = 0; j < L.bannerCount; j++) {
+        const idx = L.bannerBase + j
+        if (j === 0 && isVec(peaceDir)) {
+          bPeaceBuf.array[idx] = 1
+          bHealBuf.array[idx] = 0
+          _dummy.position.copy(peaceDir).multiplyScalar(groundRadius(peaceDir) + BANNER_LIFT)
+          orientOnSurface(_dummy, peaceDir, anyForward(peaceDir, _fwd))
+          _dummy.scale.setScalar(BANNER_SCALE * 1.15)
+          _dummy.updateMatrix()
+          bannerMesh.setMatrixAt(idx, _dummy.matrix)
+        } else {
+          hideAt(bannerMesh, idx)
+          bPeaceBuf.array[idx] = 0
+        }
+      }
+      return
+    }
+    const dirs = raid.bannerDirs || []
     for (let j = 0; j < L.bannerCount; j++) {
       const idx = L.bannerBase + j
+      bPeaceBuf.array[idx] = 0 // reset a slot that may have carried a peace banner last cycle
       const bd = dirs[j]
-      if (!show || !bd || !isVec(bd.dir)) {
+      const bdDir = isVec(bd) ? bd : bd && bd.dir
+      if (!show || !isVec(bdDir)) {
         hideAt(bannerMesh, idx)
         continue
       }
-      const dir = bd.dir
-      const fwd = isVec(bd.forward) ? bd.forward : anyForward(dir, _fwd)
+      const fwd = !isVec(bd) && bd && isVec(bd.forward) ? bd.forward : anyForward(bdDir, _fwd)
       bHealBuf.array[idx] = heal
-      _dummy.position.copy(dir).multiplyScalar(groundRadius(dir) + BANNER_LIFT)
-      orientOnSurface(_dummy, dir, fwd)
+      _dummy.position.copy(bdDir).multiplyScalar(groundRadius(bdDir) + BANNER_LIFT)
+      orientOnSurface(_dummy, bdDir, fwd)
       _dummy.scale.setScalar(BANNER_SCALE * (1 - heal * 0.5)) // shrink out as it heals
       _dummy.updateMatrix()
       bannerMesh.setMatrixAt(idx, _dummy.matrix)
@@ -681,63 +1217,104 @@ export function createWarRender(planet, warSim, seed) {
     }
   }
 
+  // Props: battlefield wrecks (raid.propDirs) at full scale, then intercepted-
+  // supply wreckage (raid.supplyProps) at a smaller scale — all reusing the ONE
+  // props mesh (no extra draw call).
   function placeProps(L, show) {
-    const dirs = L.raid.propDirs || []
+    const mainDirs = L.raid.propDirs || []
+    const supplyDirs = L.raid.supplyProps || []
     for (let j = 0; j < L.propCount; j++) {
       const idx = L.propBase + j
-      const d = dirs[j]
+      const isSupply = j >= L.propMain
+      const d = isSupply ? supplyDirs[j - L.propMain] : mainDirs[j]
       if (!show || !isVec(d)) {
         hideAt(propMesh, idx)
         continue
       }
       _dummy.position.copy(d).multiplyScalar(groundRadius(d) + PROP_LIFT)
       orientOnSurface(_dummy, d, anyForward(d, _fwd))
-      _dummy.scale.setScalar(PROP_SCALE)
+      _dummy.scale.setScalar(isSupply ? SUPPLY_SCALE : PROP_SCALE)
       _dummy.updateMatrix()
       propMesh.setMatrixAt(idx, _dummy.matrix)
     }
   }
 
+  // Normalize a siege reducer state (warsim R3) to ring presence + hold flag,
+  // tolerating whatever subset of fields it exposes.
+  function siegeState(st) {
+    const phase = st.phase
+    let present
+    if (typeof st.ringOccupancy === 'number') present = clamp(st.ringOccupancy, 0, 1)
+    else if (typeof st.present === 'number') present = clamp(st.present, 0, 1)
+    else if (phase === 'approach') present = clamp(num(st.approachT, num(st.progress, 0.5)), 0, 1) * 0.7
+    else if (phase === 'encircle') present = 0.6 + clamp(num(st.encircleT, num(st.progress, 1)), 0, 1) * 0.4
+    else if (phase === 'hold') present = 1
+    else if (phase === 'lift') present = 1 - clamp(num(st.liftT, num(st.progress, 0)), 0, 1)
+    else present = 0
+    const holding = phase === 'approach' || phase === 'encircle' || phase === 'hold' || phase === 'lift'
+    return { phase, present, holding }
+  }
+
   // A full placement pass across every raid. Runs every frame while any raid is
-  // moving (marching/clashing), else on the STATE_REFRESH throttle.
+  // moving, else on the STATE_REFRESH throttle.
   let emberAccum = 0
   function placeAll(dt, sunDir) {
+    ensureLayout()
     liveCount = 0
-    for (const L of layout) {
-      const raid = L.raid
+    nodeHeat.fill(0)
+
+    const raw = rawRaids()
+    for (const raid of raw) {
+      if (!raid || !raid.id) continue
+      const L = alloc.get(raid.id)
+      if (!L) continue // dropped (dynamic pool full)
       const st = readRaid(warSim, raid, warClock, _st)
+      const kind = L.kind
+      const treaty = treatyActive(raid)
 
-      // Once-per-epoch: on the transition INTO aftermath, narrate the outcome.
-      const prev = lastPhase.get(raid.id)
-      if (st.phase === 'aftermath' && prev !== 'aftermath') {
-        let line = ''
-        try {
-          if (typeof warSim.outcomeLine === 'function') line = warSim.outcomeLine(raid)
-        } catch {
-          line = ''
-        }
-        if (line) narrator(line)
-      }
-      lastPhase.set(raid.id, st.phase)
+      narrateFor(raid, st, kind, treaty)
+      addNodeHeat(raid.id, treaty ? 0 : raidHeat(kind, st))
 
-      const dirsOk = hasDirs(raid)
-      const unitsShow = dirsOk && (st.phase === 'marching' || st.phase === 'clashing')
-      // Marks span aftermath through the heal tail (which continues into the
-      // 'healed' phase until healFrac completes), then degenerate away.
-      const markShow = st.phase === 'aftermath' || (st.phase === 'healed' && num(st.healFrac, 1) < 1)
-      const propShow = st.phase === 'aftermath'
       const night = !!(sunDir && isVec(raid.battlefieldDir) && sunDir.dot(raid.battlefieldDir) < NIGHT_DOT)
 
-      if (unitsShow) {
-        placeArmy(L, st, true, night)
-        placeArmy(L, st, false, night)
-      } else {
+      if (treaty) {
+        // Peace: withdraw the hostilities, plant a gold treaty banner, let the
+        // scars heal away.
         hideArmy(L)
+        placeBanners(L, st, true, true)
+        placeScorch(L, st, false)
+        placeProps(L, false)
+        continue
       }
-      placeBanners(L, st, markShow)
-      placeScorch(L, st, markShow)
-      placeProps(L, propShow)
+
+      if (kind === 'siege' && L.atkCount > 0) {
+        const sg = siegeState(st)
+        placeSiege(L, sg, night)
+        const healed = st.phase === 'healed' && num(st.healFrac, 1) >= 1
+        const marks = sg.phase !== 'dormant' && !healed
+        placeBanners(L, st, marks, false)
+        placeScorch(L, st, marks)
+        placeProps(L, false)
+      } else {
+        // Field raid (rung-1 'raid', rung-2 'border'/'intercept', or a siege
+        // that lacks a ring → degrades to a field skirmish).
+        const dirsOk = hasDirs(raid)
+        const unitsShow = dirsOk && (st.phase === 'marching' || st.phase === 'clashing')
+        const markShow = st.phase === 'aftermath' || (st.phase === 'healed' && num(st.healFrac, 1) < 1)
+        const propShow = st.phase === 'aftermath'
+        if (unitsShow) {
+          placeArmy(L, st, true, night)
+          placeArmy(L, st, false, night)
+        } else {
+          hideArmy(L)
+        }
+        placeBanners(L, st, markShow, false)
+        placeScorch(L, st, markShow)
+        placeProps(L, propShow)
+      }
     }
+
+    writeTerritory()
 
     // Seed torch embers from the collected living night-clashing unit positions.
     if (liveCount > 0) {
@@ -755,15 +1332,28 @@ export function createWarRender(planet, warSim, seed) {
     wFallBuf.needsUpdate = true
     bannerMesh.instanceMatrix.needsUpdate = true
     bHealBuf.needsUpdate = true
+    bPeaceBuf.needsUpdate = true
     scorchMesh.instanceMatrix.needsUpdate = true
     sHealBuf.needsUpdate = true
     propMesh.instanceMatrix.needsUpdate = true
+  }
+
+  // Flush the rung-1 region's static attributes written above (before the first
+  // placeAll). Territory nodes for the rung-1 raids are built here too so the
+  // signature starts settled.
+  flushStaticAttrs()
+  {
+    let sig = ''
+    for (const r of initialRaids) if (r && r.id) sig += r.id + '|'
+    layoutSig = sig
+    buildTerritoryNodes(initialRaids)
   }
 
   // ---- update loop --------------------------------------------------------
   let warClock = 0
   let sinceRefresh = STATE_REFRESH // force a refresh on the first near frame
   let wasNear = false
+  let lastCount = -1
 
   function update(dt, camera, sunDir) {
     dt = num(dt, 0)
@@ -771,13 +1361,17 @@ export function createWarRender(planet, warSim, seed) {
     for (let i = 0; i < timeUniforms.length; i++) timeUniforms[i].value = warClock
 
     const validSun = sunDir && typeof sunDir.dot === 'function' ? sunDir : null
+    const raw = rawRaids()
+    const anyRaid = raw.length > 0
     const camDist = camera && camera.position ? camera.position.length() : 0
-    const near = enabled && camDist < VISIBLE_DIST
+    const near = anyRaid && camDist < VISIBLE_DIST
     warriorMesh.visible = near
     bannerMesh.visible = near
     scorchMesh.visible = near
     propMesh.visible = near
     fwPoints.visible = near
+    // Territory only draws while a conflict is actually contested (no stain).
+    territoryMesh.visible = near && lastTerrMax > TERRITORY_VISIBLE_MIN
     if (!near) {
       wasNear = false
       return
@@ -785,18 +1379,21 @@ export function createWarRender(planet, warSim, seed) {
 
     sinceRefresh += dt
     // Force a per-frame rewrite while anything is moving (units interpolate);
-    // otherwise throttle to STATE_REFRESH, and always refresh the frame the
-    // camera first comes back into view so nothing is stale.
+    // otherwise throttle to STATE_REFRESH, always refresh the frame the camera
+    // returns to view, and always refresh when the raid set changed (a new
+    // data-driven raid must surface promptly).
     let moving = false
-    for (const L of layout) {
-      const st = readRaid(warSim, L.raid, warClock, _peek)
-      if (st.phase === 'marching' || st.phase === 'clashing') {
+    for (const r of raw) {
+      if (!r || !r.id) continue
+      const st = readRaid(warSim, r, warClock, _peek)
+      if (movingPhase(st.phase)) {
         moving = true
         break
       }
     }
-    if (moving || sinceRefresh >= STATE_REFRESH || !wasNear) {
+    if (moving || sinceRefresh >= STATE_REFRESH || !wasNear || raw.length !== lastCount) {
       sinceRefresh = 0
+      lastCount = raw.length
       placeAll(dt, validSun)
     }
 
