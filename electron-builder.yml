@@ -1,0 +1,27 @@
+appId: co.cloover.sekai
+productName: Sekai
+directories:
+  output: release
+  buildResources: build
+# dist/ + server/ ship as plain files so the ELECTRON_RUN_AS_NODE child reads
+# them with zero asar-fs concerns.
+asar: false
+files:
+  - electron/**/*
+  - server/**/*
+  - dist/**/*
+  - package.json
+extraMetadata:
+  main: electron/main.cjs
+mac:
+  icon: build/icon.png # electron-builder converts a >=512px PNG to .icns
+  category: public.app-category.graphics-design
+  identity: null # UNSIGNED: skip codesign entirely
+  hardenedRuntime: false
+  target:
+    - target: dir
+      arch: [arm64]
+    - target: dmg
+      arch: [arm64]
+dmg:
+  title: Sekai

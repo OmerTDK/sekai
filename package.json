@@ -8,8 +8,11 @@
     "start": "vite --open",
     "dev": "vite",
     "build": "vite build",
-    "test": "node server/scan.test.js && node tests/geometry.test.mjs",
-    "app": "electron ."
+    "test": "node server/scan.test.js && node tests/geometry.test.mjs && node tests/heightfield.test.mjs",
+    "app": "electron .",
+    "icon": "node scripts/make-icon.mjs",
+    "pack": "npm run icon && npm run build && electron-builder --dir",
+    "dist": "npm run icon && npm run build && electron-builder"
   },
   "dependencies": {
     "simplex-noise": "^4.0.3",
@@ -18,6 +21,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",
     "prettier": "^3.9.5",
