@@ -1,83 +1,49 @@
-# Engineering standards — Sekai
+# Contributing to Sekai
 
-The canonical workflow doc. The program plan (docs/superpowers/plans/) owns
-*what* gets built and *when*; this file owns *how*. If they disagree, this
-file wins for process, the plan wins for scope.
+Thanks for your interest! Sekai is a solo passion project, but issues and PRs are welcome.
 
-## Branching & worktrees
+## Setup
 
-- `~/sekai` (the main checkout) stays parked on `main`, always — it
-  serves the stable app (`:5173`, the Dock app). Never switch its branch.
-- Every wave of work happens in a dedicated worktree:
-  `git worktree add ~/.config/superpowers/worktrees/sekai/<branch>`
-  → own `npm install` → own dev-server port for verification → green
-  baseline `npm test` before any builder starts.
-- Branch naming: `wave/<milestone-id>` (e.g. `wave/m-wx`). Historical
-  branches predate this convention.
-- After merge: main checkout `git pull`, worktree removed, branch kept.
+```bash
+nvm use            # or fnm/volta — Node 24 (see .nvmrc)
+npm install
+npm start          # browser at http://localhost:5173
+```
 
-## Commits
+- `npm run app` — run the desktop app (Electron) over the dev server
+- `npm run dist` — package a `Sekai.app` + `.dmg`
+- `?seed=<name>` picks a world; `?renderer=webgpu` opts into the WebGPU backend
 
-- Conventional Commits: `type(scope): subject` — types `feat|fix|refactor|
-  perf|docs|test|chore|art` (`art` = visual tuning with no logic change).
-  Scope = module (`sky`, `world`, `assets`, `plan`, …). Imperative subject.
-- No AI attribution of any kind — no co-author trailers, no session links,
-  no generated-with footers (standing owner rule).
-- Fine-grained commits; revert protocol is `git revert <sha>` + re-run the
-  milestone's JIT plan.
+## Before you open a PR
 
-## Pull requests
+CI runs the same checks — run them locally first:
 
-- One PR per wave/milestone. Opens as **draft** when the wave starts,
-  collects all wave commits, flips to ready and **self-merges** only after
-  the verification gate passes. No review step (solo project, by decision).
-- The PR description lists what shipped; the PR template checklist must be
-  satisfied truthfully — it is the merge gate's human-readable mirror.
+```bash
+npx prettier --check .
+npx eslint .
+npm test           # scanner + geometry + heightfield tests
+npm run build
+```
 
-## Verification gate (before any merge)
+Then: branch → PR → green CI → merge.
 
-1. `npm test` green (scanner + resume + geometry suites) and `npm run build`
-   clean; CI (`verify` job) green on the PR.
-2. Live drive of the real app: console clean except known-benign warns;
-   feature-specific checks from the wave's JIT plan.
-3. Milestone exits additionally run the verify-kit sweep (5 viewpoints,
-   determinism hash, fps ≥55 / ≤18ms frame budget).
-4. Tone/lighting changes ship with same-viewpoint before/after screenshot
-   pairs, one variable at a time (ART.md discipline).
-5. Gallery rule: every verdict packet, milestone shot, and GIF is copied to
-   `gallery/YYYY-MM-DD/` with a GALLERY.md line before merge.
+## Project invariants
 
-## Code standards
+Two rules hold everywhere in the code — please keep them:
 
-- ES modules, vanilla JS, three.js pinned exact — version bumps are
-  deliberate, at most one per milestone gate.
-- ART.md is binding for anything visible. docs/ART.md §8 anti-rules are
-  hard failures in review.
-- Silent-fallback rule: every graceful degradation `console.warn`s exactly
-  once. `catch {}` without a warn fails review.
-- No per-frame allocations in update loops; shared pools for particles;
-  deterministic seeding everywhere (`Math.random`/`Date.now` banned in
-  world-state code).
-- Architect-only files (never assigned to builders): `package.json`,
-  `vite.config.js`, `electron/main.cjs`, `src/main.js`, `src/ui.css`.
-- One builder per file per wave — file ownership is declared in the wave's
-  JIT plan and never overlaps.
-- **Formatting/linting: Prettier + ESLint adoption is queued as the first
-  commit of the next wave** (a lone `chore: format` on a fresh worktree —
-  deliberately not introduced mid-wave to avoid colliding with in-flight
-  builder diffs). After that lands, CI enforces both.
+- **Determinism.** Every position/choice in the world is a pure function of the
+  seed, hashed through `src/util.js` (`rngFromString`, `hash01`, `makeNoise3D`).
+  No `Math.random()` or `Date.now()` in world state — the only time source is the
+  `dt` accumulated in each module's `update(dt)`. This is what makes a world
+  reproducible from its inputs.
+- **The Covenant.** Simulation (conflict, cataclysm, weather) is *additive*: it
+  happens *around* the session-derived structures, leaves marks that always heal,
+  and never moves, destroys, or overwrites them.
 
-## Known constraint
+## Rendering notes
 
-- GitHub branch protection (required status checks) is unavailable on this
-  free-tier private repo — CI is therefore mandatory **by convention**: the
-  verification gate above is the enforced process, and a red CI on a PR
-  blocks the ready/merge step by rule even though GitHub won't physically
-  prevent it.
-
-## Deliberately not adopted (decisions, not omissions)
-
-- No review requirement, no CODEOWNERS (solo repo, owner's call).
-- No CHANGELOG file — merged PR titles are the changelog.
-- No semver churn — tag at program-complete, not per wave.
-- No GitHub issue tracker — the program plan is the backlog.
+All shaders are **TSL node materials** (no `ShaderMaterial` / `onBeforeCompile` —
+they don't run under `WebGPURenderer`). Code must compile on both the WebGL2
+default and the true-WebGPU backend, so avoid `pointUV` and custom per-instance
+vertex attributes on WebGPU-critical paths. Build each node graph once and animate
+via `uniform()` writes.
