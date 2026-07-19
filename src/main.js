@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu'
-import { pass } from 'three/tsl'
+import { pass, renderOutput, interleavedGradientNoise, screenCoordinate, vec4, float } from 'three/tsl'
 import { bloom } from 'three/addons/tsl/display/BloomNode.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { createPlanet } from './planet.js'
@@ -193,7 +193,20 @@ const clouds = createVolumetricClouds(scenePass, camera, {
 sky.setCloudsVisible(false) // volumetric clouds replace the 2.5D shells
 const cloudComposite = clouds.compositeOver(atmoNode)
 const bloomPass = bloom(cloudComposite, 0.3, 0.7, 1.0)
-post.outputNode = cloudComposite.add(bloomPass)
+
+// Debanding. The whole post chain runs at half-float (HDR), but the final canvas
+// is 8-bit sRGB, so smooth dark gradients (sky, atmospheric scattering, deep
+// ocean) quantize into visible bands — the "low-def water" artifact. Fix: apply
+// tone-map + sRGB ourselves via renderOutput (so we own the last step), then add
+// a sub-LSB interleaved-gradient-noise dither in that final display space. The
+// noise makes each pixel cross the quantization boundary stochastically, turning
+// hard bands into imperceptible grain.
+// ponytail: single-sample IGN dither (~±0.5 LSB). If the very darkest tones still
+// band, upgrade to a two-sample triangular-PDF (TPDF) dither at ±1 LSB.
+post.outputColorTransform = false
+const displayColor = renderOutput(cloudComposite.add(bloomPass))
+const dither = interleavedGradientNoise(screenCoordinate).sub(0.5).mul(float(1).div(255))
+post.outputNode = vec4(displayColor.rgb.add(dither), displayColor.a)
 
 document.querySelector('#title .planet-name').textContent = fantasyName(SEED)
 const statsEl = document.getElementById('stats')
