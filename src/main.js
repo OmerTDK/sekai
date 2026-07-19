@@ -31,6 +31,13 @@ import { createHerald } from './herald.js'
 import { createRoads } from './roads.js'
 import { createAtmosphereScattering } from './atmosphere.js'
 import { createVolumetricClouds } from './clouds.js'
+// E4 living-world
+import { createRuins } from './ruins.js'
+import { createSeasons } from './seasons.js'
+import { createFishSchools } from './fishschools.js'
+import { createAmbientSound } from './ambient.js'
+import { createPosterExport } from './poster.js'
+import { createAutoTour } from './autotour.js'
 import { createUI } from './ui.js'
 import { clamp, fantasyName } from './util.js'
 
@@ -140,6 +147,20 @@ scene.add(earthquakes.group)
 const roads = createRoads(planet, world, SEED)
 scene.add(roads.group)
 
+// --- E4 living-world -------------------------------------------------------
+const ruins = createRuins(planet, SEED)
+scene.add(ruins.group)
+
+const seasons = createSeasons(planet, SEED)
+scene.add(seasons.group)
+
+const fishSchools = createFishSchools(planet, SEED)
+scene.add(fishSchools.group)
+
+const ambientSound = createAmbientSound(SEED)
+
+const autoTour = createAutoTour(planet, world, cameraFeel, controls, camera, SEED)
+
 // The Aemunis Herald — a DOM chronicle ticker (no scene object).
 const herald = createHerald(world, SEED)
 
@@ -208,6 +229,9 @@ const displayColor = renderOutput(cloudComposite.add(bloomPass))
 const dither = interleavedGradientNoise(screenCoordinate).sub(0.5).mul(float(1).div(255))
 post.outputNode = vec4(displayColor.rgb.add(dither), displayColor.a)
 
+// E4 poster export needs the built post pipeline to render high-res frames.
+const poster = createPosterExport({ renderer, post, camera })
+
 document.querySelector('#title .planet-name').textContent = fantasyName(SEED)
 const statsEl = document.getElementById('stats')
 
@@ -263,6 +287,12 @@ window.__planet = {
   ui,
   renderer,
   post,
+  ruins,
+  seasons,
+  fishSchools,
+  ambientSound,
+  poster,
+  autoTour,
   controls,
 }
 window.__planet.verify = createVerifyKit({
@@ -330,6 +360,13 @@ renderer.setAnimationLoop(() => {
   // Earthquake camera shake is an additive offset that controls.update()
   // clears next frame, so it must run AFTER controls.update().
   earthquakes.update(dt)
+
+  // E4 living-world
+  ruins.update(dt)
+  seasons.update(dt)
+  fishSchools.update(dt, camera)
+  ambientSound.update(dt, camera, world)
+  autoTour.update(dt)
 
   hudTimer -= dt
   if (hudTimer <= 0) {

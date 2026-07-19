@@ -847,6 +847,29 @@ export function createUI(world, hooks) {
   const godBtn = makeVpBtn('⚡', 'God controls', () => toggleGodPanel())
   makeVpBtn('+', 'Zoom in', () => zoomBy(-260))
   makeVpBtn('−', 'Zoom out', () => zoomBy(260))
+
+  // E4: ambient mute, poster capture, auto-tour. All lazily/guard-read the live
+  // module handles off window.__planet so the UI never hard-depends on them.
+  const muteBtn = makeVpBtn('🔇', 'Ambient sound', () => {
+    const a = window.__planet && window.__planet.ambientSound
+    if (!a) return
+    if (typeof a.start === 'function') a.start() // this click is the user gesture that unlocks WebAudio
+    if (typeof a.toggleMute === 'function') a.toggleMute()
+    const muted = typeof a.isMuted === 'function' ? a.isMuted() : true
+    muteBtn.textContent = muted ? '🔇' : '🔊'
+    muteBtn.classList.toggle('active', !muted)
+  })
+  makeVpBtn('🖼', 'Capture poster', () => {
+    const p = window.__planet && window.__planet.poster
+    if (p && typeof p.capture === 'function') p.capture(3)
+  })
+  const tourBtn = makeVpBtn('🎬', 'Auto-tour', () => {
+    const t = window.__planet && window.__planet.autoTour
+    if (!t || typeof t.toggle !== 'function') return
+    t.toggle()
+    const running = typeof t.isRunning === 'function' ? t.isRunning() : false
+    tourBtn.classList.toggle('active', running)
+  })
   root.appendChild(vpControls)
 
   // --- feature toggle panel ---------------------------------------------------

@@ -869,3 +869,11 @@ body.photo-mode #feature-panel {
 .feature-row.off::before {
   background: #55606c;
 }
+
+/* E4 poster capture: hide all overlays for a clean plate while poster.js
+   renders the high-res frame (it toggles `body.capturing`). */
+body.capturing #planet-ui,
+body.capturing .hud,
+body.capturing #aemunis-herald {
+  visibility: hidden;
+}

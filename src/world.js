@@ -1447,6 +1447,18 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
     for (const [id, a] of agents) fn(id, a.dir, a.settlement.race)
   }
 
+  // Read-only settlement anchor snapshot for the auto-tour (E4) and any other
+  // module that wants to fly between real session settlements.
+  function getAnchors() {
+    return Array.from(settlements.values()).map((s) => ({
+      project: s.project,
+      name: s.name,
+      anchorDir: s.anchorDir,
+      structures: s.structureDirs.length,
+      race: s.race,
+    }))
+  }
+
   return {
     group,
     update,
@@ -1458,5 +1470,6 @@ export function createWorld(planet, camera, domElement, renderer = null, cameraF
     setTimeFilter,
     getTimeRange,
     forEachWalker,
+    getAnchors,
   }
 }
