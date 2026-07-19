@@ -4,6 +4,7 @@ import { bloom } from 'three/addons/tsl/display/BloomNode.js'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { createPlanet } from './planet.js'
 import { createSky } from './sky.js'
+import { createEnvironment } from './env.js'
 import { createWorld } from './world.js'
 import { createAirships } from './airships.js'
 import { createBirds } from './birds.js'
@@ -77,7 +78,7 @@ const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = true
 controls.dampingFactor = 0.07
 controls.enablePan = false
-controls.minDistance = 1.06
+controls.minDistance = 1.03
 controls.maxDistance = 9
 
 const cameraFeel = createCameraFeel(planet, camera, controls)
@@ -126,7 +127,8 @@ scene.add(trails.group)
 planet.group.traverse((o) => {
   if (o.isMesh && o.geometry && o.geometry.attributes && o.geometry.attributes.aDepth) o.visible = false
 })
-const ocean = createOcean(planet, camera, SEED)
+const oceanEnv = createEnvironment(renderer, sky)
+const ocean = createOcean(planet, camera, SEED, oceanEnv.envMap)
 scene.add(ocean.mesh)
 
 const volcanoes = createVolcanoes(planet, SEED)
@@ -404,7 +406,7 @@ renderer.setAnimationLoop(() => {
   weather.update(dt, camera)
   seaLife.update(dt, camera)
   trails.update(dt)
-  ocean.update(dt)
+  ocean.update(dt, sky.getSunDir(sunDirScratch))
   if (rivers) rivers.update(dt)
   volcanoes.update(dt)
   wildlife.update(dt, camera)
