@@ -15,7 +15,6 @@ import { createVerifyKit } from './verifykit.js'
 import { createWind } from './wind.js'
 import { createStorms } from './storms.js'
 import { createFloods } from './flood.js'
-import { createSeaIce } from './seaice.js'
 import { createSeaLife } from './sealife.js'
 import { createTrails } from './trails.js'
 import { createWeather } from './weather.js'
@@ -111,8 +110,6 @@ const airships = createAirships(planet, world, SEED)
 scene.add(airships.group)
 
 // M-WX weather & life.
-const seaIce = createSeaIce(planet, SEED)
-scene.add(seaIce.group)
 
 const weather = createWeather(planet, sky, SEED)
 scene.add(weather.group)
@@ -333,7 +330,6 @@ window.__planet = {
   dragon,
   airships,
   floods,
-  seaIce,
   weather,
   seaLife,
   trails,
@@ -373,7 +369,6 @@ window.__planet.verify = createVerifyKit({
   wind,
   storms,
   floods,
-  seaIce,
   weather,
   seaLife,
   trails,
@@ -406,7 +401,6 @@ renderer.setAnimationLoop(() => {
   events.update(dt)
   dragon.update(dt, sky.getSunDir(sunDirScratch))
   airships.update(dt)
-  seaIce.update(dt)
   weather.update(dt, camera)
   seaLife.update(dt, camera)
   trails.update(dt)
