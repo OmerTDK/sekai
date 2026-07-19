@@ -915,7 +915,6 @@ export function createUI(world, hooks) {
     },
     groupFeature('storms', 'Hurricane'),
     groupFeature('weather', 'Rain & snow'),
-    groupFeature('seaIce', 'Sea ice'),
     groupFeature('seaLife', 'Whales & dolphins'),
     groupFeature('trails', 'Footprints'),
     groupFeature('dragon', 'Dragon'),
