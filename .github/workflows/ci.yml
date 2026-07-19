@@ -2,7 +2,18 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch/PR supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege — CI only needs to read the checkout.
+permissions:
+  contents: read
 
 jobs:
   verify:
@@ -12,7 +23,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci
@@ -30,13 +41,14 @@ jobs:
       - name: node --check src/ server/ electron/
         run: find src server electron -type f -name '*.js' -print0 | xargs -0 -n1 node --check
 
-      # Called directly (not via `npm test`) so this job works whether or not
-      # package.json's "test" script has been wired to run these yet.
       - name: Scanner tests
         run: node server/scan.test.js
 
       - name: Geometry sanity tests
         run: node tests/geometry.test.mjs
+
+      - name: Heightfield tests
+        run: node tests/heightfield.test.mjs
 
       - name: Build
         run: npm run build

@@ -1,4 +1,4 @@
-# Claude Planet — Program Plan v1.0 (audited; awaiting Omer's sign-off)
+# Sekai — Program Plan v1.0 (audited; awaiting Omer's sign-off)
 
 > **For agentic workers:** This is the PROGRAM plan. At each milestone start,
 > write a just-in-time execution plan (superpowers:writing-plans bite-sized
@@ -10,7 +10,7 @@
 product/scope, execution/process) plus an architect self-audit on 2026-07-16.
 All BLOCKING and MAJOR findings are incorporated below; §7 lists what changed.
 
-**Goal:** Evolve Claude Planet from a beautiful toy into a high-fidelity,
+**Goal:** Evolve Sekai from a beautiful toy into a high-fidelity,
 always-running desktop world that visualizes all Claude Code activity as a
 living medieval×steampunk civilization — with joy landing every session and
 no unshippable gaps.
@@ -38,9 +38,9 @@ visual flagships.
   rule). Revert protocol: `git revert <sha>` then re-run that milestone's
   JIT plan — commits stay fine-grained to keep this cheap.
 - **WORKTREE RULE (user, 2026-07-17: "always work in proper git worktrees"):**
-  the main checkout `~/claude-planet` stays parked on `main` forever — it is
+  the main checkout `~/sekai` stays parked on `main` forever — it is
   what the user's app and :5173 serve (stable, merged). Every wave works in
-  `git worktree add ~/.config/superpowers/worktrees/claude-planet/<branch>`
+  `git worktree add ~/.config/superpowers/worktrees/sekai/<branch>`
   with its own `npm install`, its own dev-server port for verification, and
   a green baseline test before builders start; builders receive the worktree
   absolute path. Merge → main checkout pulls → worktree removed. Branch

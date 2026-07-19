@@ -18,6 +18,7 @@ It's built on the 2026 web-3D stack — three.js's WebGPU renderer with TSL node
 - **Rivers** traced from a committed CPU **erosion bake** (priority-flood + D8 flow accumulation), draped down the valleys as glowing water ribbons (`rivers.js`, `erosion.js`, `heightfield.js`)
 - Polar **sea ice** with pressure cracks (`seaice.js`) and hurricane-driven **coastal flooding** (`flood.js`)
 
+![Archipelago coastline — green islands, beaches, turquoise shallows, a river glinting in the highlands](docs/media/terrain-coast.jpg)
 
 ### Sky & atmosphere
 - Galaxy starfield with a fast-rotating **sun** — watch the terminator sweep and the dark side light up (`sky.js`)
@@ -38,6 +39,8 @@ It's built on the 2026 web-3D stack — three.js's WebGPU renderer with TSL node
 - Active **trade caravans** and **roads** between settlements (`caravans.js`, `roads.js`), cruising **airships** (`airships.js`), and a resident **dragon** with a mountain lair (`dragon.js`)
 - The **Aemunis Herald** — a medieval chronicle ticker that narrates your real git activity (`herald.js`)
 - Ancient **ruins** at seeded sites (`ruins.js`); commits become fireworks and merged PRs become monuments (`events.js`)
+
+![The living world — each floating label is one of your projects, grown into a settlement; rivers thread the continents](docs/media/living-globe.jpg)
 
 
 ### Conflict & cataclysm

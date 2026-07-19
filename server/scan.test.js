@@ -315,7 +315,7 @@ try {
   console.log('scan.test.js: all assertions passed (%d sessions)', results1.length)
 
   // --- server/resume.js: pure-validation tests (never spawns osascript) ---
-  homeTestDir = fs.mkdtempSync(path.join(os.homedir(), '.claude-planet-resume-test-'))
+  homeTestDir = fs.mkdtempSync(path.join(os.homedir(), '.sekai-resume-test-'))
   const VALID_ID = 'a1b2c3d4-e5f6-47a8-b9c0-1234567890ab'
 
   const ok = validateResumeInput({ id: VALID_ID, project: homeTestDir })
