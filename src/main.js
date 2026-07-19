@@ -26,6 +26,8 @@ import { createCaravans } from './caravans.js'
 import { createMeteors } from './meteor.js'
 import { createCivSim } from './civsim.js'
 import { createCivRender } from './civrender.js'
+import { createWarSim } from './warsim.js'
+import { createWarRender } from './warrender.js'
 import { createEarthquakes } from './earthquake.js'
 import { createHerald } from './herald.js'
 import { createRoads } from './roads.js'
@@ -168,6 +170,8 @@ const herald = createHerald(world, SEED)
 // anchors world populates asynchronously — snapshot after the same settle delay
 // airships/caravans use, then build the seeded civ layer.
 let civRender = null
+// E-SIM rung 1: raiding parties + field battles between settlements.
+let warRender = null
 setTimeout(() => {
   const anchorsByProject = new Map()
   world.group.traverse((o) => {
@@ -179,6 +183,35 @@ setTimeout(() => {
   scene.add(civRender.group)
   window.__planet.civSim = civSim
   window.__planet.civRender = civRender
+
+  // --- E-SIM rung 1: build the conflict theater from the settled world. ------
+  // Snapshot each settlement's anchor/ground/structure dirs so warsim can place
+  // raids that respect the covenant (marks clear session structures).
+  const recByProject = new Map()
+  world.group.traverse((o) => {
+    const s = o.userData && o.userData.settlement
+    if (s && !recByProject.has(s.project)) recByProject.set(s.project, s)
+  })
+  const settlementSnapshot = []
+  for (const row of world.list()) {
+    const s = recByProject.get(row.project)
+    if (!s) continue
+    settlementSnapshot.push({
+      project: row.project,
+      name: row.name,
+      race: row.race,
+      structures: row.structures,
+      anchorDir: s.anchorDir,
+      groundR: s.groundR,
+      structureDirs: s.structureDirs || [],
+    })
+  }
+  const warSim = createWarSim(planet, settlementSnapshot, SEED)
+  warRender = createWarRender(planet, warSim, SEED)
+  warRender.setNarrator((line) => herald.narrate(line))
+  scene.add(warRender.group)
+  window.__planet.warSim = warSim
+  window.__planet.warRender = warRender
 }, 6500)
 
 // Git charm: commits become fireworks, merged PRs become monuments.
@@ -352,6 +385,7 @@ renderer.setAnimationLoop(() => {
   caravans.update(dt)
   meteors.update(dt)
   if (civRender) civRender.update(dt, camera)
+  if (warRender) warRender.update(dt, camera, sky.getSunDir(sunDirScratch))
   roads.update(dt)
   herald.update(dt)
   ui.update(dt)
